@@ -1,0 +1,346 @@
+//
+// Created by awalol on 2026/3/4.
+//
+
+#include "tusb.h"
+#include "bsp/board_api.h"
+#include "pico/time.h"
+#include <algorithm>
+#include <cmath>
+
+#include "bt.h"
+#include "usb.h"
+
+uint8_t mute[2]; // 0: speaker/LED fallback, 1: mic/idle-disconnect fallback
+float volume[2] = {DEFAULT_COMPANION_SPEAKER_GAIN, 1.0f}; // 0: companion speaker gain 0-1, 1: haptics gain 0-2
+uint8_t usb_host_volume_percent[2] = {100, 100};
+uint8_t usb_host_mute[2] = {0, 0};
+uint32_t usb_host_volume_set_count[2] = {0, 0};
+float usb_host_speaker_gain = 1.0f;
+static uint32_t usb_last_hid_output_us = 0;
+static uint8_t usb_hid_polling_rate = 2;
+static volatile bool usb_suspended = false;
+static volatile bool usb_suspend_disconnect_requested = false;
+static bool usb_suspend_disconnect = true;
+static volatile bool usb_speaker_streaming = false;
+static bool usb_reconnect_requested = false;
+static bool usb_reconnect_connect_pending = false;
+static uint32_t usb_reconnect_at_us = 0;
+
+extern "C" {
+uint8_t usb_hid_polling_interval_ms_value = 1;
+}
+
+#define UAC1_ENTITY_SPK_FEATURE_UNIT    0x02
+#define UAC1_ENTITY_MIC_FEATURE_UNIT    0x05
+#define HID_OUTPUT_ACTIVE_US            500000
+#define USB_RECONNECT_DELAY_US          250000
+#define USB_RECONNECT_HOLD_US           150000
+
+struct UsbAudioVolumeRange {
+    int16_t min;
+    int16_t max;
+    int16_t res;
+};
+
+static constexpr UsbAudioVolumeRange kUsbAudioVolumeRanges[2] = {
+    {-100 * 256, 0, 1 * 256},
+    {0, 48 * 256, 0x007a},
+};
+
+static bool time_reached(uint32_t now, uint32_t target) {
+    return static_cast<int32_t>(now - target) >= 0;
+}
+
+static uint8_t hid_polling_interval_for_mode(uint8_t mode) {
+    switch (mode) {
+        case 0:
+            return 4;
+        case 1:
+            return 2;
+        case 2:
+        default:
+            return 1;
+    }
+}
+
+static void usb_schedule_reconnect() {
+    usb_reconnect_requested = true;
+    usb_reconnect_at_us = time_us_32() + USB_RECONNECT_DELAY_US;
+}
+
+uint8_t usb_hid_polling_rate_mode() {
+    return usb_hid_polling_rate;
+}
+
+bool usb_set_hid_polling_rate_mode(uint8_t mode) {
+    if (mode > 2) {
+        return false;
+    }
+
+    const bool changed = usb_hid_polling_rate != mode;
+    usb_hid_polling_rate = mode;
+    usb_hid_polling_interval_ms_value = hid_polling_interval_for_mode(mode);
+    if (changed) {
+        usb_schedule_reconnect();
+    }
+    return true;
+}
+
+void usb_note_hid_output() {
+    usb_last_hid_output_us = time_us_32();
+}
+
+bool usb_host_hid_output_recent() {
+    return usb_last_hid_output_us != 0
+        && static_cast<uint32_t>(time_us_32() - usb_last_hid_output_us) < HID_OUTPUT_ACTIVE_US;
+}
+
+void usb_set_suspend_disconnect_enabled(bool enabled) {
+    usb_suspend_disconnect = enabled;
+    if (!enabled) {
+        usb_suspend_disconnect_requested = false;
+    }
+}
+
+bool usb_suspend_disconnect_enabled() {
+    return usb_suspend_disconnect;
+}
+
+bool usb_pm_should_pause_inquiry() {
+    return usb_suspend_disconnect && usb_suspended;
+}
+
+bool usb_speaker_streaming_active() {
+    return usb_speaker_streaming;
+}
+
+extern "C" bool tud_audio_set_itf_cb(uint8_t rhport, tusb_control_request_t const *p_request) {
+    (void)rhport;
+    const uint8_t itf = tu_u16_low(p_request->wIndex);
+    const uint8_t alt = tu_u16_low(p_request->wValue);
+
+    if (itf == 1) {
+        usb_speaker_streaming = alt != 0;
+    }
+
+    return true;
+}
+
+extern "C" void tud_suspend_cb(bool remote_wakeup_en) {
+    (void) remote_wakeup_en;
+    usb_suspended = true;
+    if (usb_suspend_disconnect) {
+        usb_suspend_disconnect_requested = true;
+    }
+}
+
+extern "C" void tud_resume_cb(void) {
+    usb_suspended = false;
+}
+
+void usb_pm_poll() {
+    const uint32_t now = time_us_32();
+    if (usb_reconnect_connect_pending && time_reached(now, usb_reconnect_at_us)) {
+        usb_reconnect_connect_pending = false;
+        tud_connect();
+    }
+    if (usb_reconnect_requested && time_reached(now, usb_reconnect_at_us)) {
+        usb_reconnect_requested = false;
+        usb_reconnect_connect_pending = true;
+        usb_reconnect_at_us = now + USB_RECONNECT_HOLD_US;
+        tud_disconnect();
+        return;
+    }
+
+    if (!usb_suspend_disconnect_requested) {
+        return;
+    }
+    usb_suspend_disconnect_requested = false;
+
+    // TinyUSB suspend callbacks may run in IRQ context, so defer BTstack work
+    // to the main loop.
+    if (usb_suspend_disconnect && usb_suspended) {
+        bt_disconnect();
+    }
+}
+
+static UsbAudioVolumeRange const &usb_volume_range(uint8_t index) {
+    return kUsbAudioVolumeRanges[index == 0 ? 0 : 1];
+}
+
+static int16_t usb_volume_units_from_buffer(uint8_t index, uint8_t const *buffer) {
+    UsbAudioVolumeRange const &range = usb_volume_range(index);
+    const int16_t raw_units = static_cast<int16_t>(tu_unaligned_read16(buffer));
+    return std::clamp(raw_units, range.min, range.max);
+}
+
+static int16_t percent_to_usb_volume_units(uint8_t index, float percent) {
+    UsbAudioVolumeRange const &range = usb_volume_range(index);
+    const float clamped_percent = std::clamp(percent, 0.0f, 100.0f);
+    return static_cast<int16_t>(
+        static_cast<float>(range.min)
+            + (static_cast<float>(range.max - range.min) * clamped_percent / 100.0f)
+    );
+}
+
+static float usb_volume_units_to_percent(uint8_t index, uint8_t const *buffer) {
+    UsbAudioVolumeRange const &range = usb_volume_range(index);
+    const int16_t clamped_units = usb_volume_units_from_buffer(index, buffer);
+    const float span = static_cast<float>(range.max - range.min);
+    if (span <= 0.0f) {
+        return 100.0f;
+    }
+    return std::clamp(
+        (static_cast<float>(clamped_units - range.min) * 100.0f) / span,
+        0.0f,
+        100.0f
+    );
+}
+
+static float usb_volume_units_to_gain(uint8_t index, uint8_t const *buffer) {
+    const int16_t clamped_units = usb_volume_units_from_buffer(index, buffer);
+    const float db = static_cast<float>(clamped_units) / 256.0f;
+    return index == 0 ? std::pow(10.0f, db / 20.0f) : 1.0f;
+}
+
+static float current_host_volume_percent(uint8_t index) {
+    return usb_host_volume_percent[index == 0 ? 0 : 1];
+}
+
+//--------------------------------------------------------------------+
+// Audio Callback Functions
+//--------------------------------------------------------------------+
+
+//--------------------------------------------------------------------+
+// UAC1 Helper Functions
+//--------------------------------------------------------------------+
+
+static bool audio10_set_req_entity(tusb_control_request_t const *p_request, uint8_t *pBuff) {
+    uint8_t ctrlSel = TU_U16_HIGH(p_request->wValue);
+    uint8_t entityID = TU_U16_HIGH(p_request->wIndex);
+    uint8_t index = entityID == UAC1_ENTITY_SPK_FEATURE_UNIT ? 0 : 1;
+
+    // If request is for our speaker feature unit
+    if (entityID == UAC1_ENTITY_SPK_FEATURE_UNIT || entityID == UAC1_ENTITY_MIC_FEATURE_UNIT) {
+        switch (ctrlSel) {
+            case AUDIO10_FU_CTRL_MUTE:
+                switch (p_request->bRequest) {
+                    case AUDIO10_CS_REQ_SET_CUR:
+                        // Only 1st form is supported
+                        TU_VERIFY(p_request->wLength == 1);
+
+                        usb_host_mute[index] = pBuff[0] ? 1 : 0;
+
+                        TU_LOG2("    Set Mute: %d of entity: %u\r\n", usb_host_mute[index], entityID);
+                        return true;
+
+                    default:
+                        return false; // not supported
+                }
+
+            case AUDIO10_FU_CTRL_VOLUME:
+                switch (p_request->bRequest) {
+                    case AUDIO10_CS_REQ_SET_CUR: {
+                        // Only 1st form is supported
+                        TU_VERIFY(p_request->wLength == 2);
+
+                        const float host_percent = usb_volume_units_to_percent(index, pBuff);
+                        usb_host_volume_percent[index] = static_cast<uint8_t>(host_percent);
+                        usb_host_volume_set_count[index]++;
+                        if (index == 0) {
+                            usb_host_speaker_gain = usb_volume_units_to_gain(index, pBuff);
+                        }
+
+                        TU_LOG2("    Set Volume: %u%% of entity: %u\r\n", static_cast<uint8_t>(host_percent), entityID);
+                        return true;
+                    }
+
+                    default:
+                        return false; // not supported
+                }
+
+            // Unknown/Unsupported control
+            default:
+                TU_BREAKPOINT();
+                return false;
+        }
+    }
+
+    return false;
+}
+
+static bool audio10_get_req_entity(uint8_t rhport, tusb_control_request_t const *p_request) {
+    uint8_t ctrlSel = TU_U16_HIGH(p_request->wValue);
+    uint8_t entityID = TU_U16_HIGH(p_request->wIndex);
+    uint8_t index = entityID == UAC1_ENTITY_SPK_FEATURE_UNIT ? 0 : 1;
+
+    // If request is for our speaker feature unit
+    if (entityID == UAC1_ENTITY_SPK_FEATURE_UNIT || entityID == UAC1_ENTITY_MIC_FEATURE_UNIT) {
+        switch (ctrlSel) {
+            case AUDIO10_FU_CTRL_MUTE:
+                // Audio control mute cur parameter block consists of only one byte - we thus can send it right away
+                // There does not exist a range parameter block for mute
+                TU_LOG2("    Get Mute of entity: %u\r\n", entityID);
+                return tud_audio_buffer_and_schedule_control_xfer(rhport, p_request, &usb_host_mute[index], 1);
+
+            case AUDIO10_FU_CTRL_VOLUME:
+                switch (p_request->bRequest) {
+                    case AUDIO10_CS_REQ_GET_CUR:
+                        TU_LOG2("    Get Volume of entity: %u\r\n", entityID); {
+                            int16_t vol = percent_to_usb_volume_units(index, current_host_volume_percent(index));
+                            return tud_audio_buffer_and_schedule_control_xfer(rhport, p_request, &vol, sizeof(vol));
+                        }
+
+                    case AUDIO10_CS_REQ_GET_MIN:
+                        TU_LOG2("    Get Volume min of entity: %u\r\n", entityID); {
+                            int16_t min = usb_volume_range(index).min;
+                            return tud_audio_buffer_and_schedule_control_xfer(rhport, p_request, &min, sizeof(min));
+                        }
+
+                    case AUDIO10_CS_REQ_GET_MAX:
+                        TU_LOG2("    Get Volume max of entity: %u\r\n", entityID); {
+                            int16_t max = usb_volume_range(index).max;
+                            return tud_audio_buffer_and_schedule_control_xfer(rhport, p_request, &max, sizeof(max));
+                        }
+
+                    case AUDIO10_CS_REQ_GET_RES:
+                        TU_LOG2("    Get Volume res of entity: %u\r\n", entityID); {
+                            int16_t res = usb_volume_range(index).res;
+                            return tud_audio_buffer_and_schedule_control_xfer(rhport, p_request, &res, sizeof(res));
+                        }
+                    // Unknown/Unsupported control
+                    default:
+                        TU_BREAKPOINT();
+                        return false;
+                }
+                break;
+
+            // Unknown/Unsupported control
+            default:
+                TU_BREAKPOINT();
+                return false;
+        }
+    }
+
+    return false;
+}
+
+// Invoked when audio class specific get request received for an entity
+bool tud_audio_get_req_entity_cb(uint8_t rhport, tusb_control_request_t const *p_request) {
+    (void) rhport;
+
+    return audio10_get_req_entity(rhport, p_request);
+}
+
+// Invoked when audio class specific set request received for an entity
+bool tud_audio_set_req_entity_cb(uint8_t rhport, tusb_control_request_t const *p_request, uint8_t *buf) {
+    (void) rhport;
+
+    return audio10_set_req_entity(p_request, buf);
+}
+
+void tud_hid_report_complete_cb(uint8_t instance, uint8_t const *report, uint16_t len) {
+    (void) instance;
+    (void) len;
+}

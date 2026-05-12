@@ -1,0 +1,82 @@
+/// <reference types="node" />
+
+import { readFileSync } from 'node:fs';
+import { describe, expect, it } from 'vitest';
+
+const styles = readFileSync(new URL('./styles.css', import.meta.url), 'utf8');
+const normalizedStyles = styles.replace(/\s+/g, ' ').trim();
+
+function cssBlock(selector: string, requiredText?: string): string {
+  const normalizedRequiredText = requiredText?.replace(/\s+/g, ' ').trim();
+  let searchFrom = 0;
+  while (searchFrom < styles.length) {
+    const selectorIndex = styles.indexOf(selector, searchFrom);
+    if (selectorIndex === -1) {
+      break;
+    }
+    const blockStart = styles.indexOf('{', selectorIndex);
+    const blockEnd = styles.indexOf('}', blockStart);
+    if (blockStart === -1 || blockEnd === -1) {
+      break;
+    }
+    const block = styles.slice(blockStart + 1, blockEnd);
+    const normalizedBlock = block.replace(/\s+/g, ' ').trim();
+    if (!normalizedRequiredText || normalizedBlock.includes(normalizedRequiredText)) {
+      return block;
+    }
+    searchFrom = blockEnd + 1;
+  }
+
+  if (requiredText) {
+    throw new Error(`Missing CSS block for ${selector} containing ${requiredText}`);
+  } else {
+    throw new Error(`Missing CSS block for ${selector}`);
+  }
+}
+
+describe('companion layout CSS', () => {
+  it('keeps feature cards content-sized instead of viewport-stretched', () => {
+    expect(cssBlock('.app-content', 'grid-template-rows: auto auto;')).toContain(
+      'grid-template-rows: auto auto;'
+    );
+    expect(cssBlock('.control-panel.flat-control-panel', 'height: auto;')).toContain('height: auto;');
+    expect(cssBlock('.control-pages', 'min-height: 0;')).toContain('min-height: 0;');
+    expect(cssBlock('.control-page', 'grid-template-rows: auto minmax(var(--feature-card-height), auto);')).toContain(
+      'grid-template-rows: auto minmax(var(--feature-card-height), auto);'
+    );
+    expect(cssBlock('.control-page[hidden]', 'display: none;')).toContain('display: none;');
+    expect(cssBlock('.feature-card-grid', 'height: auto;')).toContain('height: auto;');
+  });
+
+  it('animates the battery meter with transform instead of layout width', () => {
+    expect(cssBlock('.battery-track div', 'transform: scaleX(var(--battery-scale, 0));')).toContain(
+      'transform: scaleX(var(--battery-scale, 0));'
+    );
+    expect(cssBlock('.battery-track div', 'transition: transform 180ms ease, background 180ms ease;')).toContain(
+      'transition: transform 180ms ease, background 180ms ease;'
+    );
+    expect(normalizedStyles).not.toContain('transition: width');
+  });
+
+  it('keeps system columns equal height on the shared card height', () => {
+    expect(cssBlock('.system-page .feature-card-grid', 'align-items: stretch;')).toContain('align-items: stretch;');
+    expect(cssBlock('.system-page .system-card', 'align-self: stretch;')).toContain('align-self: stretch;');
+    expect(normalizedStyles).toContain('.lighting-page .feature-card, .system-page .system-card');
+    expect(cssBlock('.device-diagnostics', 'flex: 0 1 auto;')).toContain('flex: 0 1 auto;');
+  });
+
+  it('keeps test card statuses aligned and gives lighting color metadata enough room', () => {
+    const sharedRows = '--feature-status-grid-rows: 64px 86px var(--action-height) var(--action-height) minmax(40px, 1fr);';
+    expect(cssBlock('.feature-card', sharedRows)).toContain(sharedRows);
+    expect(cssBlock('.test-card', 'grid-template-rows: var(--feature-status-grid-rows);')).toContain(
+      'grid-template-rows: var(--feature-status-grid-rows);'
+    );
+    expect(cssBlock('.behavior-card', 'grid-template-rows: var(--feature-status-grid-rows);')).toContain(
+      'grid-template-rows: var(--feature-status-grid-rows);'
+    );
+    expect(cssBlock('.test-card .feature-status', 'grid-row: 5;')).toContain('grid-row: 5;');
+    expect(cssBlock('.behavior-card .lighting-status', 'grid-row: 5;')).toContain('grid-row: 5;');
+    expect(cssBlock('.behavior-card .light-color-panel', 'grid-row: 3 / 5;')).toContain('grid-row: 3 / 5;');
+    expect(cssBlock('.light-color-meta', 'grid-row: 3;')).toContain('grid-row: 3;');
+  });
+});

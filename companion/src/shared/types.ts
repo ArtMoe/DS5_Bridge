@@ -1,0 +1,78 @@
+import type {
+  BridgeAckPayload,
+  AudioDebugStatsPayload,
+  BridgeStatusPayload,
+  BridgePresetId,
+  MuteButtonMode,
+  MuteKeyboardBehavior,
+  PollingRateMode,
+  TriggerTestMode
+} from './protocol';
+
+export interface CompanionSettings {
+  selectedPresetId: BridgePresetId;
+  hapticsEnabled: boolean;
+  hapticsGainPercent: number;
+  hapticsBufferLength: number;
+  adaptiveTriggersEnabled: boolean;
+  triggerEffectIntensityPercent: number;
+  triggerTestMode: TriggerTestMode;
+  speakerEnabled: boolean;
+  speakerVolumePercent: number;
+  lightbarEnabled: boolean;
+  lightbarColor: string;
+  lightbarBrightnessPercent: number;
+  lightbarOverrideEnabled: boolean;
+  muteButtonMode: MuteButtonMode;
+  muteKeyboardUsage: number;
+  muteKeyboardModifiers: number;
+  muteKeyboardBehavior: MuteKeyboardBehavior;
+  ledEnabled: boolean;
+  idleDisconnectEnabled: boolean;
+  usbSuspendDisconnectEnabled: boolean;
+  sleepKeybindEnabled: boolean;
+  pollingRateMode: PollingRateMode;
+  notifyControllerConnection: boolean;
+  notifyLowBattery: boolean;
+}
+
+export interface HidDeviceSummary {
+  path?: string;
+  vendorId?: number;
+  productId?: number;
+  usagePage?: number;
+  usage?: number;
+  product?: string;
+  manufacturer?: string;
+  interface?: number;
+}
+
+export type BridgeStateKind =
+  | 'no-bridge'
+  | 'normal-firmware'
+  | 'connected'
+  | 'incompatible'
+  | 'error';
+
+export interface BridgeDiagnostics {
+  hidPath: string | null;
+  protocolVersion: string | null;
+  uptimeSeconds: number | null;
+  settingsRevision: number | null;
+  lastAck: BridgeAckPayload | null;
+  lastError: string | null;
+  lastPollAt: number | null;
+  rawDevices: HidDeviceSummary[];
+  audioDebugLogPath: string | null;
+  audioDebugLogLines: string[];
+  audioDebugDroppedCount: number;
+  audioDebugStats: AudioDebugStatsPayload | null;
+}
+
+export interface BridgeSnapshot {
+  state: BridgeStateKind;
+  message: string;
+  status: BridgeStatusPayload | null;
+  settings: CompanionSettings;
+  diagnostics: BridgeDiagnostics;
+}

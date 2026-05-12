@@ -1,0 +1,1040 @@
+import { EventEmitter } from 'node:events';
+import HID from 'node-hid';
+import {
+  ACK_RESULT,
+  AUDIO_DEBUG_EVENT,
+  COMMAND_ID,
+  COMPANION_USAGE,
+  COMPANION_USAGE_PAGE,
+  REPORT_ID,
+  REPORT_LENGTH,
+  MUTE_KEYBOARD_HOLD_FLAG,
+  MUTE_KEYBOARD_MODIFIER_MASK,
+  ProtocolError,
+  ackUserMessage,
+  buildCommandReport,
+  parseAckReport,
+  parseAudioDebugReport,
+  parseAudioStatsReport,
+  parseStatusReport,
+  normalizeBridgePresetId,
+  pollingRateModeValue
+} from '../shared/protocol';
+import type {
+  AudioDebugEventPayload,
+  AudioDebugStatsPayload,
+  BridgePresetId,
+  BridgeStatusPayload,
+  MuteButtonMode,
+  MuteKeyboardBehavior,
+  PollingRateMode,
+  TriggerTestMode,
+  TriggerTestTarget
+} from '../shared/protocol';
+import type {
+  BridgeDiagnostics,
+  BridgeSnapshot,
+  CompanionSettings,
+  HidDeviceSummary
+} from '../shared/types';
+import { SettingsStore } from './settings-store';
+
+const POLL_INTERVAL_MS = 500;
+const LOW_BATTERY_PERCENT = 20;
+const AUDIO_DEBUG_LOG_LINE_LIMIT = 300;
+const STARTUP_REAPPLY_MIN_SETTLE_MS = 0;
+const STARTUP_REAPPLY_RETRY_DELAYS_MS = [250, 650, 1300] as const;
+const SONY_VENDOR_ID = 0x054c;
+const DUALSENSE_PRODUCT_IDS = new Set([0x0ce6, 0x0df2]);
+type HidDevice = HID.Device;
+type BridgeDiagnosticsWithoutAudioLog = Omit<
+  BridgeDiagnostics,
+  'audioDebugLogPath' | 'audioDebugLogLines' | 'audioDebugDroppedCount' | 'audioDebugStats'
+>;
+
+type CommandOptions = {
+  expectSettingsRevisionChange?: boolean;
+  throwOnCommandError?: boolean;
+  extraPayload?: ArrayLike<number>;
+};
+
+export type BridgeToast = {
+  title: string;
+  body: string;
+};
+
+const PRESET_SETTINGS: Record<Exclude<BridgePresetId, 'custom'>, Partial<CompanionSettings>> = {
+  balanced: {
+    selectedPresetId: 'balanced',
+    hapticsEnabled: true,
+    hapticsGainPercent: 100,
+    speakerEnabled: true,
+    speakerVolumePercent: 30,
+    adaptiveTriggersEnabled: true,
+    triggerEffectIntensityPercent: 100,
+    lightbarEnabled: true,
+    lightbarColor: '#ffd700',
+    lightbarBrightnessPercent: 100,
+    lightbarOverrideEnabled: false,
+    muteButtonMode: 'normal',
+    muteKeyboardBehavior: 'tap'
+  },
+  quiet: {
+    selectedPresetId: 'quiet',
+    hapticsEnabled: false,
+    speakerEnabled: false,
+    adaptiveTriggersEnabled: false,
+    lightbarEnabled: true,
+    lightbarBrightnessPercent: 35,
+    lightbarOverrideEnabled: true,
+    muteButtonMode: 'quiet'
+  },
+  'no-speaker': {
+    selectedPresetId: 'no-speaker',
+    speakerEnabled: false
+  },
+  'no-haptics': {
+    selectedPresetId: 'no-haptics',
+    hapticsEnabled: false
+  },
+  'no-triggers': {
+    selectedPresetId: 'no-triggers',
+    adaptiveTriggersEnabled: false,
+    triggerEffectIntensityPercent: 0
+  },
+  'lights-off': {
+    selectedPresetId: 'lights-off',
+    lightbarEnabled: false,
+    lightbarOverrideEnabled: true
+  }
+};
+
+function summarizeDevice(device: HidDevice): HidDeviceSummary {
+  return {
+    path: device.path,
+    vendorId: device.vendorId,
+    productId: device.productId,
+    usagePage: device.usagePage,
+    usage: device.usage,
+    product: device.product,
+    manufacturer: device.manufacturer,
+    interface: device.interface
+  };
+}
+
+function isCompanionCandidate(device: HidDevice): boolean {
+  return device.usagePage === COMPANION_USAGE_PAGE && device.usage === COMPANION_USAGE && Boolean(device.path);
+}
+
+function isDualSenseDevice(device: HidDevice): boolean {
+  return device.vendorId === SONY_VENDOR_ID
+    && DUALSENSE_PRODUCT_IDS.has(device.productId ?? 0)
+    && /DualSense/i.test(device.product ?? '');
+}
+
+function emptyDiagnostics(rawDevices: HidDeviceSummary[]): BridgeDiagnostics {
+  return {
+    hidPath: null,
+    protocolVersion: null,
+    uptimeSeconds: null,
+    settingsRevision: null,
+    lastAck: null,
+    lastError: null,
+    lastPollAt: null,
+    rawDevices,
+    audioDebugLogPath: null,
+    audioDebugLogLines: [],
+    audioDebugDroppedCount: 0,
+    audioDebugStats: null
+  };
+}
+
+function parseHexColor(color: string): { hex: string; red: number; green: number; blue: number } {
+  const hex = /^#[0-9a-fA-F]{6}$/.test(color) ? color.toLowerCase() : '#ffd700';
+  return {
+    hex,
+    red: Number.parseInt(hex.slice(1, 3), 16),
+    green: Number.parseInt(hex.slice(3, 5), 16),
+    blue: Number.parseInt(hex.slice(5, 7), 16)
+  };
+}
+
+function muteButtonModeValue(mode: MuteButtonMode): number {
+  if (mode === 'keyboard') return 1;
+  if (mode === 'quiet') return 2;
+  return 0;
+}
+
+function encodeMuteKeyboardOptions(modifiers: number, behavior: MuteKeyboardBehavior): number {
+  const modifierBits = Math.max(0, Math.min(MUTE_KEYBOARD_MODIFIER_MASK, Math.round(modifiers)));
+  return behavior === 'hold' ? modifierBits | MUTE_KEYBOARD_HOLD_FLAG : modifierBits;
+}
+
+function triggerTestModeValue(mode: TriggerTestMode): number {
+  if (mode === 'weapon') return 1;
+  if (mode === 'vibration') return 2;
+  return 0;
+}
+
+function triggerTestTargetValue(target: TriggerTestTarget): number {
+  if (target === 'l2') return 1;
+  if (target === 'r2') return 2;
+  return 0;
+}
+
+function normalizePollingRateMode(mode: PollingRateMode): PollingRateMode {
+  if (mode === '250' || mode === '500') {
+    return mode;
+  }
+  return '1000';
+}
+
+function customSettingUpdate(update: Partial<CompanionSettings>): Partial<CompanionSettings> {
+  return { ...update, selectedPresetId: 'custom' };
+}
+
+function limitedByte(value: number, suffix = '+'): string {
+  return value === 255 ? `${value}${suffix}` : String(value);
+}
+
+function formatAudioDebugEvent(event: AudioDebugEventPayload): string {
+  const [arg0, arg1, arg2, arg3, arg4] = event.args;
+  const prefix = `#${event.sequence} t=${event.timeUs}us`;
+  switch (event.eventCode) {
+    case AUDIO_DEBUG_EVENT.AUDIO_START:
+      return `${prefix} [Audio] START: host audio audio_fifo=${arg0} opus_ready=${arg1} frames=${arg2} packet=${arg3} reportSeq=${arg4}`;
+    case AUDIO_DEBUG_EVENT.RESET_GAP:
+      return `${prefix} [Audio] RESET: gap detected audio_fifo=${arg0} opus_ready=${arg1} gap_ms=${limitedByte(arg2)} packet=${arg3} skip=${arg4}`;
+    case AUDIO_DEBUG_EVENT.CORE1_RESET:
+      return `${prefix} [Audio] CORE1: reset encoder opus_fifo_before=${arg0} opus_fifo_after=${arg1} reset_ran=${arg2 === 1 ? 'true' : 'false'} audio_fifo=${arg3}`;
+    case AUDIO_DEBUG_EVENT.SKIP_OPUS_PACKET:
+      return `${prefix} [Audio] SKIP opus pkt skip_before=${arg0} skip_after=${arg1} opus_fifo=${arg2} packet=${arg3} reportSeq=${arg4}`;
+    case AUDIO_DEBUG_EVENT.SEND_SPEAKER_PACKET:
+      return `${prefix} [Audio] SEND: speaker opus included audio_fifo=${arg0} opus_ready=${arg1} packet=${arg2} reportSeq=${arg3} headset=${(arg4 & 0x01) !== 0 ? 'true' : 'false'} silence=${(arg4 & 0x02) !== 0 ? 'true' : 'false'}`;
+    case AUDIO_DEBUG_EVENT.NO_OPUS_PACKET:
+      return `${prefix} [Audio] SUPPRESS: no opus packet audio_fifo=${arg0} opus_ready=${arg1} packet=${arg2} reportSeq=${arg3}`;
+    case AUDIO_DEBUG_EVENT.AUDIO_FIFO_DROP:
+      return `${prefix} [Audio] DROP: audio_fifo full audio_fifo=${arg0} opus_ready=${arg1} packet=${arg2} reportSeq=${arg3}`;
+    case AUDIO_DEBUG_EVENT.AUDIO_FIFO_ADD_FAIL:
+      return `${prefix} [Audio] ERROR: audio_fifo add failed audio_fifo=${arg0} opus_ready=${arg1} packet=${arg2} reportSeq=${arg3}`;
+    case AUDIO_DEBUG_EVENT.OPUS_FIFO_DROP:
+      return `${prefix} [Audio] DROP: opus_fifo full audio_fifo=${arg0} opus_fifo=${arg1}`;
+    case AUDIO_DEBUG_EVENT.OPUS_FIFO_ADD_FAIL:
+      return `${prefix} [Audio] ERROR: opus_fifo add failed audio_fifo=${arg0} opus_fifo=${arg1}`;
+    case AUDIO_DEBUG_EVENT.TEST_HAPTICS_START:
+      return `${prefix} [Audio] TEST HAPTICS: start audio_fifo=${arg0} opus_ready=${arg1} haptics_gain=${arg2}%`;
+    case AUDIO_DEBUG_EVENT.TEST_HAPTICS_STOP:
+      return `${prefix} [Audio] TEST HAPTICS: stop reason=${arg0 === 1 ? 'complete' : 'disconnected'} audio_fifo=${arg1} opus_ready=${arg2}`;
+    case AUDIO_DEBUG_EVENT.SPEAKER_ROUTE:
+      return `${prefix} [Audio] ROUTE: speaker ${arg0 === 1 ? 'enabled' : 'disabled'} volume=${arg1}% quiet=${arg2 === 1 ? 'true' : 'false'}`;
+    case AUDIO_DEBUG_EVENT.QUIET_MODE:
+      return `${prefix} [Audio] QUIET: ${arg0 === 1 ? 'enabled' : 'disabled'} audio_fifo=${arg1} opus_fifo=${arg2}`;
+    case AUDIO_DEBUG_EVENT.SILENCE_PREROLL:
+      return `${prefix} [Audio] PREROLL: encoded silence requested=${arg0} queued=${arg1} opus_fifo=${arg2} skip=${arg3}`;
+    case AUDIO_DEBUG_EVENT.USB_SILENCE_TAIL:
+      return `${prefix} [Audio] TAIL: forwarding USB silence frames=${arg0} audio_fifo=${arg1} opus_ready=${arg2} packet=${arg3} reportSeq=${arg4}`;
+    default:
+      return `${prefix} [Audio] UNKNOWN code=${event.eventCode} args=${event.args.join(',')}`;
+  }
+}
+
+function formatAudioStats(stats: AudioDebugStatsPayload): string {
+  return [
+    '[AudioStats]',
+    `version=${stats.statsVersion}`,
+    `usbAudioGapMaxUs=${stats.usbAudioGapMaxUs}`,
+    `usbAudioGapOver1500Count=${stats.usbAudioGapOver1500Count}`,
+    `opusEncodeMaxUs=${stats.opusEncodeMaxUs}`,
+    `opusEncodeOverBudgetCount=${stats.opusEncodeOverBudgetCount}`,
+    `audio0x36EnqueueToSendMaxUs=${stats.audio0x36EnqueueToSendMaxUs}`,
+    `audio0x36SendGapMaxUs=${stats.audio0x36SendGapMaxUs}`,
+    `audio0x36LateCountOver12000Us=${stats.audio0x36LateCountOver12000Us}`,
+    `audio0x36DropOldestCount=${stats.audio0x36DropOldestCount}`,
+    `audioGenerationDropCount=${stats.audioGenerationDropCount}`,
+    `nonAudioReportsBetweenAudioMax=${stats.nonAudioReportsBetweenAudioMax}`,
+    `btAudioQueueDepthMax=${stats.btAudioQueueDepthMax}`,
+    `audio0x36EnqueuedCount=${stats.audio0x36EnqueuedCount}`,
+    `audio0x36SentCount=${stats.audio0x36SentCount}`,
+    `criticalStarvingAudioCount=${stats.criticalStarvingAudioCount}`
+  ].join(' ');
+}
+
+export class BridgeService extends EventEmitter {
+  private device: HID.HID | null = null;
+  private devicePath: string | null = null;
+  private pollTimer: NodeJS.Timeout | null = null;
+  private snapshot: BridgeSnapshot;
+  private lastEmittedSnapshotSignature: string | null = null;
+  private commandSequence = 0;
+  private lastUptimeSeconds: number | null = null;
+  private sessionKey: string | null = null;
+  private sessionPath: string | null = null;
+  private reappliedSessionKey: string | null = null;
+  private controllerConnectedSince = 0;
+  private reapplyAttempt = 0;
+  private nextReapplyAt = 0;
+  private reapplyActive = false;
+  private pollPausedUntil = 0;
+  private readonly audioDebugLogPath: string | null = null;
+  private audioDebugLogLines: string[] = [];
+  private audioDebugDroppedCount = 0;
+  private audioDebugStats: AudioDebugStatsPayload | null = null;
+  private lastAudioStatsSignature: string | null = null;
+  private previousControllerConnected: boolean | null = null;
+  private lowBatteryToastActive = false;
+
+  constructor(private readonly settingsStore: SettingsStore) {
+    super();
+    this.snapshot = {
+      state: 'no-bridge',
+      message: 'No bridge detected',
+      status: null,
+      settings: this.settingsStore.get(),
+      diagnostics: this.withAudioDebugDiagnostics(emptyDiagnostics([]))
+    };
+  }
+
+  start(): void {
+    this.poll().catch((error) => this.publishError(error));
+    this.pollTimer = setInterval(() => {
+      this.poll().catch((error) => this.publishError(error));
+    }, POLL_INTERVAL_MS);
+  }
+
+  stop(): void {
+    if (this.pollTimer) {
+      clearInterval(this.pollTimer);
+      this.pollTimer = null;
+    }
+    this.closeDevice();
+  }
+
+  getSnapshot(): BridgeSnapshot {
+    return structuredClone(this.snapshot);
+  }
+
+  listDevices(): HidDeviceSummary[] {
+    return HID.devices().map(summarizeDevice);
+  }
+
+  pausePollingFor(milliseconds: number): void {
+    this.pollPausedUntil = Math.max(this.pollPausedUntil, Date.now() + milliseconds);
+  }
+
+  private withAudioDebugDiagnostics(diagnostics: BridgeDiagnosticsWithoutAudioLog): BridgeDiagnostics {
+    return {
+      ...diagnostics,
+      audioDebugLogPath: this.audioDebugLogPath,
+      audioDebugLogLines: [...this.audioDebugLogLines],
+      audioDebugDroppedCount: this.audioDebugDroppedCount,
+      audioDebugStats: this.audioDebugStats ? { ...this.audioDebugStats } : null
+    };
+  }
+
+  private appendAudioDebugLines(lines: string[]): void {
+    if (lines.length === 0) {
+      return;
+    }
+
+    this.audioDebugLogLines.push(...lines);
+    if (this.audioDebugLogLines.length > AUDIO_DEBUG_LOG_LINE_LIMIT) {
+      this.audioDebugLogLines = this.audioDebugLogLines.slice(-AUDIO_DEBUG_LOG_LINE_LIMIT);
+    }
+
+  }
+
+  private readAudioDebugEvents(): void {
+    if (!this.device) {
+      return;
+    }
+
+    try {
+      const debug = parseAudioDebugReport(this.device.getFeatureReport(REPORT_ID.AUDIO_DEBUG, REPORT_LENGTH));
+      this.audioDebugDroppedCount = debug.droppedCount;
+      this.appendAudioDebugLines(debug.events.map(formatAudioDebugEvent));
+    } catch {
+      // Keep diagnostics best-effort so normal status polling is not blocked.
+    }
+  }
+
+  private readAudioDebugStats(): void {
+    if (!this.device) {
+      return;
+    }
+
+    try {
+      const stats = parseAudioStatsReport(this.device.getFeatureReport(REPORT_ID.AUDIO_STATS, REPORT_LENGTH));
+      this.audioDebugStats = stats;
+      const signature = JSON.stringify(stats);
+      if (signature !== this.lastAudioStatsSignature) {
+        this.lastAudioStatsSignature = signature;
+        this.appendAudioDebugLines([formatAudioStats(stats)]);
+      }
+    } catch {
+      // Keep diagnostics best-effort so normal status polling is not blocked.
+    }
+  }
+
+  async setHapticsGain(percent: number): Promise<BridgeSnapshot> {
+    const value = Math.max(0, Math.min(200, Math.round(percent)));
+    const effectiveValue = this.settingsStore.get().hapticsEnabled ? value : 0;
+    await this.sendSettingCommand(COMMAND_ID.SET_HAPTICS_GAIN, effectiveValue, customSettingUpdate({
+      hapticsGainPercent: value
+    }));
+    return this.getSnapshot();
+  }
+
+  async setHapticsEnabled(enabled: boolean): Promise<BridgeSnapshot> {
+    const settings = this.settingsStore.get();
+    await this.sendSettingCommand(COMMAND_ID.SET_HAPTICS_GAIN, enabled ? settings.hapticsGainPercent : 0, customSettingUpdate({
+      hapticsEnabled: enabled
+    }));
+    return this.getSnapshot();
+  }
+
+  async setHapticsBufferLength(length: number): Promise<BridgeSnapshot> {
+    const value = Math.max(1, Math.min(255, Math.round(length)));
+    await this.sendSettingCommand(COMMAND_ID.SET_HAPTICS_BUFFER_LENGTH, value, { hapticsBufferLength: value });
+    return this.getSnapshot();
+  }
+
+  async setTriggerEffectIntensity(percent: number): Promise<BridgeSnapshot> {
+    const value = Math.max(0, Math.min(100, Math.round(percent)));
+    const effectiveValue = this.settingsStore.get().adaptiveTriggersEnabled ? value : 0;
+    await this.sendSettingCommand(COMMAND_ID.SET_TRIGGER_EFFECT_INTENSITY, effectiveValue, customSettingUpdate({
+      triggerEffectIntensityPercent: value
+    }));
+    return this.getSnapshot();
+  }
+
+  async setTriggerTestMode(mode: TriggerTestMode): Promise<BridgeSnapshot> {
+    this.snapshot.settings = this.settingsStore.update(customSettingUpdate({ triggerTestMode: mode }));
+    this.emitSnapshot();
+    return this.getSnapshot();
+  }
+
+  async setAdaptiveTriggersEnabled(enabled: boolean): Promise<BridgeSnapshot> {
+    const settings = this.settingsStore.get();
+    await this.sendSettingCommand(
+      COMMAND_ID.SET_TRIGGER_EFFECT_INTENSITY,
+      enabled ? settings.triggerEffectIntensityPercent : 0,
+      customSettingUpdate({ adaptiveTriggersEnabled: enabled })
+    );
+    if (!enabled && this.snapshot.state === 'connected') {
+      await this.sendCommand(COMMAND_ID.RESET_ADAPTIVE_TRIGGERS, 0, { throwOnCommandError: false });
+    }
+    return this.getSnapshot();
+  }
+
+  async setSpeakerVolume(percent: number): Promise<BridgeSnapshot> {
+    const value = Math.max(0, Math.min(100, Math.round(percent)));
+    const settings = this.settingsStore.get();
+    if (settings.speakerEnabled) {
+      await this.setFirmwareSpeakerVolume(value, true);
+    }
+    this.snapshot.settings = this.settingsStore.update(customSettingUpdate({
+      speakerVolumePercent: value
+    }));
+    this.emitSnapshot();
+    return this.getSnapshot();
+  }
+
+  async setSpeakerEnabled(enabled: boolean): Promise<BridgeSnapshot> {
+    const settings = this.settingsStore.get();
+    await this.setFirmwareSpeakerVolume(enabled ? settings.speakerVolumePercent : 0, true);
+    this.snapshot.settings = this.settingsStore.update(customSettingUpdate({
+      speakerEnabled: enabled
+    }));
+    this.emitSnapshot();
+    return this.getSnapshot();
+  }
+
+  async setLightbarColor(color: string, brightnessPercent: number): Promise<BridgeSnapshot> {
+    const parsed = parseHexColor(color);
+    const brightness = Math.max(0, Math.min(100, Math.round(brightnessPercent)));
+    const ack = await this.sendCommand(COMMAND_ID.SET_LIGHTBAR_COLOR, brightness, {
+      expectSettingsRevisionChange: true,
+      extraPayload: [parsed.red, parsed.green, parsed.blue]
+    });
+    if (ack.resultCode === ACK_RESULT.OK) {
+      this.snapshot.settings = this.settingsStore.update(customSettingUpdate({
+        lightbarColor: parsed.hex,
+        lightbarBrightnessPercent: brightness
+      }));
+      if (this.snapshot.status) {
+        this.snapshot.status.lightbarColor = {
+          red: parsed.red,
+          green: parsed.green,
+          blue: parsed.blue,
+          brightnessPercent: brightness
+        };
+      }
+      this.emitSnapshot();
+    }
+    return this.getSnapshot();
+  }
+
+  async setLightbarOverrideEnabled(enabled: boolean): Promise<BridgeSnapshot> {
+    const ack = await this.sendCommand(COMMAND_ID.SET_LIGHTBAR_OVERRIDE, enabled ? 1 : 0, {
+      expectSettingsRevisionChange: true
+    });
+    if (ack.resultCode === ACK_RESULT.OK) {
+      this.snapshot.settings = this.settingsStore.update(customSettingUpdate({ lightbarOverrideEnabled: enabled }));
+      if (this.snapshot.status) {
+        this.snapshot.status.lightbarOverrideEnabled = enabled;
+      }
+      this.emitSnapshot();
+    }
+    return this.getSnapshot();
+  }
+
+  async setLightbarEnabled(enabled: boolean): Promise<BridgeSnapshot> {
+    this.snapshot.settings = this.settingsStore.update(customSettingUpdate({ lightbarEnabled: enabled }));
+    if (this.snapshot.state === 'connected') {
+      await this.applyLightbarSettings(this.snapshot.settings, true);
+    }
+    this.emitSnapshot();
+    return this.getSnapshot();
+  }
+
+  async setMuteButtonAction(
+    mode: MuteButtonMode,
+    usage: number,
+    modifiers: number,
+    behavior: MuteKeyboardBehavior
+  ): Promise<BridgeSnapshot> {
+    const keyUsage = Math.max(1, Math.min(0x73, Math.round(usage)));
+    const keyModifiers = Math.max(0, Math.min(MUTE_KEYBOARD_MODIFIER_MASK, Math.round(modifiers)));
+    const keyOptions = encodeMuteKeyboardOptions(keyModifiers, behavior);
+    const ack = await this.sendCommand(COMMAND_ID.SET_MUTE_BUTTON_ACTION, muteButtonModeValue(mode), {
+      expectSettingsRevisionChange: true,
+      extraPayload: [keyUsage, keyOptions]
+    });
+    if (ack.resultCode === ACK_RESULT.OK) {
+      this.snapshot.settings = this.settingsStore.update(customSettingUpdate({
+        muteButtonMode: mode,
+        muteKeyboardUsage: keyUsage,
+        muteKeyboardModifiers: keyModifiers,
+        muteKeyboardBehavior: behavior
+      }));
+      if (this.snapshot.status) {
+        this.snapshot.status.muteButtonMode = mode;
+        this.snapshot.status.muteKeyboardUsage = keyUsage;
+        this.snapshot.status.muteKeyboardModifiers = keyModifiers;
+        this.snapshot.status.muteKeyboardBehavior = behavior;
+      }
+      this.emitSnapshot();
+    }
+    return this.getSnapshot();
+  }
+
+  async setLedEnabled(enabled: boolean): Promise<BridgeSnapshot> {
+    await this.sendSettingCommand(COMMAND_ID.SET_LED_ENABLED, enabled ? 1 : 0, { ledEnabled: enabled });
+    return this.getSnapshot();
+  }
+
+  async setIdleDisconnectEnabled(enabled: boolean): Promise<BridgeSnapshot> {
+    await this.sendSettingCommand(COMMAND_ID.SET_IDLE_DISCONNECT_ENABLED, enabled ? 1 : 0, {
+      idleDisconnectEnabled: enabled
+    });
+    return this.getSnapshot();
+  }
+
+  async setUsbSuspendDisconnectEnabled(enabled: boolean): Promise<BridgeSnapshot> {
+    await this.sendSettingCommand(COMMAND_ID.SET_USB_SUSPEND_DISCONNECT_ENABLED, enabled ? 1 : 0, {
+      usbSuspendDisconnectEnabled: enabled
+    });
+    if (this.snapshot.status) {
+      this.snapshot.status.usbSuspendDisconnectEnabled = enabled;
+      this.emitSnapshot();
+    }
+    return this.getSnapshot();
+  }
+
+  async setSleepKeybindEnabled(enabled: boolean): Promise<BridgeSnapshot> {
+    await this.sendSettingCommand(COMMAND_ID.SET_SLEEP_KEYBIND_ENABLED, enabled ? 1 : 0, {
+      sleepKeybindEnabled: enabled
+    });
+    if (this.snapshot.status) {
+      this.snapshot.status.sleepKeybindEnabled = enabled;
+      this.emitSnapshot();
+    }
+    return this.getSnapshot();
+  }
+
+  async setPollingRateMode(mode: PollingRateMode): Promise<BridgeSnapshot> {
+    const normalizedMode = normalizePollingRateMode(mode);
+    await this.sendSettingCommand(
+      COMMAND_ID.SET_POLLING_RATE_MODE,
+      pollingRateModeValue(normalizedMode),
+      { pollingRateMode: normalizedMode }
+    );
+    return this.getSnapshot();
+  }
+
+  async sleepController(): Promise<BridgeSnapshot> {
+    await this.sendCommand(COMMAND_ID.SLEEP_CONTROLLER, 0, {
+      throwOnCommandError: false
+    });
+    return this.getSnapshot();
+  }
+
+  async setNotifyControllerConnection(enabled: boolean): Promise<BridgeSnapshot> {
+    this.snapshot.settings = this.settingsStore.update({ notifyControllerConnection: enabled });
+    this.emitSnapshot();
+    return this.getSnapshot();
+  }
+
+  async setNotifyLowBattery(enabled: boolean): Promise<BridgeSnapshot> {
+    this.snapshot.settings = this.settingsStore.update({ notifyLowBattery: enabled });
+    this.lowBatteryToastActive = false;
+    this.emitSnapshot();
+    return this.getSnapshot();
+  }
+
+  async testNotification(): Promise<BridgeSnapshot> {
+    this.emit('toast', {
+      title: 'DS5 Bridge',
+      body: 'Notifications are working.'
+    } satisfies BridgeToast);
+    return this.getSnapshot();
+  }
+
+  async testHaptics(): Promise<BridgeSnapshot> {
+    await this.sendCommand(COMMAND_ID.TEST_HAPTICS, 0, { throwOnCommandError: false });
+    return this.getSnapshot();
+  }
+
+  async testAdaptiveTriggers(
+    mode = this.settingsStore.get().triggerTestMode,
+    target: TriggerTestTarget = 'both'
+  ): Promise<BridgeSnapshot> {
+    const value = triggerTestModeValue(mode) | (triggerTestTargetValue(target) << 8);
+    await this.sendCommand(COMMAND_ID.TEST_ADAPTIVE_TRIGGERS, value, {
+      throwOnCommandError: false
+    });
+    return this.getSnapshot();
+  }
+
+  async resetAdaptiveTriggers(): Promise<BridgeSnapshot> {
+    await this.sendCommand(COMMAND_ID.RESET_ADAPTIVE_TRIGGERS, 0, { throwOnCommandError: false });
+    return this.getSnapshot();
+  }
+
+  async restoreDefaults(): Promise<BridgeSnapshot> {
+    const ack = await this.sendCommand(COMMAND_ID.RESTORE_DEFAULTS, 0, { expectSettingsRevisionChange: true });
+    if (ack.resultCode === ACK_RESULT.OK) {
+      this.snapshot.settings = this.settingsStore.restoreDefaults();
+      this.emitSnapshot();
+    }
+    return this.getSnapshot();
+  }
+
+  async applyPreset(presetId: BridgePresetId): Promise<BridgeSnapshot> {
+    const normalizedPresetId = normalizeBridgePresetId(presetId);
+    this.snapshot.settings = this.settingsStore.applyPreset(
+      normalizedPresetId,
+      normalizedPresetId === 'custom' ? undefined : PRESET_SETTINGS[normalizedPresetId]
+    );
+    if (this.snapshot.state === 'connected') {
+      await this.applyCurrentSettings(this.snapshot.settings, false);
+    }
+    this.emitSnapshot();
+    return this.getSnapshot();
+  }
+
+  private async sendSettingCommand(
+    commandId: number,
+    value: number,
+    settingUpdate: Partial<CompanionSettings>
+  ): Promise<void> {
+    const ack = await this.sendCommand(commandId, value, { expectSettingsRevisionChange: true });
+    if (ack.resultCode === ACK_RESULT.OK) {
+      this.snapshot.settings = this.settingsStore.update(settingUpdate);
+      this.emitSnapshot();
+    }
+  }
+
+  private async sendCommand(commandId: number, value: number, options: CommandOptions = {}) {
+    await this.ensureCompanionDevice();
+    if (!this.device) {
+      throw new Error('No companion bridge is connected.');
+    }
+
+    const sequence = this.nextSequence();
+    const previousSettingsRevision = this.snapshot.diagnostics.settingsRevision;
+    this.device.sendFeatureReport(buildCommandReport(commandId, sequence, value, options.extraPayload));
+    const ack = parseAckReport(this.device.getFeatureReport(REPORT_ID.ACK, REPORT_LENGTH));
+    this.snapshot.diagnostics.lastAck = ack;
+    this.snapshot.diagnostics.settingsRevision = ack.settingsRevision;
+    this.snapshot.diagnostics.lastError = ack.resultCode === ACK_RESULT.OK ? null : ackUserMessage(ack.resultCode);
+    this.emitSnapshot();
+
+    if (ack.resultCode !== ACK_RESULT.OK) {
+      if (options.throwOnCommandError === false) {
+        return ack;
+      }
+      throw new Error(ackUserMessage(ack.resultCode));
+    }
+    if (
+      options.expectSettingsRevisionChange
+      && previousSettingsRevision !== null
+      && ack.settingsRevision === previousSettingsRevision
+    ) {
+      const message = 'Firmware accepted the setting but did not advance settings_revision.';
+      this.snapshot.diagnostics.lastError = message;
+      this.emitSnapshot();
+      throw new Error(message);
+    }
+    return ack;
+  }
+
+  private async poll(): Promise<void> {
+    if (Date.now() < this.pollPausedUntil) {
+      return;
+    }
+
+    const devices = HID.devices();
+    const rawDevices = devices.map(summarizeDevice);
+    const companionDevices = devices.filter(isCompanionCandidate);
+
+    if (companionDevices.length === 0) {
+      this.closeDevice();
+      this.lastUptimeSeconds = null;
+      this.sessionKey = null;
+      this.sessionPath = null;
+      this.reapplyActive = false;
+      this.noteControllerUnavailableForToasts();
+      this.lowBatteryToastActive = false;
+      this.resetStartupReapplyState();
+      const normalFirmwarePresent = devices.some(isDualSenseDevice);
+      this.snapshot = {
+        state: normalFirmwarePresent ? 'normal-firmware' : 'no-bridge',
+        message: normalFirmwarePresent
+          ? 'Companion firmware required'
+          : 'No bridge detected',
+        status: null,
+        settings: this.settingsStore.get(),
+        diagnostics: this.withAudioDebugDiagnostics(emptyDiagnostics(rawDevices))
+      };
+      this.emitSnapshot();
+      return;
+    }
+
+    const status = await this.openAndReadStatus(companionDevices);
+    if (!status) {
+      this.noteControllerUnavailableForToasts();
+      this.snapshot = {
+        state: 'incompatible',
+        message: 'Firmware incompatible',
+        status: null,
+        settings: this.settingsStore.get(),
+        diagnostics: this.withAudioDebugDiagnostics({
+          ...emptyDiagnostics(rawDevices),
+          hidPath: this.devicePath,
+          lastError: 'No companion device returned a supported DS5B status report',
+          lastPollAt: Date.now()
+        })
+      };
+      this.emitSnapshot();
+      return;
+    }
+
+    this.readAudioDebugEvents();
+    this.readAudioDebugStats();
+    this.maybeEmitStatusToasts(status);
+
+    const previousUptime = this.lastUptimeSeconds;
+    const isNewSession = this.sessionKey === null
+      || this.sessionPath !== this.devicePath
+      || (previousUptime !== null && status.uptimeSeconds < previousUptime)
+      || previousUptime === null;
+
+    if (isNewSession) {
+      this.sessionKey = `${this.devicePath ?? 'unknown'}:${Date.now()}`;
+      this.sessionPath = this.devicePath;
+      this.resetStartupReapplyState();
+    }
+    this.lastUptimeSeconds = status.uptimeSeconds;
+
+    this.snapshot = {
+      state: 'connected',
+      message: 'Companion firmware connected',
+      status,
+      settings: this.settingsStore.get(),
+      diagnostics: this.withAudioDebugDiagnostics({
+        hidPath: this.devicePath,
+        protocolVersion: status.protocolVersion,
+        uptimeSeconds: status.uptimeSeconds,
+        settingsRevision: status.settingsRevision,
+        lastAck: this.snapshot.diagnostics.lastAck,
+        lastError: null,
+        lastPollAt: Date.now(),
+        rawDevices
+      })
+    };
+    this.emitSnapshot();
+
+    if (status.controllerConnected) {
+      if (this.controllerConnectedSince === 0) {
+        this.controllerConnectedSince = Date.now();
+      }
+      void this.reapplySettingsUntilSettled();
+    } else {
+      this.controllerConnectedSince = 0;
+      this.reapplyAttempt = 0;
+      this.nextReapplyAt = 0;
+    }
+  }
+
+  private async ensureCompanionDevice(): Promise<void> {
+    if (this.device) {
+      return;
+    }
+    const devices = HID.devices().filter(isCompanionCandidate);
+    await this.openAndReadStatus(devices);
+  }
+
+  private async openAndReadStatus(devices: HidDevice[]) {
+    for (const candidate of devices) {
+      if (!candidate.path) {
+        continue;
+      }
+      try {
+        if (this.devicePath !== candidate.path) {
+          this.closeDevice();
+          this.device = new HID.HID(candidate.path);
+          this.devicePath = candidate.path;
+          this.lastUptimeSeconds = null;
+          this.sessionKey = null;
+          this.sessionPath = null;
+          this.resetStartupReapplyState();
+        }
+        const status = parseStatusReport(this.device!.getFeatureReport(REPORT_ID.STATUS, REPORT_LENGTH));
+        return status;
+      } catch (error) {
+        if (error instanceof ProtocolError && error.code === 'bad-version') {
+          throw error;
+        }
+        this.closeDevice();
+      }
+    }
+    return null;
+  }
+
+  private maybeEmitStatusToasts(status: BridgeStatusPayload): void {
+    const settings = this.settingsStore.get();
+    const controllerConnected = status.controllerConnected;
+
+    if (
+      settings.notifyControllerConnection
+      && this.previousControllerConnected !== null
+      && this.previousControllerConnected !== controllerConnected
+    ) {
+      this.emit('toast', {
+        title: 'DS5 Bridge',
+        body: controllerConnected ? 'Controller connected' : 'Controller disconnected'
+      } satisfies BridgeToast);
+    }
+    this.previousControllerConnected = controllerConnected;
+
+    const lowBattery = controllerConnected
+      && status.batteryPercent !== null
+      && status.batteryPercent <= LOW_BATTERY_PERCENT;
+    if (settings.notifyLowBattery && lowBattery && !this.lowBatteryToastActive) {
+      this.emit('toast', {
+        title: 'DS5 Bridge',
+        body: `Controller battery low: ${status.batteryPercent}%`
+      } satisfies BridgeToast);
+    }
+    this.lowBatteryToastActive = lowBattery;
+  }
+
+  private noteControllerUnavailableForToasts(): void {
+    const settings = this.settingsStore.get();
+    if (settings.notifyControllerConnection && this.previousControllerConnected === true) {
+      this.emit('toast', {
+        title: 'DS5 Bridge',
+        body: 'Controller disconnected'
+      } satisfies BridgeToast);
+    }
+    this.previousControllerConnected = false;
+    this.lowBatteryToastActive = false;
+  }
+
+  private resetStartupReapplyState(): void {
+    this.reappliedSessionKey = null;
+    this.controllerConnectedSince = 0;
+    this.reapplyAttempt = 0;
+    this.nextReapplyAt = 0;
+  }
+
+  private async reapplySettingsUntilSettled(): Promise<void> {
+    if (!this.sessionKey || this.reapplyActive || this.reappliedSessionKey === this.sessionKey) {
+      return;
+    }
+    const now = Date.now();
+    if (now < this.nextReapplyAt) {
+      return;
+    }
+    if (this.controllerConnectedSince && now - this.controllerConnectedSince < STARTUP_REAPPLY_MIN_SETTLE_MS) {
+      this.nextReapplyAt = this.controllerConnectedSince + STARTUP_REAPPLY_MIN_SETTLE_MS;
+      return;
+    }
+
+    this.reapplyActive = true;
+    try {
+      const settings = this.settingsStore.get();
+      await this.applyCurrentSettings(settings, this.reapplyAttempt === 0);
+      if (this.reapplyAttempt >= STARTUP_REAPPLY_RETRY_DELAYS_MS.length) {
+        this.reappliedSessionKey = this.sessionKey;
+      } else {
+        this.nextReapplyAt = Date.now() + STARTUP_REAPPLY_RETRY_DELAYS_MS[this.reapplyAttempt];
+        this.reapplyAttempt += 1;
+      }
+    } catch (error) {
+      this.publishError(error);
+    } finally {
+      this.reapplyActive = false;
+    }
+  }
+
+  private async applyCurrentSettings(settings: CompanionSettings, expectSettingsRevisionChange: boolean): Promise<void> {
+    await this.applyLightbarSettings(settings, expectSettingsRevisionChange);
+    await this.sendCommand(COMMAND_ID.SET_MUTE_BUTTON_ACTION, muteButtonModeValue(settings.muteButtonMode), {
+      expectSettingsRevisionChange,
+      extraPayload: [
+        settings.muteKeyboardUsage,
+        encodeMuteKeyboardOptions(settings.muteKeyboardModifiers, settings.muteKeyboardBehavior)
+      ]
+    });
+    await this.sendCommand(COMMAND_ID.SET_HAPTICS_GAIN, settings.hapticsEnabled ? settings.hapticsGainPercent : 0, {
+      expectSettingsRevisionChange
+    });
+    await this.sendCommand(COMMAND_ID.SET_HAPTICS_BUFFER_LENGTH, settings.hapticsBufferLength, {
+      expectSettingsRevisionChange
+    });
+    await this.sendCommand(
+      COMMAND_ID.SET_TRIGGER_EFFECT_INTENSITY,
+      settings.adaptiveTriggersEnabled ? settings.triggerEffectIntensityPercent : 0,
+      { expectSettingsRevisionChange }
+    );
+    if (!settings.adaptiveTriggersEnabled) {
+      await this.sendCommand(COMMAND_ID.RESET_ADAPTIVE_TRIGGERS, 0, { throwOnCommandError: false });
+    }
+    await this.applySpeakerSettings(settings, expectSettingsRevisionChange);
+    await this.sendCommand(COMMAND_ID.SET_LED_ENABLED, settings.ledEnabled ? 1 : 0, {
+      expectSettingsRevisionChange
+    });
+    await this.sendCommand(COMMAND_ID.SET_IDLE_DISCONNECT_ENABLED, settings.idleDisconnectEnabled ? 1 : 0, {
+      expectSettingsRevisionChange
+    });
+    await this.sendCommand(
+      COMMAND_ID.SET_USB_SUSPEND_DISCONNECT_ENABLED,
+      settings.usbSuspendDisconnectEnabled ? 1 : 0,
+      { expectSettingsRevisionChange }
+    );
+    await this.sendCommand(
+      COMMAND_ID.SET_SLEEP_KEYBIND_ENABLED,
+      settings.sleepKeybindEnabled ? 1 : 0,
+      { expectSettingsRevisionChange }
+    );
+    await this.sendCommand(
+      COMMAND_ID.SET_POLLING_RATE_MODE,
+      pollingRateModeValue(settings.pollingRateMode),
+      { expectSettingsRevisionChange }
+    );
+  }
+
+  private async applyLightbarSettings(settings: CompanionSettings, expectSettingsRevisionChange: boolean): Promise<void> {
+    const color = settings.lightbarEnabled ? parseHexColor(settings.lightbarColor) : { red: 0, green: 0, blue: 0 };
+    await this.sendCommand(
+      COMMAND_ID.SET_LIGHTBAR_COLOR,
+      settings.lightbarEnabled ? settings.lightbarBrightnessPercent : 0,
+      {
+        expectSettingsRevisionChange,
+        extraPayload: [color.red, color.green, color.blue]
+      }
+    );
+    await this.sendCommand(COMMAND_ID.SET_LIGHTBAR_OVERRIDE, (!settings.lightbarEnabled || settings.lightbarOverrideEnabled) ? 1 : 0, {
+      expectSettingsRevisionChange
+    });
+  }
+
+  private async applySpeakerSettings(settings: CompanionSettings, expectSettingsRevisionChange: boolean): Promise<void> {
+    await this.setFirmwareSpeakerVolume(settings.speakerEnabled ? settings.speakerVolumePercent : 0, expectSettingsRevisionChange);
+  }
+
+  private async setFirmwareSpeakerVolume(percent: number, expectSettingsRevisionChange: boolean): Promise<void> {
+    const value = Math.max(0, Math.min(100, Math.round(percent)));
+    await this.sendCommand(COMMAND_ID.SET_SPEAKER_VOLUME, value, {
+      expectSettingsRevisionChange
+    });
+    if (this.snapshot.status) {
+      this.snapshot.status.speakerVolumePercent = value;
+    }
+  }
+
+  private nextSequence(): number {
+    this.commandSequence = (this.commandSequence + 1) & 0xff;
+    return this.commandSequence;
+  }
+
+  private publishError(error: unknown): void {
+    const message = error instanceof Error ? error.message : String(error);
+    const isIncompatible = error instanceof ProtocolError && error.code === 'bad-version';
+    this.snapshot = {
+      ...this.snapshot,
+      state: isIncompatible ? 'incompatible' : this.snapshot.state === 'no-bridge' ? 'no-bridge' : 'error',
+      message: isIncompatible ? 'Firmware incompatible' : message,
+      diagnostics: {
+        ...this.snapshot.diagnostics,
+        lastError: message,
+        lastPollAt: Date.now()
+      }
+    };
+    this.emitSnapshot();
+  }
+
+  private closeDevice(): void {
+    if (this.device) {
+      try {
+        this.device.close();
+      } catch {
+        // Ignore close races while Windows removes the HID path.
+      }
+    }
+    this.device = null;
+    this.devicePath = null;
+  }
+
+  private emitSnapshot(): void {
+    const signature = JSON.stringify({
+      state: this.snapshot.state,
+      message: this.snapshot.message,
+      status: this.snapshot.status
+        ? {
+            ...this.snapshot.status,
+            uptimeSeconds: 0
+          }
+        : null,
+      settings: this.snapshot.settings,
+      diagnostics: {
+        hidPath: this.snapshot.diagnostics.hidPath,
+        protocolVersion: this.snapshot.diagnostics.protocolVersion,
+        settingsRevision: this.snapshot.diagnostics.settingsRevision,
+        lastAck: this.snapshot.diagnostics.lastAck,
+        lastError: this.snapshot.diagnostics.lastError,
+        audioDebugLogPath: this.snapshot.diagnostics.audioDebugLogPath,
+        audioDebugLogLineCount: this.snapshot.diagnostics.audioDebugLogLines.length,
+        audioDebugLogTail: this.snapshot.diagnostics.audioDebugLogLines.at(-1) ?? null,
+        audioDebugDroppedCount: this.snapshot.diagnostics.audioDebugDroppedCount
+      }
+    });
+    if (signature === this.lastEmittedSnapshotSignature) {
+      return;
+    }
+    this.lastEmittedSnapshotSignature = signature;
+    this.emit('snapshot', this.getSnapshot());
+  }
+}

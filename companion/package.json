@@ -1,0 +1,36 @@
+{
+  "name": "ds5-bridge-companion",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Windows companion app for the Pico DS5 Bridge companion firmware.",
+  "license": "AGPL-3.0-only",
+  "main": "dist/main/main/main.js",
+  "scripts": {
+    "dev": "npm run build && electron .",
+    "typecheck": "tsc -p tsconfig.main.json --noEmit && tsc -p tsconfig.json --noEmit",
+    "build": "tsc -p tsconfig.main.json && vite build",
+    "package:win": "npm run build && node scripts/package-win.mjs",
+    "test": "vitest run src",
+    "visual:smoke": "npm run build && node scripts/visual-smoke.mjs",
+    "layout:check": "npm run build && node scripts/layout-check.mjs"
+  },
+  "dependencies": {
+    "@vitejs/plugin-react": "^5.1.1",
+    "electron": "^39.2.7",
+    "lucide-react": "^0.561.0",
+    "node-hid": "^3.2.0",
+    "react": "^19.2.3",
+    "react-dom": "^19.2.3",
+    "vite": "^7.3.0"
+  },
+  "devDependencies": {
+    "@types/node": "^25.0.3",
+    "@types/node-hid": "^1.3.4",
+    "@types/react": "^19.2.7",
+    "@types/react-dom": "^19.2.3",
+    "playwright": "^1.59.1",
+    "rcedit": "^5.0.2",
+    "typescript": "^5.9.3",
+    "vitest": "^4.0.16"
+  }
+}

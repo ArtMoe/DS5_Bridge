@@ -1,0 +1,440 @@
+export const COMPANION_USAGE_PAGE = 0xff5d;
+export const COMPANION_USAGE = 0x0001;
+export const REPORT_LENGTH = 64;
+export const PAYLOAD_LENGTH = 63;
+export const MAGIC = 'DS5B';
+export const PROTOCOL_MAJOR = 1;
+export const PROTOCOL_MINOR = 0;
+
+export const REPORT_ID = {
+  STATUS: 0x01,
+  COMMAND: 0x02,
+  ACK: 0x03,
+  AUDIO_DEBUG: 0x05,
+  AUDIO_STATS: 0x06
+} as const;
+
+export const AUDIO_DEBUG_EVENT = {
+  AUDIO_START: 1,
+  RESET_GAP: 2,
+  CORE1_RESET: 3,
+  SKIP_OPUS_PACKET: 4,
+  SEND_SPEAKER_PACKET: 5,
+  NO_OPUS_PACKET: 6,
+  AUDIO_FIFO_DROP: 7,
+  AUDIO_FIFO_ADD_FAIL: 8,
+  OPUS_FIFO_DROP: 9,
+  OPUS_FIFO_ADD_FAIL: 10,
+  TEST_HAPTICS_START: 11,
+  TEST_HAPTICS_STOP: 12,
+  SPEAKER_ROUTE: 13,
+  QUIET_MODE: 14,
+  SILENCE_PREROLL: 15,
+  USB_SILENCE_TAIL: 16
+} as const;
+
+export const AUDIO_DEBUG_RECORD_SIZE = 14;
+
+export const COMMAND_ID = {
+  SET_HAPTICS_GAIN: 0x01,
+  SET_LED_ENABLED: 0x02,
+  SET_IDLE_DISCONNECT_ENABLED: 0x03,
+  TEST_HAPTICS: 0x04,
+  RESTORE_DEFAULTS: 0x05,
+  SET_SPEAKER_VOLUME: 0x07,
+  SET_LIGHTBAR_COLOR: 0x08,
+  SET_LIGHTBAR_OVERRIDE: 0x09,
+  SET_MUTE_BUTTON_ACTION: 0x0A,
+  SET_HAPTICS_BUFFER_LENGTH: 0x0B,
+  SET_TRIGGER_EFFECT_INTENSITY: 0x0C,
+  TEST_ADAPTIVE_TRIGGERS: 0x0D,
+  RESET_ADAPTIVE_TRIGGERS: 0x0E,
+  SET_USB_SUSPEND_DISCONNECT_ENABLED: 0x0F,
+  SET_SLEEP_KEYBIND_ENABLED: 0x10,
+  SLEEP_CONTROLLER: 0x11,
+  SET_POLLING_RATE_MODE: 0x12
+} as const;
+
+export const ACK_RESULT = {
+  OK: 0x00,
+  ERR_BAD_MAGIC: 0x01,
+  ERR_BAD_VERSION: 0x02,
+  ERR_BAD_LENGTH: 0x03,
+  ERR_INVALID_VALUE: 0x04,
+  ERR_UNKNOWN_COMMAND: 0x05,
+  ERR_NOT_CONNECTED: 0x06,
+  ERR_BUSY: 0x07
+} as const;
+
+export type AckResultCode = typeof ACK_RESULT[keyof typeof ACK_RESULT];
+export type MuteButtonMode = 'normal' | 'keyboard' | 'quiet';
+export type MuteKeyboardBehavior = 'tap' | 'hold';
+export type TriggerTestMode = 'feedback' | 'weapon' | 'vibration';
+export type TriggerTestTarget = 'both' | 'l2' | 'r2';
+export type PollingRateMode = '250' | '500' | '1000';
+export const BRIDGE_PRESET_IDS = [
+  'custom',
+  'balanced',
+  'quiet',
+  'no-speaker',
+  'no-haptics',
+  'no-triggers',
+  'lights-off'
+] as const;
+export type BridgePresetId = typeof BRIDGE_PRESET_IDS[number];
+
+export function normalizeBridgePresetId(
+  value: unknown,
+  fallback: BridgePresetId = 'balanced'
+): BridgePresetId {
+  return typeof value === 'string' && (BRIDGE_PRESET_IDS as readonly string[]).includes(value)
+    ? value as BridgePresetId
+    : fallback;
+}
+export const MUTE_KEYBOARD_HOLD_FLAG = 0x80;
+export const MUTE_KEYBOARD_MODIFIER_MASK = 0x0f;
+
+export interface BridgeStatusPayload {
+  controllerConnected: boolean;
+  controllerType: 'unknown' | 'dualsense' | 'dualsense-edge';
+  batteryPercent: number | null;
+  rawPowerState: number;
+  audioRecent: boolean;
+  hapticsReady: boolean;
+  hapticsGainPercent: number;
+  speakerVolumePercent: number;
+  lightbarColor: {
+    red: number;
+    green: number;
+    blue: number;
+    brightnessPercent: number;
+  };
+  lightbarOverrideEnabled: boolean;
+  muteButtonMode: MuteButtonMode;
+  muteKeyboardUsage: number;
+  muteKeyboardModifiers: number;
+  muteKeyboardBehavior: MuteKeyboardBehavior;
+  quietModeEnabled: boolean;
+  audioDebug: {
+    usbHostSpeakerVolumePercent: number;
+    usbHostMicVolumePercent: number;
+    usbHostSpeakerMute: boolean;
+    usbHostMicMute: boolean;
+    lastHostOutputLength: number;
+    lastHostOutputReportId: number;
+    lastHostOutputCount: number;
+    lastHostOutputFirst16: number[];
+  };
+  ledEnabled: boolean;
+  idleDisconnectEnabled: boolean;
+  usbSuspendDisconnectEnabled: boolean;
+  sleepKeybindEnabled: boolean;
+  settingsRevision: number;
+  lastCommandResult: AckResultCode;
+  testHapticsBusy: boolean;
+  testHapticsCooldown: boolean;
+  hostOutputRecent: boolean;
+  testAdaptiveTriggersBusy: boolean;
+  uptimeSeconds: number;
+  firmwareVersion: string;
+  firmwareFlags: {
+    companion: boolean;
+    dse: boolean;
+    speakerVolumeControl: boolean;
+    lightbarControl: boolean;
+    lightbarOverrideControl: boolean;
+    muteButtonActions: boolean;
+    hapticsBufferLengthControl: boolean;
+    adaptiveTriggersControl: boolean;
+    usbSuspendDisconnectControl: boolean;
+    sleepControllerControl: boolean;
+    pollingRateControl: boolean;
+  };
+  protocolVersion: string;
+}
+
+export interface BridgeAckPayload {
+  commandId: number;
+  commandSequence: number;
+  resultCode: AckResultCode;
+  detailCode: number;
+  settingsRevision: number;
+  uptimeSeconds: number;
+  protocolVersion: string;
+}
+
+export interface AudioDebugEventPayload {
+  sequence: number;
+  timeUs: number;
+  eventCode: number;
+  args: number[];
+}
+
+export interface AudioDebugPayload {
+  latestSequence: number;
+  droppedCount: number;
+  events: AudioDebugEventPayload[];
+}
+
+export interface AudioDebugStatsPayload {
+  statsVersion: number;
+  usbAudioGapMaxUs: number;
+  usbAudioGapOver1500Count: number;
+  opusEncodeMaxUs: number;
+  opusEncodeOverBudgetCount: number;
+  audio0x36EnqueueToSendMaxUs: number;
+  audio0x36SendGapMaxUs: number;
+  audio0x36LateCountOver12000Us: number;
+  audio0x36DropOldestCount: number;
+  audioGenerationDropCount: number;
+  nonAudioReportsBetweenAudioMax: number;
+  btAudioQueueDepthMax: number;
+  audio0x36EnqueuedCount: number;
+  audio0x36SentCount: number;
+  criticalStarvingAudioCount: number;
+}
+
+export class ProtocolError extends Error {
+  constructor(message: string, public readonly code: string) {
+    super(message);
+  }
+}
+
+function assertReport(report: ArrayLike<number>, reportId: number): void {
+  if (report.length !== REPORT_LENGTH) {
+    throw new ProtocolError(`Expected ${REPORT_LENGTH} bytes, received ${report.length}.`, 'bad-length');
+  }
+  if (report[0] !== reportId) {
+    throw new ProtocolError(`Expected report ID 0x${reportId.toString(16)}, received 0x${report[0].toString(16)}.`, 'bad-report-id');
+  }
+  const magic = String.fromCharCode(report[1], report[2], report[3], report[4]);
+  if (magic !== MAGIC) {
+    throw new ProtocolError('Companion report magic did not match DS5B.', 'bad-magic');
+  }
+}
+
+function assertVersion(report: ArrayLike<number>): void {
+  if (report[5] !== PROTOCOL_MAJOR || report[6] !== PROTOCOL_MINOR) {
+    throw new ProtocolError(`Unsupported companion protocol ${report[5]}.${report[6]}.`, 'bad-version');
+  }
+}
+
+function readU16(report: ArrayLike<number>, offset: number): number {
+  return report[offset] | (report[offset + 1] << 8);
+}
+
+function readU32(report: ArrayLike<number>, offset: number): number {
+  return (
+    report[offset]
+    | (report[offset + 1] << 8)
+    | (report[offset + 2] << 16)
+    | (report[offset + 3] << 24)
+  ) >>> 0;
+}
+
+function controllerType(value: number): BridgeStatusPayload['controllerType'] {
+  if (value === 1) return 'dualsense';
+  if (value === 2) return 'dualsense-edge';
+  return 'unknown';
+}
+
+function muteButtonMode(value: number): MuteButtonMode {
+  if (value === 1) return 'keyboard';
+  if (value === 2) return 'quiet';
+  return 'normal';
+}
+
+export function pollingRateModeValue(mode: PollingRateMode): number {
+  if (mode === '250') return 0;
+  if (mode === '500') return 1;
+  return 2;
+}
+
+export function parseStatusReport(report: ArrayLike<number>): BridgeStatusPayload {
+  assertReport(report, REPORT_ID.STATUS);
+  assertVersion(report);
+
+  const statusFlags = report[20];
+  const firmwareFlags = report[28];
+  const firmwareMajor = report[25];
+  const firmwareMinor = report[26];
+  const firmwarePatch = report[27];
+  const battery = report[9];
+  return {
+    controllerConnected: report[7] === 1,
+    controllerType: controllerType(report[8]),
+    batteryPercent: battery === 255 ? null : battery,
+    rawPowerState: report[10],
+    audioRecent: report[11] === 1,
+    hapticsReady: report[12] === 1,
+    hapticsGainPercent: readU16(report, 13),
+    speakerVolumePercent: readU16(report, 29),
+    lightbarColor: {
+      red: report[31],
+      green: report[32],
+      blue: report[33],
+      brightnessPercent: report[34]
+    },
+    lightbarOverrideEnabled: report[59] === 1,
+    muteButtonMode: muteButtonMode(report[60]),
+    muteKeyboardUsage: report[61],
+    muteKeyboardModifiers: report[62] & MUTE_KEYBOARD_MODIFIER_MASK,
+    muteKeyboardBehavior: (report[62] & MUTE_KEYBOARD_HOLD_FLAG) !== 0 ? 'hold' : 'tap',
+    quietModeEnabled: report[63] === 1,
+    audioDebug: {
+      usbHostSpeakerVolumePercent: report[35],
+      usbHostMicVolumePercent: report[36],
+      usbHostSpeakerMute: report[37] !== 0,
+      usbHostMicMute: report[38] !== 0,
+      lastHostOutputLength: report[39],
+      lastHostOutputReportId: report[40],
+      lastHostOutputCount: readU16(report, 41),
+      lastHostOutputFirst16: Array.from({ length: 16 }, (_, index) => report[43 + index])
+    },
+    ledEnabled: report[15] === 1,
+    idleDisconnectEnabled: report[16] === 1,
+    usbSuspendDisconnectEnabled: (statusFlags & 0x10) !== 0,
+    sleepKeybindEnabled: (statusFlags & 0x40) !== 0,
+    settingsRevision: readU16(report, 17),
+    lastCommandResult: report[19] as AckResultCode,
+    testHapticsBusy: (statusFlags & 0x01) !== 0,
+    testHapticsCooldown: (statusFlags & 0x02) !== 0,
+    hostOutputRecent: (statusFlags & 0x04) !== 0,
+    testAdaptiveTriggersBusy: (statusFlags & 0x08) !== 0,
+    uptimeSeconds: readU32(report, 21),
+    firmwareVersion: `${firmwareMajor}.${firmwareMinor}.${firmwarePatch}`,
+    firmwareFlags: {
+      companion: (firmwareFlags & 0x01) !== 0,
+      dse: (firmwareFlags & 0x02) !== 0,
+      speakerVolumeControl: (firmwareFlags & 0x04) !== 0,
+      lightbarControl: (firmwareFlags & 0x08) !== 0,
+      lightbarOverrideControl: (firmwareFlags & 0x10) !== 0,
+      muteButtonActions: (firmwareFlags & 0x20) !== 0,
+      hapticsBufferLengthControl: (firmwareFlags & 0x40) !== 0,
+      adaptiveTriggersControl: (firmwareFlags & 0x80) !== 0,
+      usbSuspendDisconnectControl: (statusFlags & 0x20) !== 0,
+      sleepControllerControl: (statusFlags & 0x80) !== 0,
+      pollingRateControl: true
+    },
+    protocolVersion: `${report[5]}.${report[6]}`
+  };
+}
+
+export function parseAckReport(report: ArrayLike<number>): BridgeAckPayload {
+  assertReport(report, REPORT_ID.ACK);
+  assertVersion(report);
+
+  return {
+    commandId: report[7],
+    commandSequence: report[8],
+    resultCode: report[9] as AckResultCode,
+    detailCode: report[10],
+    settingsRevision: readU16(report, 11),
+    uptimeSeconds: readU32(report, 13),
+    protocolVersion: `${report[5]}.${report[6]}`
+  };
+}
+
+export function parseAudioDebugReport(report: ArrayLike<number>): AudioDebugPayload {
+  assertReport(report, REPORT_ID.AUDIO_DEBUG);
+  assertVersion(report);
+
+  const recordCount = report[7];
+  const recordSize = report[8];
+  const latestSequence = readU32(report, 9);
+  const droppedCount = readU16(report, 13);
+  if (recordCount === 0) {
+    return { latestSequence, droppedCount, events: [] };
+  }
+  if (recordSize < AUDIO_DEBUG_RECORD_SIZE) {
+    throw new ProtocolError(`Audio debug record size ${recordSize} is too small.`, 'bad-audio-debug-record');
+  }
+
+  const events: AudioDebugEventPayload[] = [];
+  for (let index = 0; index < recordCount; index += 1) {
+    const offset = 15 + index * recordSize;
+    if (offset + AUDIO_DEBUG_RECORD_SIZE > REPORT_LENGTH) {
+      break;
+    }
+    events.push({
+      sequence: readU32(report, offset),
+      timeUs: readU32(report, offset + 4),
+      eventCode: report[offset + 8],
+      args: Array.from({ length: 5 }, (_, argIndex) => report[offset + 9 + argIndex])
+    });
+  }
+
+  return { latestSequence, droppedCount, events };
+}
+
+export function parseAudioStatsReport(report: ArrayLike<number>): AudioDebugStatsPayload {
+  assertReport(report, REPORT_ID.AUDIO_STATS);
+  assertVersion(report);
+
+  return {
+    statsVersion: report[7],
+    usbAudioGapMaxUs: readU32(report, 8),
+    usbAudioGapOver1500Count: readU32(report, 12),
+    opusEncodeMaxUs: readU32(report, 16),
+    opusEncodeOverBudgetCount: readU32(report, 20),
+    audio0x36EnqueueToSendMaxUs: readU32(report, 24),
+    audio0x36SendGapMaxUs: readU32(report, 28),
+    audio0x36LateCountOver12000Us: readU32(report, 32),
+    audio0x36DropOldestCount: readU32(report, 36),
+    audioGenerationDropCount: readU32(report, 40),
+    nonAudioReportsBetweenAudioMax: readU32(report, 44),
+    btAudioQueueDepthMax: readU32(report, 48),
+    audio0x36EnqueuedCount: readU32(report, 52),
+    audio0x36SentCount: readU32(report, 56),
+    criticalStarvingAudioCount: readU32(report, 60)
+  };
+}
+
+export function buildCommandReport(
+  commandId: number,
+  sequence: number,
+  value: number,
+  extraPayload: ArrayLike<number> = []
+): number[] {
+  const report = new Array<number>(REPORT_LENGTH).fill(0);
+  report[0] = REPORT_ID.COMMAND;
+  report[1] = MAGIC.charCodeAt(0);
+  report[2] = MAGIC.charCodeAt(1);
+  report[3] = MAGIC.charCodeAt(2);
+  report[4] = MAGIC.charCodeAt(3);
+  report[5] = PROTOCOL_MAJOR;
+  report[6] = PROTOCOL_MINOR;
+  report[7] = commandId & 0xff;
+  report[8] = sequence & 0xff;
+  report[9] = value & 0xff;
+  report[10] = (value >> 8) & 0xff;
+  for (let index = 0; index < extraPayload.length && 11 + index < REPORT_LENGTH; index += 1) {
+    report[11 + index] = extraPayload[index] & 0xff;
+  }
+  return report;
+}
+
+export function ackResultName(result: number): string {
+  const entry = Object.entries(ACK_RESULT).find(([, value]) => value === result);
+  return entry?.[0] ?? `UNKNOWN_${result}`;
+}
+
+export function ackUserMessage(result: number): string {
+  switch (result) {
+    case ACK_RESULT.OK:
+      return 'OK';
+    case ACK_RESULT.ERR_NOT_CONNECTED:
+      return 'Controller not connected';
+    case ACK_RESULT.ERR_BUSY:
+      return 'Test is busy';
+    case ACK_RESULT.ERR_INVALID_VALUE:
+      return 'Invalid value';
+    case ACK_RESULT.ERR_BAD_VERSION:
+      return 'Firmware protocol mismatch';
+    case ACK_RESULT.ERR_BAD_MAGIC:
+    case ACK_RESULT.ERR_BAD_LENGTH:
+    case ACK_RESULT.ERR_UNKNOWN_COMMAND:
+    default:
+      return ackResultName(result).replace(/^ERR_/, '').replaceAll('_', ' ').toLowerCase();
+  }
+}

@@ -1,0 +1,27 @@
+//
+// Created by awalol on 2026/3/4.
+//
+
+#ifndef DS5_BRIDGE_USB_H
+#define DS5_BRIDGE_USB_H
+
+#define DEFAULT_COMPANION_SPEAKER_GAIN 0.30f
+
+extern uint8_t mute[2]; // 0: speaker/LED fallback, 1: mic/idle-disconnect fallback
+extern float volume[2]; // 0: companion speaker gain, 1: haptics gain
+extern uint8_t usb_host_volume_percent[2]; // Last USB audio volume requested by host.
+extern uint8_t usb_host_mute[2]; // Last USB audio mute requested by host.
+extern uint32_t usb_host_volume_set_count[2];
+extern float usb_host_speaker_gain; // Host UAC speaker volume as linear gain.
+
+uint8_t usb_hid_polling_rate_mode();
+bool usb_set_hid_polling_rate_mode(uint8_t mode);
+void usb_note_hid_output();
+bool usb_host_hid_output_recent();
+void usb_pm_poll();
+void usb_set_suspend_disconnect_enabled(bool enabled);
+bool usb_suspend_disconnect_enabled();
+bool usb_pm_should_pause_inquiry();
+bool usb_speaker_streaming_active();
+
+#endif //DS5_BRIDGE_USB_H

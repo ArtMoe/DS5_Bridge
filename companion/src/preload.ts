@@ -1,0 +1,77 @@
+import { contextBridge, ipcRenderer } from 'electron';
+import type { BridgePresetId, MuteButtonMode, MuteKeyboardBehavior, PollingRateMode, TriggerTestMode, TriggerTestTarget } from './shared/protocol';
+import type { BridgeDiagnostics, BridgeSnapshot } from './shared/types';
+
+const api = {
+  getStatus: (): Promise<BridgeSnapshot> => ipcRenderer.invoke('bridge:getStatus'),
+  listDevices: () => ipcRenderer.invoke('bridge:listDevices'),
+  applyPreset: (value: BridgePresetId): Promise<BridgeSnapshot> => ipcRenderer.invoke('bridge:applyPreset', value),
+  setHapticsGain: (value: number): Promise<BridgeSnapshot> => ipcRenderer.invoke('bridge:setHapticsGain', value),
+  setHapticsEnabled: (value: boolean): Promise<BridgeSnapshot> => ipcRenderer.invoke('bridge:setHapticsEnabled', value),
+  setHapticsBufferLength: (value: number): Promise<BridgeSnapshot> => (
+    ipcRenderer.invoke('bridge:setHapticsBufferLength', value)
+  ),
+  setTriggerEffectIntensity: (value: number): Promise<BridgeSnapshot> => (
+    ipcRenderer.invoke('bridge:setTriggerEffectIntensity', value)
+  ),
+  setTriggerTestMode: (value: TriggerTestMode): Promise<BridgeSnapshot> => (
+    ipcRenderer.invoke('bridge:setTriggerTestMode', value)
+  ),
+  setAdaptiveTriggersEnabled: (value: boolean): Promise<BridgeSnapshot> => (
+    ipcRenderer.invoke('bridge:setAdaptiveTriggersEnabled', value)
+  ),
+  setSpeakerVolume: (value: number): Promise<BridgeSnapshot> => ipcRenderer.invoke('bridge:setSpeakerVolume', value),
+  setSpeakerEnabled: (value: boolean): Promise<BridgeSnapshot> => ipcRenderer.invoke('bridge:setSpeakerEnabled', value),
+  setLightbarColor: (color: string, brightness: number): Promise<BridgeSnapshot> => (
+    ipcRenderer.invoke('bridge:setLightbarColor', color, brightness)
+  ),
+  setLightbarEnabled: (value: boolean): Promise<BridgeSnapshot> => ipcRenderer.invoke('bridge:setLightbarEnabled', value),
+  setLightbarOverrideEnabled: (value: boolean): Promise<BridgeSnapshot> => (
+    ipcRenderer.invoke('bridge:setLightbarOverrideEnabled', value)
+  ),
+  setMuteButtonAction: (
+    mode: MuteButtonMode,
+    usage: number,
+    modifiers: number,
+    behavior: MuteKeyboardBehavior
+  ): Promise<BridgeSnapshot> => (
+    ipcRenderer.invoke('bridge:setMuteButtonAction', mode, usage, modifiers, behavior)
+  ),
+  setLedEnabled: (value: boolean): Promise<BridgeSnapshot> => ipcRenderer.invoke('bridge:setLedEnabled', value),
+  setIdleDisconnectEnabled: (value: boolean): Promise<BridgeSnapshot> => ipcRenderer.invoke('bridge:setIdleDisconnectEnabled', value),
+  setUsbSuspendDisconnectEnabled: (value: boolean): Promise<BridgeSnapshot> => (
+    ipcRenderer.invoke('bridge:setUsbSuspendDisconnectEnabled', value)
+  ),
+  setSleepKeybindEnabled: (value: boolean): Promise<BridgeSnapshot> => (
+    ipcRenderer.invoke('bridge:setSleepKeybindEnabled', value)
+  ),
+  setPollingRateMode: (value: PollingRateMode): Promise<BridgeSnapshot> => (
+    ipcRenderer.invoke('bridge:setPollingRateMode', value)
+  ),
+  sleepController: (): Promise<BridgeSnapshot> => ipcRenderer.invoke('bridge:sleepController'),
+  setNotifyControllerConnection: (value: boolean): Promise<BridgeSnapshot> => (
+    ipcRenderer.invoke('bridge:setNotifyControllerConnection', value)
+  ),
+  setNotifyLowBattery: (value: boolean): Promise<BridgeSnapshot> => (
+    ipcRenderer.invoke('bridge:setNotifyLowBattery', value)
+  ),
+  testNotification: (): Promise<BridgeSnapshot> => ipcRenderer.invoke('bridge:testNotification'),
+  testHaptics: (): Promise<BridgeSnapshot> => ipcRenderer.invoke('bridge:testHaptics'),
+  testAdaptiveTriggers: (mode?: TriggerTestMode, target?: TriggerTestTarget): Promise<BridgeSnapshot> => (
+    ipcRenderer.invoke('bridge:testAdaptiveTriggers', mode, target)
+  ),
+  resetAdaptiveTriggers: (): Promise<BridgeSnapshot> => ipcRenderer.invoke('bridge:resetAdaptiveTriggers'),
+  restoreDefaults: (): Promise<BridgeSnapshot> => ipcRenderer.invoke('bridge:restoreDefaults'),
+  getDiagnostics: (): Promise<BridgeDiagnostics> => ipcRenderer.invoke('bridge:getDiagnostics'),
+  minimizeWindow: (): Promise<void> => ipcRenderer.invoke('window:minimize'),
+  hideWindow: (): Promise<void> => ipcRenderer.invoke('window:hide'),
+  onSnapshot: (callback: (snapshot: BridgeSnapshot) => void) => {
+    const listener = (_event: Electron.IpcRendererEvent, snapshot: BridgeSnapshot) => callback(snapshot);
+    ipcRenderer.on('bridge:snapshot', listener);
+    return () => ipcRenderer.removeListener('bridge:snapshot', listener);
+  }
+};
+
+contextBridge.exposeInMainWorld('bridge', api);
+
+export type BridgeApi = typeof api;

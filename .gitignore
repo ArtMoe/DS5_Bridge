@@ -1,0 +1,9 @@
+build
+build-*
+.vscode
+.idea
+example
+companion/node_modules
+companion/dist
+companion/dist-main
+companion/artifacts

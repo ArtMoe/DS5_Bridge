@@ -1,0 +1,211 @@
+import fs from 'node:fs';
+import path from 'node:path';
+import { normalizeBridgePresetId } from '../shared/protocol';
+import type { BridgePresetId } from '../shared/protocol';
+import type { CompanionSettings } from '../shared/types';
+
+export const DEFAULT_SETTINGS: CompanionSettings = {
+  selectedPresetId: 'balanced',
+  hapticsEnabled: true,
+  hapticsGainPercent: 100,
+  hapticsBufferLength: 64,
+  adaptiveTriggersEnabled: true,
+  triggerEffectIntensityPercent: 100,
+  triggerTestMode: 'feedback',
+  speakerEnabled: true,
+  speakerVolumePercent: 30,
+  lightbarEnabled: true,
+  lightbarColor: '#ffd700',
+  lightbarBrightnessPercent: 100,
+  lightbarOverrideEnabled: false,
+  muteButtonMode: 'normal',
+  muteKeyboardUsage: 0x68,
+  muteKeyboardModifiers: 0,
+  muteKeyboardBehavior: 'tap',
+  ledEnabled: true,
+  idleDisconnectEnabled: true,
+  usbSuspendDisconnectEnabled: true,
+  sleepKeybindEnabled: false,
+  pollingRateMode: '1000',
+  notifyControllerConnection: false,
+  notifyLowBattery: false
+};
+
+function normalizeColor(value: unknown): string {
+  if (typeof value !== 'string' || !/^#[0-9a-fA-F]{6}$/.test(value)) {
+    return DEFAULT_SETTINGS.lightbarColor;
+  }
+  return value.toLowerCase();
+}
+
+function normalizePresetId(value: unknown): CompanionSettings['selectedPresetId'] {
+  return normalizeBridgePresetId(value, DEFAULT_SETTINGS.selectedPresetId);
+}
+
+function normalizePollingRateMode(value: unknown): CompanionSettings['pollingRateMode'] {
+  switch (value) {
+    case '250':
+    case '500':
+    case '1000':
+      return value;
+    default:
+      return DEFAULT_SETTINGS.pollingRateMode;
+  }
+}
+
+type PersistedSettings = Partial<CompanionSettings> & {
+  customProfile?: Partial<CompanionSettings>;
+};
+
+function normalizeSettings(value: Partial<CompanionSettings> | null | undefined): CompanionSettings {
+  const selectedPresetId = normalizePresetId(value?.selectedPresetId);
+
+  return {
+    selectedPresetId,
+    hapticsEnabled: typeof value?.hapticsEnabled === 'boolean'
+      ? value.hapticsEnabled
+      : DEFAULT_SETTINGS.hapticsEnabled,
+    hapticsGainPercent: Number.isFinite(value?.hapticsGainPercent)
+      ? Math.max(0, Math.min(200, Math.round(value!.hapticsGainPercent!)))
+      : DEFAULT_SETTINGS.hapticsGainPercent,
+    hapticsBufferLength: Number.isFinite(value?.hapticsBufferLength)
+      ? Math.max(64, Math.min(255, Math.round(value!.hapticsBufferLength!)))
+      : DEFAULT_SETTINGS.hapticsBufferLength,
+    adaptiveTriggersEnabled: typeof value?.adaptiveTriggersEnabled === 'boolean'
+      ? value.adaptiveTriggersEnabled
+      : DEFAULT_SETTINGS.adaptiveTriggersEnabled,
+    triggerEffectIntensityPercent: Number.isFinite(value?.triggerEffectIntensityPercent)
+      ? Math.max(0, Math.min(100, Math.round(value!.triggerEffectIntensityPercent!)))
+      : DEFAULT_SETTINGS.triggerEffectIntensityPercent,
+    triggerTestMode: value?.triggerTestMode === 'weapon' || value?.triggerTestMode === 'vibration' || value?.triggerTestMode === 'feedback'
+      ? value.triggerTestMode
+      : DEFAULT_SETTINGS.triggerTestMode,
+    speakerEnabled: typeof value?.speakerEnabled === 'boolean'
+      ? value.speakerEnabled
+      : DEFAULT_SETTINGS.speakerEnabled,
+    speakerVolumePercent: Number.isFinite(value?.speakerVolumePercent)
+      ? Math.max(0, Math.min(100, Math.round(value!.speakerVolumePercent!)))
+      : DEFAULT_SETTINGS.speakerVolumePercent,
+    lightbarEnabled: typeof value?.lightbarEnabled === 'boolean'
+      ? value.lightbarEnabled
+      : DEFAULT_SETTINGS.lightbarEnabled,
+    lightbarColor: normalizeColor(value?.lightbarColor),
+    lightbarBrightnessPercent: Number.isFinite(value?.lightbarBrightnessPercent)
+      ? Math.max(0, Math.min(100, Math.round(value!.lightbarBrightnessPercent!)))
+      : DEFAULT_SETTINGS.lightbarBrightnessPercent,
+    lightbarOverrideEnabled: typeof value?.lightbarOverrideEnabled === 'boolean'
+      ? value.lightbarOverrideEnabled
+      : DEFAULT_SETTINGS.lightbarOverrideEnabled,
+    muteButtonMode: value?.muteButtonMode === 'keyboard' || value?.muteButtonMode === 'quiet' || value?.muteButtonMode === 'normal'
+      ? value.muteButtonMode
+      : DEFAULT_SETTINGS.muteButtonMode,
+    muteKeyboardUsage: Number.isFinite(value?.muteKeyboardUsage)
+      ? Math.max(1, Math.min(0x73, Math.round(value!.muteKeyboardUsage!)))
+      : DEFAULT_SETTINGS.muteKeyboardUsage,
+    muteKeyboardModifiers: Number.isFinite(value?.muteKeyboardModifiers)
+      ? Math.max(0, Math.min(0x0f, Math.round(value!.muteKeyboardModifiers!)))
+      : DEFAULT_SETTINGS.muteKeyboardModifiers,
+    muteKeyboardBehavior: value?.muteKeyboardBehavior === 'hold' || value?.muteKeyboardBehavior === 'tap'
+      ? value.muteKeyboardBehavior
+      : DEFAULT_SETTINGS.muteKeyboardBehavior,
+    ledEnabled: typeof value?.ledEnabled === 'boolean' ? value.ledEnabled : DEFAULT_SETTINGS.ledEnabled,
+    idleDisconnectEnabled: typeof value?.idleDisconnectEnabled === 'boolean'
+      ? value.idleDisconnectEnabled
+      : DEFAULT_SETTINGS.idleDisconnectEnabled,
+    usbSuspendDisconnectEnabled: typeof value?.usbSuspendDisconnectEnabled === 'boolean'
+      ? value.usbSuspendDisconnectEnabled
+      : DEFAULT_SETTINGS.usbSuspendDisconnectEnabled,
+    sleepKeybindEnabled: typeof value?.sleepKeybindEnabled === 'boolean'
+      ? value.sleepKeybindEnabled
+      : DEFAULT_SETTINGS.sleepKeybindEnabled,
+    pollingRateMode: normalizePollingRateMode(value?.pollingRateMode),
+    notifyControllerConnection: typeof value?.notifyControllerConnection === 'boolean'
+      ? value.notifyControllerConnection
+      : DEFAULT_SETTINGS.notifyControllerConnection,
+    notifyLowBattery: typeof value?.notifyLowBattery === 'boolean'
+      ? value.notifyLowBattery
+      : DEFAULT_SETTINGS.notifyLowBattery
+  };
+}
+
+function customSettingsFrom(value: Partial<CompanionSettings> | null | undefined): CompanionSettings {
+  return normalizeSettings({ ...value, selectedPresetId: 'custom' });
+}
+
+export class SettingsStore {
+  private readonly filePath: string;
+  private settings: CompanionSettings;
+  private customSettings: CompanionSettings;
+
+  constructor(public readonly userDataPath: string) {
+    this.filePath = path.join(userDataPath, 'settings.json');
+    const persisted = this.read();
+    this.settings = persisted.settings;
+    this.customSettings = persisted.customSettings;
+  }
+
+  get(): CompanionSettings {
+    return { ...this.settings };
+  }
+
+  update(next: Partial<CompanionSettings>): CompanionSettings {
+    this.settings = normalizeSettings({ ...this.settings, ...next });
+    if (this.settings.selectedPresetId === 'custom') {
+      this.customSettings = { ...this.settings };
+    }
+    this.write();
+    return this.get();
+  }
+
+  applyPreset(
+    presetId: BridgePresetId,
+    presetSettings?: Partial<CompanionSettings>
+  ): CompanionSettings {
+    const normalizedPresetId = normalizePresetId(presetId);
+    if (this.settings.selectedPresetId === 'custom') {
+      this.customSettings = { ...this.settings, selectedPresetId: 'custom' };
+    }
+
+    if (normalizedPresetId === 'custom') {
+      this.settings = { ...this.customSettings, selectedPresetId: 'custom' };
+    } else {
+      this.settings = normalizeSettings({ ...this.settings, ...presetSettings, selectedPresetId: normalizedPresetId });
+    }
+
+    this.write();
+    return this.get();
+  }
+
+  restoreDefaults(): CompanionSettings {
+    this.settings = { ...DEFAULT_SETTINGS };
+    this.customSettings = customSettingsFrom(DEFAULT_SETTINGS);
+    this.write();
+    return this.get();
+  }
+
+  private read(): { settings: CompanionSettings; customSettings: CompanionSettings } {
+    try {
+      const raw = fs.readFileSync(this.filePath, 'utf8');
+      const parsed = JSON.parse(raw) as PersistedSettings;
+      const settings = normalizeSettings(parsed);
+      const fallbackCustom = settings.selectedPresetId === 'custom' ? settings : DEFAULT_SETTINGS;
+      return {
+        settings,
+        customSettings: customSettingsFrom(parsed.customProfile ?? fallbackCustom)
+      };
+    } catch {
+      return {
+        settings: { ...DEFAULT_SETTINGS },
+        customSettings: customSettingsFrom(DEFAULT_SETTINGS)
+      };
+    }
+  }
+
+  private write(): void {
+    fs.mkdirSync(path.dirname(this.filePath), { recursive: true });
+    fs.writeFileSync(this.filePath, `${JSON.stringify({
+      ...this.settings,
+      customProfile: this.customSettings
+    }, null, 2)}\n`, 'utf8');
+  }
+}
