@@ -1,6 +1,6 @@
 <#
 .SYNOPSIS
-Lists or removes stale Windows PnP device instances created while testing DS5Dongle_Bridge firmware variants.
+Lists or removes stale Windows PnP device instances created while testing DS5_Bridge firmware variants.
 
 .DESCRIPTION
 Windows treats changes to USB PID, serial number, interface layout, product string, and audio topology as new
@@ -119,7 +119,7 @@ $targets = foreach ($device in $pnpDevices) {
 $targets = @($targets | Sort-Object InstanceId -Unique)
 
 if ($targets.Count -eq 0) {
-    Write-Host 'No matching DS5Dongle_Bridge/DualSense device instances were found.'
+    Write-Host 'No matching DS5_Bridge/DualSense device instances were found.'
     exit 0
 }
 
