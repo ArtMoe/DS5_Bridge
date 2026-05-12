@@ -30,7 +30,8 @@ try {
     await page.waitForTimeout(150);
 
     const measurement = await page.evaluate(() => {
-      const cards = [...document.querySelectorAll('.control-page .feature-card-grid > section')];
+      const activePage = document.querySelector('.control-page:not([hidden])');
+      const cards = activePage ? [...activePage.querySelectorAll('.feature-card-grid > section')] : [];
       return cards.map((card) => {
         const rect = card.getBoundingClientRect();
         return {
@@ -75,13 +76,14 @@ try {
     await page.waitForTimeout(150);
 
     const measurements = await page.evaluate(() => {
+      const activePage = document.querySelector('.control-page:not([hidden])');
       const buttons = [
-        ...document.querySelectorAll(
-          '.control-page .test-card > .primary-action, ' +
-          '.control-page .test-card > .secondary-action, ' +
-          '.control-page .trigger-action-row .primary-action, ' +
-          '.control-page .trigger-action-row .secondary-action'
-        )
+        ...(activePage?.querySelectorAll(
+          '.test-card > .primary-action, ' +
+          '.test-card > .secondary-action, ' +
+          '.trigger-action-row .primary-action, ' +
+          '.trigger-action-row .secondary-action'
+        ) ?? [])
       ];
 
       function textRectFor(button) {
@@ -193,8 +195,10 @@ try {
   await page.waitForTimeout(150);
 
   const systemTypography = await page.evaluate(() => {
+    const activePage = document.querySelector('.control-page:not([hidden])');
+
     function read(selector) {
-      return [...document.querySelectorAll(selector)].map((element) => ({
+      return [...(activePage?.querySelectorAll(selector) ?? [])].map((element) => ({
         text: element.textContent.trim().replace(/\s+/g, ' '),
         fontSize: Number.parseFloat(getComputedStyle(element).fontSize)
       }));
