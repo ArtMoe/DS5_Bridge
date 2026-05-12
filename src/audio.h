@@ -1,5 +1,6 @@
 //
 // Created by awalol on 2026/3/5.
+// Modified for DS5 Bridge companion firmware and app integration.
 //
 
 #ifndef DS5_BRIDGE_AUDIO_H

@@ -1,5 +1,6 @@
 //
 // Created by awalol on 2026/3/4.
+// Modified for DS5 Bridge companion firmware and app integration.
 //
 
 #include <array>
