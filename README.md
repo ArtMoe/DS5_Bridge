@@ -28,7 +28,7 @@ over Bluetooth.
 
 ## What The App Can Do
 
-- Adjust haptics strength.
+- Adjust haptics and game rumble strength.
 - Set controller speaker volume and play a quick test tone.
 - Preview, soften, or disable adaptive trigger effects.
 - Choose lightbar color, brightness, and player LEDs.
@@ -48,10 +48,10 @@ game-facing controller interface alone.
 
 ### Haptics
 
-Set HD haptics strength or run a quick feedback test.
+Adjust HD haptics, scale game rumble, or run quick feedback tests.
 
 <p align="center">
-  <img src="assets/readme/app-haptics.png" width="680" alt="Haptics controls in the DS5 Bridge companion app">
+  <img src="assets/readme/app-haptics.png" width="680" alt="Haptics and rumble controls in the DS5 Bridge companion app">
 </p>
 
 ### Audio
