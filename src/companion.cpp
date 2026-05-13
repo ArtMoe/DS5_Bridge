@@ -1091,8 +1091,19 @@ uint16_t companion_get_report(uint8_t report_id, hid_report_type_t report_type, 
 }
 
 void companion_set_report(uint8_t report_id, hid_report_type_t report_type, uint8_t const *buffer, uint16_t bufsize) {
-    if (report_type == HID_REPORT_TYPE_OUTPUT && report_id == COMPANION_REPORT_HOST_AUDIO_STREAM) {
-        audio_host_receive_packet(buffer, bufsize);
+    if (report_type == HID_REPORT_TYPE_OUTPUT) {
+        if (report_id == COMPANION_REPORT_HOST_AUDIO_STREAM) {
+            audio_host_receive_packet(buffer, bufsize);
+            return;
+        }
+        if (bufsize > 0 && buffer[0] == COMPANION_REPORT_HOST_AUDIO_STREAM) {
+            audio_host_receive_packet(buffer + 1, bufsize - 1);
+            return;
+        }
+        if (report_id == 0 && bufsize >= sizeof(kMagic) && has_magic(buffer)) {
+            audio_host_receive_packet(buffer, bufsize);
+            return;
+        }
         return;
     }
 
