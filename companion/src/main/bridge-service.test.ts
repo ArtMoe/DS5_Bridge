@@ -8,6 +8,8 @@ import {
   COMMAND_ID,
   COMPANION_USAGE,
   COMPANION_USAGE_PAGE,
+  HOST_AUDIO_FRAME_CHUNK_COUNT,
+  HOST_AUDIO_PACKET_TYPE,
   MAGIC,
   REPORT_ID,
   REPORT_LENGTH
@@ -77,7 +79,9 @@ class MockHidDevice {
   status = statusReport();
   audioDebugReports: number[][] = [];
   audioStatsReports: number[][] = [];
+  hostAudioStatusReports: number[][] = [];
   sentReports: number[][] = [];
+  outReports: number[][] = [];
   ackResults: number[] = [];
   settingsRevision = 0;
   fixedAckRevision: number | null = null;
@@ -107,7 +111,7 @@ class MockHidDevice {
       return [...(this.audioStatsReports.shift() ?? audioStatsReport())];
     }
     if (reportId === REPORT_ID.HOST_AUDIO_STATUS) {
-      return hostAudioStatusReport();
+      return [...(this.hostAudioStatusReports.shift() ?? hostAudioStatusReport())];
     }
     throw new Error(`Unexpected report ID: ${reportId}`);
   }
@@ -118,6 +122,7 @@ class MockHidDevice {
   }
 
   write(report: number[]): number {
+    this.outReports.push([...report]);
     return report.length;
   }
 
@@ -282,14 +287,31 @@ function audioStatsReport(values: Partial<{
   return report;
 }
 
-function hostAudioStatusReport(): number[] {
+function hostAudioStatusReport(overrides: Partial<{
+  mode: number;
+  fallbackReason: number;
+  hostRequested: boolean;
+  heartbeatHealthy: boolean;
+  streamActive: boolean;
+  streamHealthy: boolean;
+  duplexRequested: boolean;
+  duplexActive: boolean;
+  streamGeneration: number;
+}> = {}): number[] {
   const report = new Array<number>(REPORT_LENGTH).fill(0);
   report[0] = REPORT_ID.HOST_AUDIO_STATUS;
   writeMagic(report);
   report[5] = 1;
   report[6] = 0;
-  report[7] = 0;
-  report[8] = 1;
+  report[7] = overrides.mode ?? 0;
+  report[8] = overrides.fallbackReason ?? 1;
+  report[9] = overrides.hostRequested ? 1 : 0;
+  report[10] = overrides.heartbeatHealthy ? 1 : 0;
+  report[11] = overrides.streamActive ? 1 : 0;
+  report[12] = overrides.streamHealthy ? 1 : 0;
+  report[13] = overrides.duplexRequested ? 1 : 0;
+  report[14] = overrides.duplexActive ? 1 : 0;
+  writeU16(report, 15, overrides.streamGeneration ?? 0);
   return report;
 }
 
@@ -561,6 +583,33 @@ describe('BridgeService', () => {
     expect(command?.[9]).toBe(25);
     expect(snapshot.settings.speakerVolumePercent).toBe(25);
     expect(snapshot.status?.speakerVolumePercent).toBe(25);
+  });
+
+  it('sends synthetic host audio frame chunks after host audio is enabled', async () => {
+    const service = serviceFixture();
+    const device = new MockHidDevice();
+    device.hostAudioStatusReports.push(hostAudioStatusReport({
+      mode: 1,
+      fallbackReason: 0,
+      hostRequested: true,
+      heartbeatHealthy: true,
+      streamActive: true,
+      streamHealthy: true,
+      streamGeneration: 3
+    }));
+    hidMock.state.devicesList = [companionDeviceInfo()];
+    hidMock.state.openDevices.set('companion-path', device);
+
+    const snapshot = await service.setHostEncodedAudioEnabled(true);
+
+    const streamReports = device.outReports.filter((report) => report[0] === REPORT_ID.HOST_AUDIO_STREAM);
+    const frameChunks = streamReports.filter((report) => report[7] === HOST_AUDIO_PACKET_TYPE.FRAME_CHUNK);
+    expect(snapshot.settings.hostEncodedAudioEnabled).toBe(true);
+    expect(streamReports.some((report) => report[7] === HOST_AUDIO_PACKET_TYPE.HELLO)).toBe(true);
+    expect(frameChunks.length).toBeGreaterThanOrEqual(HOST_AUDIO_FRAME_CHUNK_COUNT);
+    expect(frameChunks[0][9]).toBe(3);
+    expect(frameChunks[0][11]).toBe(0);
+    expect(frameChunks.at(-1)?.[13]).toBe(HOST_AUDIO_FRAME_CHUNK_COUNT - 1);
   });
 
   it('sends and stores USB suspend disconnect settings', async () => {

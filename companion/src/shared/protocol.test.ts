@@ -3,9 +3,15 @@ import {
   ACK_RESULT,
   AUDIO_DEBUG_EVENT,
   COMMAND_ID,
+  HOST_AUDIO_FRAME_CHUNK_COUNT,
+  HOST_AUDIO_PACKET_TYPE,
+  HOST_AUDIO_PAYLOAD_LENGTH,
+  HOST_AUDIO_REPORT_FRAME_LENGTH,
   MAGIC,
   REPORT_ID,
   buildCommandReport,
+  buildHostAudioFrameChunkReports,
+  buildSyntheticHostAudioFrame,
   normalizeBridgePresetId,
   parseAudioDebugReport,
   parseAudioStatsReport,
@@ -190,6 +196,28 @@ describe('companion protocol', () => {
     expect(keybindReport[9]).toBe(1);
     expect(sleepReport[7]).toBe(COMMAND_ID.SLEEP_CONTROLLER);
     expect(sleepReport[9]).toBe(0);
+  });
+
+  it('chunks a synthetic host audio frame for the companion OUT stream', () => {
+    const frame = buildSyntheticHostAudioFrame();
+    const reports = buildHostAudioFrameChunkReports({
+      streamGeneration: 7,
+      frameSequence: 33,
+      frame
+    });
+
+    expect(frame).toHaveLength(HOST_AUDIO_REPORT_FRAME_LENGTH);
+    expect(frame[0]).toBe(0x36);
+    expect(frame[76]).toBe(0x92);
+    expect(reports).toHaveLength(HOST_AUDIO_FRAME_CHUNK_COUNT);
+    expect(reports[0][0]).toBe(REPORT_ID.HOST_AUDIO_STREAM);
+    expect(reports[0][7]).toBe(HOST_AUDIO_PACKET_TYPE.FRAME_CHUNK);
+    expect(reports[0][9]).toBe(7);
+    expect(reports[0][11]).toBe(33);
+    expect(reports[0][13]).toBe(0);
+    expect(reports[0][14]).toBe(HOST_AUDIO_FRAME_CHUNK_COUNT);
+    expect(reports[0][15]).toBe(HOST_AUDIO_PAYLOAD_LENGTH);
+    expect(reports.at(-1)?.[15]).toBe(HOST_AUDIO_REPORT_FRAME_LENGTH % HOST_AUDIO_PAYLOAD_LENGTH);
   });
 
   it('builds polling rate command reports', () => {

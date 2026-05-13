@@ -76,6 +76,19 @@ export const HOST_AUDIO_PACKET_TYPE = {
 
 export const HOST_AUDIO_PAYLOAD_LENGTH = 47;
 export const HOST_AUDIO_REPORT_FRAME_LENGTH = 398;
+export const HOST_AUDIO_FRAME_CHUNK_COUNT = Math.ceil(HOST_AUDIO_REPORT_FRAME_LENGTH / HOST_AUDIO_PAYLOAD_LENGTH);
+
+const SYNTHETIC_HOST_AUDIO_STATE_PAYLOAD = [
+  0xfd, 0xe3, 0x00, 0x00,
+  0x7f, 0x64,
+  0xff, 0x09, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+  0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+  0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+  0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x0a,
+  0x04, 0x00, 0x00, 0x00, 0x01,
+  0x00,
+  0xff, 0xd7, 0x00
+] as const;
 
 export const ACK_RESULT = {
   OK: 0x00,
@@ -551,6 +564,54 @@ export function buildHostAudioStreamReport(options: {
     report[17 + index] = payload[index] & 0xff;
   }
   return report;
+}
+
+export function buildSyntheticHostAudioFrame(): number[] {
+  const frame = new Array<number>(HOST_AUDIO_REPORT_FRAME_LENGTH).fill(0);
+  frame[0] = 0x36;
+  frame[2] = 0x11 | 0x80;
+  frame[3] = 7;
+  frame[4] = 0xfe;
+  frame[5] = 64;
+  frame[6] = 64;
+  frame[7] = 64;
+  frame[8] = 64;
+  frame[9] = 64;
+  frame[11] = 0x10 | 0x80;
+  frame[12] = 63;
+  for (let index = 0; index < SYNTHETIC_HOST_AUDIO_STATE_PAYLOAD.length; index += 1) {
+    frame[13 + index] = SYNTHETIC_HOST_AUDIO_STATE_PAYLOAD[index];
+  }
+  frame[76] = 0x12 | 0x80;
+  frame[77] = 64;
+  return frame;
+}
+
+export function buildHostAudioFrameChunkReports(options: {
+  streamGeneration: number;
+  frameSequence: number;
+  frame?: ArrayLike<number>;
+}): number[][] {
+  const frame = options.frame ?? buildSyntheticHostAudioFrame();
+  const chunkCount = Math.ceil(frame.length / HOST_AUDIO_PAYLOAD_LENGTH);
+  const reports: number[][] = [];
+  for (let chunkIndex = 0; chunkIndex < chunkCount; chunkIndex += 1) {
+    const start = chunkIndex * HOST_AUDIO_PAYLOAD_LENGTH;
+    const end = Math.min(start + HOST_AUDIO_PAYLOAD_LENGTH, frame.length);
+    const payload: number[] = [];
+    for (let index = start; index < end; index += 1) {
+      payload.push(frame[index] & 0xff);
+    }
+    reports.push(buildHostAudioStreamReport({
+      packetType: HOST_AUDIO_PACKET_TYPE.FRAME_CHUNK,
+      streamGeneration: options.streamGeneration,
+      frameSequence: options.frameSequence,
+      chunkIndex,
+      chunkCount,
+      payload
+    }));
+  }
+  return reports;
 }
 
 export function ackResultName(result: number): string {
