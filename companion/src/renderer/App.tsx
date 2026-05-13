@@ -927,8 +927,6 @@ export function App() {
   const testHapticsUnavailable = !connected
     || !hapticsEnabled
     || pendingAction !== null
-    || hapticsCommitPending
-    || classicRumbleCommitPending
     || speakerVolumeCommitPending
     || lightbarCommitPending
     || testLocked
@@ -939,8 +937,6 @@ export function App() {
   const testRumbleUnavailable = !connected
     || !classicRumbleEnabled
     || pendingAction !== null
-    || hapticsCommitPending
-    || classicRumbleCommitPending
     || speakerVolumeCommitPending
     || lightbarCommitPending
     || testLocked
@@ -990,8 +986,6 @@ export function App() {
     || !speakerVolumeSupported
     || !speakerEnabled
     || pendingAction !== null
-    || hapticsCommitPending
-    || classicRumbleCommitPending
     || speakerVolumeCommitPending
     || lightbarCommitPending
     || speakerTestLocked
@@ -1995,7 +1989,6 @@ export function App() {
                           disabled={
                             !connected
                             || (showClassicRumbleControl ? !snapshot.settings.classicRumbleEnabled : !snapshot.settings.hapticsEnabled)
-                            || (showClassicRumbleControl ? classicRumbleCommitPending : hapticsCommitPending)
                           }
                           onClick={() => (
                             showClassicRumbleControl
