@@ -11,7 +11,9 @@ export const REPORT_ID = {
   COMMAND: 0x02,
   ACK: 0x03,
   AUDIO_DEBUG: 0x05,
-  AUDIO_STATS: 0x06
+  AUDIO_STATS: 0x06,
+  HOST_AUDIO_STREAM: 0x07,
+  HOST_AUDIO_STATUS: 0x08
 } as const;
 
 export const AUDIO_DEBUG_EVENT = {
@@ -54,8 +56,26 @@ export const COMMAND_ID = {
   SLEEP_CONTROLLER: 0x11,
   SET_POLLING_RATE_MODE: 0x12,
   SET_CLASSIC_RUMBLE_GAIN: 0x13,
-  TEST_CLASSIC_RUMBLE: 0x14
+  TEST_CLASSIC_RUMBLE: 0x14,
+  SET_HOST_AUDIO_ENABLED: 0x15,
+  HOST_AUDIO_HEARTBEAT: 0x16,
+  START_HOST_AUDIO: 0x17,
+  STOP_HOST_AUDIO: 0x18,
+  SET_DUPLEX_ENABLED: 0x19
 } as const;
+
+export const HOST_AUDIO_PACKET_TYPE = {
+  HELLO: 1,
+  HEARTBEAT: 2,
+  START: 3,
+  STOP: 4,
+  FRAME_CHUNK: 5,
+  SET_DUPLEX_ENABLED: 6,
+  SET_DUPLEX_DISABLED: 7
+} as const;
+
+export const HOST_AUDIO_PAYLOAD_LENGTH = 47;
+export const HOST_AUDIO_REPORT_FRAME_LENGTH = 398;
 
 export const ACK_RESULT = {
   OK: 0x00,
@@ -74,6 +94,15 @@ export type MuteKeyboardBehavior = 'tap' | 'hold';
 export type TriggerTestMode = 'feedback' | 'weapon' | 'vibration';
 export type TriggerTestTarget = 'both' | 'l2' | 'r2';
 export type PollingRateMode = '250' | '500' | '1000';
+export type HostAudioMode = 'fallback-pico-local' | 'host-encoded-active';
+export type HostAudioFallbackReason =
+  | 'none'
+  | 'host-disabled'
+  | 'heartbeat-timeout'
+  | 'stream-timeout'
+  | 'invalid-packet'
+  | 'companion-stop'
+  | 'controller-disconnected';
 export const BRIDGE_PRESET_IDS = [
   'custom',
   'balanced',
@@ -196,6 +225,25 @@ export interface AudioDebugStatsPayload {
   criticalStarvingAudioCount: number;
 }
 
+export interface HostAudioStatusPayload {
+  mode: HostAudioMode;
+  fallbackReason: HostAudioFallbackReason;
+  hostRequested: boolean;
+  heartbeatHealthy: boolean;
+  streamActive: boolean;
+  streamHealthy: boolean;
+  duplexRequested: boolean;
+  duplexActive: boolean;
+  streamGeneration: number;
+  heartbeatAgeMs: number | null;
+  frameAgeMs: number | null;
+  hostFramesReceived: number;
+  hostFramesDropped: number;
+  micPacketsReceived: number;
+  micPacketsDropped: number;
+  protocolVersion: string;
+}
+
 export class ProtocolError extends Error {
   constructor(message: string, public readonly code: string) {
     super(message);
@@ -244,6 +292,35 @@ function muteButtonMode(value: number): MuteButtonMode {
   if (value === 1) return 'keyboard';
   if (value === 2) return 'quiet';
   return 'normal';
+}
+
+function hostAudioMode(value: number): HostAudioMode {
+  return value === 1 ? 'host-encoded-active' : 'fallback-pico-local';
+}
+
+function hostAudioFallbackReason(value: number): HostAudioFallbackReason {
+  switch (value) {
+    case 0:
+      return 'none';
+    case 1:
+      return 'host-disabled';
+    case 2:
+      return 'heartbeat-timeout';
+    case 3:
+      return 'stream-timeout';
+    case 4:
+      return 'invalid-packet';
+    case 5:
+      return 'companion-stop';
+    case 6:
+      return 'controller-disconnected';
+    default:
+      return 'invalid-packet';
+  }
+}
+
+function nullableAge(value: number): number | null {
+  return value === 0xffffffff ? null : value;
 }
 
 export function pollingRateModeValue(mode: PollingRateMode): number {
@@ -392,6 +469,30 @@ export function parseAudioStatsReport(report: ArrayLike<number>): AudioDebugStat
   };
 }
 
+export function parseHostAudioStatusReport(report: ArrayLike<number>): HostAudioStatusPayload {
+  assertReport(report, REPORT_ID.HOST_AUDIO_STATUS);
+  assertVersion(report);
+
+  return {
+    mode: hostAudioMode(report[7]),
+    fallbackReason: hostAudioFallbackReason(report[8]),
+    hostRequested: report[9] === 1,
+    heartbeatHealthy: report[10] === 1,
+    streamActive: report[11] === 1,
+    streamHealthy: report[12] === 1,
+    duplexRequested: report[13] === 1,
+    duplexActive: report[14] === 1,
+    streamGeneration: readU16(report, 15),
+    heartbeatAgeMs: nullableAge(readU32(report, 17)),
+    frameAgeMs: nullableAge(readU32(report, 21)),
+    hostFramesReceived: readU32(report, 25),
+    hostFramesDropped: readU32(report, 29),
+    micPacketsReceived: readU32(report, 33),
+    micPacketsDropped: readU32(report, 37),
+    protocolVersion: `${report[5]}.${report[6]}`
+  };
+}
+
 export function buildCommandReport(
   commandId: number,
   sequence: number,
@@ -412,6 +513,42 @@ export function buildCommandReport(
   report[10] = (value >> 8) & 0xff;
   for (let index = 0; index < extraPayload.length && 11 + index < REPORT_LENGTH; index += 1) {
     report[11 + index] = extraPayload[index] & 0xff;
+  }
+  return report;
+}
+
+export function buildHostAudioStreamReport(options: {
+  packetType: number;
+  streamGeneration?: number;
+  frameSequence?: number;
+  chunkIndex?: number;
+  chunkCount?: number;
+  payload?: ArrayLike<number>;
+}): number[] {
+  const payload = options.payload ?? [];
+  const payloadLength = Math.min(HOST_AUDIO_PAYLOAD_LENGTH, payload.length);
+  const report = new Array<number>(REPORT_LENGTH).fill(0);
+  report[0] = REPORT_ID.HOST_AUDIO_STREAM;
+  report[1] = MAGIC.charCodeAt(0);
+  report[2] = MAGIC.charCodeAt(1);
+  report[3] = MAGIC.charCodeAt(2);
+  report[4] = MAGIC.charCodeAt(3);
+  report[5] = PROTOCOL_MAJOR;
+  report[6] = PROTOCOL_MINOR;
+  report[7] = options.packetType & 0xff;
+  report[8] = 0;
+  const generation = options.streamGeneration ?? 0;
+  report[9] = generation & 0xff;
+  report[10] = (generation >> 8) & 0xff;
+  const sequence = options.frameSequence ?? 0;
+  report[11] = sequence & 0xff;
+  report[12] = (sequence >> 8) & 0xff;
+  report[13] = (options.chunkIndex ?? 0) & 0xff;
+  report[14] = (options.chunkCount ?? 0) & 0xff;
+  report[15] = payloadLength & 0xff;
+  report[16] = (payloadLength >> 8) & 0xff;
+  for (let index = 0; index < payloadLength; index += 1) {
+    report[17 + index] = payload[index] & 0xff;
   }
   return report;
 }

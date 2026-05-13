@@ -17,7 +17,7 @@ constexpr uint8_t kProtocolMajor = 1;
 constexpr uint8_t kProtocolMinor = 0;
 constexpr uint8_t kFirmwareMajor = 0;
 constexpr uint8_t kFirmwareMinor = 5;
-constexpr uint8_t kFirmwarePatch = 15;
+constexpr uint8_t kFirmwarePatch = 16;
 constexpr uint8_t kTriangleButtonBit = 0x80;
 constexpr uint8_t kHomeButtonBit = 0x01;
 constexpr uint8_t kMuteButtonBit = 0x04;
@@ -65,6 +65,11 @@ enum CommandId : uint8_t {
     CommandSetPollingRateMode = 0x12,
     CommandSetClassicRumbleGain = 0x13,
     CommandTestClassicRumble = 0x14,
+    CommandSetHostAudioEnabled = 0x15,
+    CommandHostAudioHeartbeat = 0x16,
+    CommandStartHostAudio = 0x17,
+    CommandStopHostAudio = 0x18,
+    CommandSetDuplexEnabled = 0x19,
 };
 
 enum AckResult : uint8_t {
@@ -210,6 +215,8 @@ void restore_defaults() {
     mute_keyboard_pressed = false;
     mute_led_flash_pending = false;
     audio_set_quiet_mode(false);
+    audio_host_set_duplex_requested(false);
+    audio_host_set_requested(false);
     bt_set_mute_led(false);
     lightbar_override_enabled = false;
     set_lightbar_color(0xff, 0xd7, 0x00, 100);
@@ -566,6 +573,34 @@ uint16_t build_audio_stats(uint8_t *buffer, uint16_t reqlen) {
     return COMPANION_PAYLOAD_SIZE;
 }
 
+uint16_t build_host_audio_status(uint8_t *buffer, uint16_t reqlen) {
+    if (reqlen < COMPANION_PAYLOAD_SIZE) {
+        return 0;
+    }
+
+    memset(buffer, 0, COMPANION_PAYLOAD_SIZE);
+    write_magic_and_version(buffer);
+
+    audio_host_status status{};
+    audio_get_host_status(&status);
+    buffer[6] = status.mode;
+    buffer[7] = status.fallback_reason;
+    buffer[8] = status.host_requested ? 1 : 0;
+    buffer[9] = status.heartbeat_healthy ? 1 : 0;
+    buffer[10] = status.stream_active ? 1 : 0;
+    buffer[11] = status.stream_healthy ? 1 : 0;
+    buffer[12] = status.duplex_requested ? 1 : 0;
+    buffer[13] = status.duplex_active ? 1 : 0;
+    write_u16(buffer + 14, status.stream_generation);
+    write_u32(buffer + 16, status.heartbeat_age_ms);
+    write_u32(buffer + 20, status.frame_age_ms);
+    write_u32(buffer + 24, status.host_frames_received);
+    write_u32(buffer + 28, status.host_frames_dropped);
+    write_u32(buffer + 32, status.mic_packets_received);
+    write_u32(buffer + 36, status.mic_packets_dropped);
+    return COMPANION_PAYLOAD_SIZE;
+}
+
 void handle_command(uint8_t const *buffer, uint16_t bufsize) {
     uint8_t command_id = 0;
     uint8_t sequence = 0;
@@ -815,6 +850,53 @@ void handle_command(uint8_t const *buffer, uint16_t bufsize) {
             set_ack(command_id, sequence, AckOk);
             return;
 
+        case CommandSetHostAudioEnabled:
+            if (value > 1) {
+                set_ack(command_id, sequence, AckInvalidValue);
+                return;
+            }
+            audio_host_set_requested(value == 1);
+            settings_revision++;
+            set_ack(command_id, sequence, AckOk);
+            return;
+
+        case CommandHostAudioHeartbeat:
+            if (value != 0) {
+                set_ack(command_id, sequence, AckInvalidValue);
+                return;
+            }
+            audio_host_note_heartbeat();
+            set_ack(command_id, sequence, AckOk);
+            return;
+
+        case CommandStartHostAudio:
+            if (value != 0) {
+                set_ack(command_id, sequence, AckInvalidValue);
+                return;
+            }
+            audio_host_start_stream();
+            set_ack(command_id, sequence, AckOk);
+            return;
+
+        case CommandStopHostAudio:
+            if (value != 0) {
+                set_ack(command_id, sequence, AckInvalidValue);
+                return;
+            }
+            audio_host_stop_stream();
+            set_ack(command_id, sequence, AckOk);
+            return;
+
+        case CommandSetDuplexEnabled:
+            if (value > 1) {
+                set_ack(command_id, sequence, AckInvalidValue);
+                return;
+            }
+            audio_host_set_duplex_requested(value == 1);
+            settings_revision++;
+            set_ack(command_id, sequence, AckOk);
+            return;
+
         case CommandRestoreDefaults:
             if (value != 0) {
                 set_ack(command_id, sequence, AckInvalidValue);
@@ -1001,12 +1083,19 @@ uint16_t companion_get_report(uint8_t report_id, hid_report_type_t report_type, 
             return build_audio_debug(buffer, reqlen);
         case COMPANION_REPORT_AUDIO_STATS:
             return build_audio_stats(buffer, reqlen);
+        case COMPANION_REPORT_HOST_AUDIO_STATUS:
+            return build_host_audio_status(buffer, reqlen);
         default:
             return 0;
     }
 }
 
 void companion_set_report(uint8_t report_id, hid_report_type_t report_type, uint8_t const *buffer, uint16_t bufsize) {
+    if (report_type == HID_REPORT_TYPE_OUTPUT && report_id == COMPANION_REPORT_HOST_AUDIO_STREAM) {
+        audio_host_receive_packet(buffer, bufsize);
+        return;
+    }
+
     if (report_type != HID_REPORT_TYPE_FEATURE || report_id != COMPANION_REPORT_COMMAND) {
         set_ack(report_id, 0, AckUnknownCommand);
         return;

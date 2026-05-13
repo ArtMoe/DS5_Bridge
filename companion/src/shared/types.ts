@@ -2,6 +2,7 @@ import type {
   BridgeAckPayload,
   AudioDebugStatsPayload,
   BridgeStatusPayload,
+  HostAudioStatusPayload,
   BridgePresetId,
   MuteButtonMode,
   MuteKeyboardBehavior,
@@ -36,6 +37,8 @@ export interface CompanionSettings {
   pollingRateMode: PollingRateMode;
   notifyControllerConnection: boolean;
   notifyLowBattery: boolean;
+  hostEncodedAudioEnabled: boolean;
+  duplexMicEnabled: boolean;
 }
 
 export interface HidDeviceSummary {
@@ -69,6 +72,7 @@ export interface BridgeDiagnostics {
   audioDebugLogLines: string[];
   audioDebugDroppedCount: number;
   audioDebugStats: AudioDebugStatsPayload | null;
+  hostAudioStatus: HostAudioStatusPayload | null;
 }
 
 export interface BridgeSnapshot {

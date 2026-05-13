@@ -8,6 +8,39 @@
 
 #include <cstdint>
 
+enum AudioRuntimeMode : uint8_t {
+    AudioRuntimeFallbackPicoLocal = 0,
+    AudioRuntimeHostEncodedActive = 1,
+};
+
+enum AudioFallbackReason : uint8_t {
+    AudioFallbackNone = 0,
+    AudioFallbackHostDisabled = 1,
+    AudioFallbackHeartbeatTimeout = 2,
+    AudioFallbackStreamTimeout = 3,
+    AudioFallbackInvalidPacket = 4,
+    AudioFallbackCompanionStop = 5,
+    AudioFallbackControllerDisconnected = 6,
+};
+
+struct audio_host_status {
+    uint8_t mode;
+    uint8_t fallback_reason;
+    bool host_requested;
+    bool heartbeat_healthy;
+    bool stream_active;
+    bool stream_healthy;
+    bool duplex_requested;
+    bool duplex_active;
+    uint16_t stream_generation;
+    uint32_t heartbeat_age_ms;
+    uint32_t frame_age_ms;
+    uint32_t host_frames_received;
+    uint32_t host_frames_dropped;
+    uint32_t mic_packets_received;
+    uint32_t mic_packets_dropped;
+};
+
 void audio_init();
 void audio_loop();
 void audio_test_haptics_loop();
@@ -33,5 +66,14 @@ void audio_set_state_data(uint8_t const *data, uint8_t len);
 void audio_set_lightbar_state(uint8_t red, uint8_t green, uint8_t blue, uint8_t brightness_percent);
 void audio_handle_controller_disconnect();
 void set_headset(bool state);
+void audio_host_set_requested(bool enabled);
+void audio_host_note_heartbeat();
+void audio_host_start_stream();
+void audio_host_stop_stream(AudioFallbackReason reason = AudioFallbackCompanionStop);
+bool audio_host_receive_packet(uint8_t const *data, uint16_t len);
+void audio_host_set_duplex_requested(bool enabled);
+bool audio_duplex_active();
+void audio_get_host_status(audio_host_status *status);
+void audio_mic_add_packet(uint8_t const *data, uint16_t len);
 
 #endif //DS5_BRIDGE_AUDIO_H

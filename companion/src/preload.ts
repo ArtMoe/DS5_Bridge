@@ -28,6 +28,12 @@ const api = {
   ),
   setSpeakerVolume: (value: number): Promise<BridgeSnapshot> => ipcRenderer.invoke('bridge:setSpeakerVolume', value),
   setSpeakerEnabled: (value: boolean): Promise<BridgeSnapshot> => ipcRenderer.invoke('bridge:setSpeakerEnabled', value),
+  setHostEncodedAudioEnabled: (value: boolean): Promise<BridgeSnapshot> => (
+    ipcRenderer.invoke('bridge:setHostEncodedAudioEnabled', value)
+  ),
+  setDuplexMicEnabled: (value: boolean): Promise<BridgeSnapshot> => (
+    ipcRenderer.invoke('bridge:setDuplexMicEnabled', value)
+  ),
   setLightbarColor: (color: string, brightness: number): Promise<BridgeSnapshot> => (
     ipcRenderer.invoke('bridge:setLightbarColor', color, brightness)
   ),

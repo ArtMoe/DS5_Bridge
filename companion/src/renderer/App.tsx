@@ -6,6 +6,7 @@ import {
   Check,
   ChevronDown,
   Keyboard,
+  Mic,
   Minus,
   Moon,
   MoreHorizontal,
@@ -923,6 +924,27 @@ export function App() {
   const sleepButtonBusy = pendingAction !== null && pendingAction !== 'sleep-keybind';
   const gameStreamActive = Boolean(snapshot?.status?.hostOutputRecent);
   const audioStreamActive = Boolean(snapshot?.status?.audioRecent && pendingAction !== 'speaker' && !speakerTestLocked);
+  const hostAudioStatus = snapshot?.diagnostics.hostAudioStatus;
+  const hostAudioEnabled = Boolean(snapshot?.settings.hostEncodedAudioEnabled);
+  const duplexMicEnabled = Boolean(snapshot?.settings.duplexMicEnabled);
+  const hostAudioActive = hostAudioStatus?.mode === 'host-encoded-active';
+  const hostAudioLabel = !connected
+    ? 'Unavailable'
+    : hostAudioActive
+      ? 'Host Encoded Active'
+      : hostAudioEnabled
+        ? `Fallback: ${hostAudioStatus?.fallbackReason?.replaceAll('-', ' ') ?? 'pending'}`
+        : 'Pico Local';
+  const hostAudioTone = hostAudioActive
+    ? 'good'
+    : connected && hostAudioEnabled
+      ? 'warn'
+      : 'idle';
+  const duplexMicLabel = hostAudioStatus?.duplexActive
+    ? 'Duplex Active'
+    : duplexMicEnabled
+      ? 'Disabled in Fallback'
+      : 'Off';
   const speakerOutputMissing = speakerOutputAvailable === false;
   const testHapticsUnavailable = !connected
     || !hapticsEnabled
@@ -1085,6 +1107,7 @@ export function App() {
 
     const debug = snapshot.status.audioDebug;
     const stats = snapshot.diagnostics.audioDebugStats;
+    const host = snapshot.diagnostics.hostAudioStatus;
     const lines = [
       `state=${snapshot.state}`,
       `firmware=${snapshot.status.firmwareVersion}`,
@@ -1103,6 +1126,22 @@ export function App() {
       `lastAudioRepairLength=${debug.lastHostOutputLength}`,
       `lastAudioRepairFirst16=${debug.lastHostOutputFirst16.map(hexByte).join(' ')}`
     ];
+    if (host) {
+      lines.push(
+        `hostAudioMode=${host.mode}`,
+        `hostFallbackReason=${host.fallbackReason}`,
+        `hostRequested=${host.hostRequested ? 'true' : 'false'}`,
+        `hostHeartbeatHealthy=${host.heartbeatHealthy ? 'true' : 'false'}`,
+        `hostStreamHealthy=${host.streamHealthy ? 'true' : 'false'}`,
+        `hostGeneration=${host.streamGeneration}`,
+        `hostFramesReceived=${host.hostFramesReceived}`,
+        `hostFramesDropped=${host.hostFramesDropped}`,
+        `duplexRequested=${host.duplexRequested ? 'true' : 'false'}`,
+        `duplexActive=${host.duplexActive ? 'true' : 'false'}`,
+        `micPacketsReceived=${host.micPacketsReceived}`,
+        `micPacketsDropped=${host.micPacketsDropped}`
+      );
+    }
     if (stats) {
       lines.push(
         `usbAudioGapMaxUs=${stats.usbAudioGapMaxUs}`,
@@ -1471,6 +1510,20 @@ export function App() {
   function toggleSpeakerEnabled() {
     if (!snapshot) return;
     void runAction('speaker-enabled', () => window.bridge.setSpeakerEnabled(!snapshot.settings.speakerEnabled));
+  }
+
+  function toggleHostEncodedAudioEnabled() {
+    if (!snapshot) return;
+    void runAction('host-audio-enabled', () => (
+      window.bridge.setHostEncodedAudioEnabled(!snapshot.settings.hostEncodedAudioEnabled)
+    ));
+  }
+
+  function toggleDuplexMicEnabled() {
+    if (!snapshot) return;
+    void runAction('duplex-mic-enabled', () => (
+      window.bridge.setDuplexMicEnabled(!snapshot.settings.duplexMicEnabled)
+    ));
   }
 
   function toggleAdaptiveTriggersEnabled() {
@@ -2036,6 +2089,68 @@ export function App() {
                     <span className="status-badge">
                       <span className={`dot ${activeFeedbackStatusTone}`} />
                       <strong>{activeFeedbackStatusLabel}</strong>
+                    </span>
+                  </div>
+                </section>
+                <section className="feature-card">
+                  <div className="feature-card-title">
+                    <span className="feature-icon"><Activity size={20} /></span>
+                    <div className="title-copy">
+                      <h3>Host Encoded</h3>
+                      <p>Offloads prepared audio packets when the companion stream is healthy.</p>
+                    </div>
+                  </div>
+                  <div className="behavior-toggle-row">
+                    <div>
+                      <strong>Host Pipeline</strong>
+                      <p>{hostAudioLabel}</p>
+                    </div>
+                    <button
+                      type="button"
+                      role="switch"
+                      aria-checked={hostAudioEnabled}
+                      className={`switch ${hostAudioEnabled ? 'on' : ''}`}
+                      disabled={!connected || pendingAction !== null}
+                      onClick={toggleHostEncodedAudioEnabled}
+                    >
+                      <span />
+                    </button>
+                  </div>
+                  <div className={`feature-status test-status ${hostAudioTone}`}>
+                    <span className="status-badge" title={hostAudioLabel}>
+                      <span className={`dot ${hostAudioTone}`} />
+                      <strong>{hostAudioLabel}</strong>
+                    </span>
+                  </div>
+                </section>
+                <section className="feature-card">
+                  <div className="feature-card-title">
+                    <span className="feature-icon"><Mic size={20} /></span>
+                    <div className="title-copy">
+                      <h3>Duplex Mic</h3>
+                      <p>Forwards controller mic audio only while host encoded mode is active.</p>
+                    </div>
+                  </div>
+                  <div className="behavior-toggle-row">
+                    <div>
+                      <strong>Microphone</strong>
+                      <p>{duplexMicLabel}</p>
+                    </div>
+                    <button
+                      type="button"
+                      role="switch"
+                      aria-checked={duplexMicEnabled}
+                      className={`switch ${duplexMicEnabled ? 'on' : ''}`}
+                      disabled={!connected || !hostAudioEnabled || pendingAction !== null}
+                      onClick={toggleDuplexMicEnabled}
+                    >
+                      <span />
+                    </button>
+                  </div>
+                  <div className={`feature-status test-status ${hostAudioStatus?.duplexActive ? 'good' : duplexMicEnabled ? 'warn' : 'idle'}`}>
+                    <span className="status-badge" title={duplexMicLabel}>
+                      <span className={`dot ${hostAudioStatus?.duplexActive ? 'good' : duplexMicEnabled ? 'warn' : 'idle'}`} />
+                      <strong>{duplexMicLabel}</strong>
                     </span>
                   </div>
                 </section>

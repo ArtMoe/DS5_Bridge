@@ -30,7 +30,9 @@ export const DEFAULT_SETTINGS: CompanionSettings = {
   sleepKeybindEnabled: false,
   pollingRateMode: '1000',
   notifyControllerConnection: false,
-  notifyLowBattery: false
+  notifyLowBattery: false,
+  hostEncodedAudioEnabled: false,
+  duplexMicEnabled: false
 };
 
 function normalizeColor(value: unknown): string {
@@ -132,7 +134,13 @@ function normalizeSettings(value: Partial<CompanionSettings> | null | undefined)
       : DEFAULT_SETTINGS.notifyControllerConnection,
     notifyLowBattery: typeof value?.notifyLowBattery === 'boolean'
       ? value.notifyLowBattery
-      : DEFAULT_SETTINGS.notifyLowBattery
+      : DEFAULT_SETTINGS.notifyLowBattery,
+    hostEncodedAudioEnabled: typeof value?.hostEncodedAudioEnabled === 'boolean'
+      ? value.hostEncodedAudioEnabled
+      : DEFAULT_SETTINGS.hostEncodedAudioEnabled,
+    duplexMicEnabled: typeof value?.duplexMicEnabled === 'boolean'
+      ? value.duplexMicEnabled
+      : DEFAULT_SETTINGS.duplexMicEnabled
   };
 }
 

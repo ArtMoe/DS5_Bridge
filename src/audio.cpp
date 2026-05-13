@@ -54,6 +54,17 @@
 #define OPUS_ENCODE_BUDGET_US 10000
 #define SPEAKER_USB_SILENCE_TAIL_US 500000
 #define SPEAKER_SILENCE_PREROLL_USB_PACKETS 24
+#define HOST_HEARTBEAT_TIMEOUT_US 750000
+#define HOST_STREAM_TIMEOUT_US 100000
+#define HOST_STREAM_START_GRACE_US 250000
+#define HOST_PACKET_HEADER_SIZE 16
+#define HOST_PACKET_PAYLOAD_SIZE 47
+#define HOST_FRAME_REASSEMBLY_SIZE 448
+#define HOST_AUDIO_REPORT_SIZE REPORT_SIZE
+#define HOST_MIC_OPUS_SIZE 71
+#define HOST_MIC_OPUS_FRAMES 480
+#define HOST_MIC_INPUT_CHANNELS 1
+#define HOST_MIC_USB_CHANNELS 2
 using std::clamp;
 using std::max;
 
@@ -74,6 +85,45 @@ enum AudioDebugEventCode : uint8_t {
     AudioDebugQuietMode = 14,
     AudioDebugSilencePreroll = 15,
     AudioDebugUsbSilenceTail = 16,
+    AudioDebugHostMode = 17,
+    AudioDebugHostFrame = 18,
+    AudioDebugMicPacket = 19,
+};
+
+enum HostAudioPacketType : uint8_t {
+    HostAudioHello = 1,
+    HostAudioHeartbeat = 2,
+    HostAudioStart = 3,
+    HostAudioStop = 4,
+    HostAudioFrameChunk = 5,
+    HostAudioSetDuplexEnabled = 6,
+    HostAudioSetDuplexDisabled = 7,
+};
+
+enum HostPacketOffsets : uint8_t {
+    HostPacketMagic0 = 0,
+    HostPacketMagic1 = 1,
+    HostPacketMagic2 = 2,
+    HostPacketMagic3 = 3,
+    HostPacketProtocolMajor = 4,
+    HostPacketProtocolMinor = 5,
+    HostPacketType = 6,
+    HostPacketFlags = 7,
+    HostPacketGeneration = 8,
+    HostPacketSequence = 10,
+    HostPacketChunkIndex = 12,
+    HostPacketChunkCount = 13,
+    HostPacketPayloadLength = 14,
+    HostPacketPayload = 16,
+};
+
+struct mic_packet_element {
+    uint8_t data[HOST_MIC_OPUS_SIZE];
+};
+
+struct mic_decode_element {
+    int16_t data[HOST_MIC_OPUS_FRAMES * HOST_MIC_USB_CHANNELS];
+    uint16_t len;
 };
 
 struct audio_debug_event {
@@ -117,6 +167,8 @@ static bool audio_silence_tail_logged = false;
 static uint8_t speaker_silence_preroll_packets_remaining = 0;
 alignas(8) static uint32_t audio_core1_stack[8192];
 queue_t audio_fifo;
+queue_t mic_fifo;
+queue_t mic_decode_fifo;
 static uint8_t opus_buf[200];
 static uint32_t opus_buf_generation = 0;
 static bool opus_buf_valid = false;
@@ -143,9 +195,34 @@ static float audio_buf[512 * 2];
 static uint audio_buf_pos = 0;
 static int8_t audio_haptic_buf[SAMPLE_SIZE];
 static int audio_haptic_buf_pos = 0;
+static volatile bool host_audio_requested = false;
+static volatile bool host_stream_active = false;
+static volatile bool host_duplex_requested = false;
+static volatile uint32_t host_last_heartbeat_us = 0;
+static volatile uint32_t host_stream_started_us = 0;
+static volatile uint32_t host_last_frame_us = 0;
+static uint16_t host_stream_generation = 0;
+static AudioRuntimeMode audio_runtime_mode = AudioRuntimeFallbackPicoLocal;
+static AudioFallbackReason audio_fallback_reason = AudioFallbackHostDisabled;
+static uint16_t host_reassembly_generation = 0;
+static uint16_t host_reassembly_sequence = 0;
+static uint8_t host_reassembly_chunk_count = 0;
+static uint16_t host_reassembly_received_mask = 0;
+static uint16_t host_reassembly_expected_length = 0;
+static uint16_t host_reassembly_received_bytes = 0;
+static uint8_t host_reassembly_buffer[HOST_FRAME_REASSEMBLY_SIZE];
+static uint32_t host_frames_received = 0;
+static uint32_t host_frames_dropped = 0;
+static uint32_t mic_packets_received = 0;
+static uint32_t mic_packets_dropped = 0;
 
 static void core1_entry();
 static void reset_core1_audio_pipeline(uint32_t generation);
+static void clear_host_reassembly();
+static void clear_mic_queues();
+static void audio_host_poll();
+static void process_mic_usb_output();
+static void clear_partial_audio_state();
 
 static void clamp_state_speaker_volume() {
     if (state_data[STATE_PAYLOAD_SPEAKER_VOLUME_OFFSET] > STATE_PAYLOAD_SPEAKER_VOLUME_SAFE_MAX) {
@@ -207,11 +284,23 @@ static void write_debug_u16(uint8_t *data, uint16_t value) {
     data[1] = static_cast<uint8_t>((value >> 8) & 0xFF);
 }
 
+static uint16_t read_le_u16(uint8_t const *data) {
+    return static_cast<uint16_t>(data[0]) | (static_cast<uint16_t>(data[1]) << 8);
+}
+
 static void write_debug_u32(uint8_t *data, uint32_t value) {
     data[0] = static_cast<uint8_t>(value & 0xFF);
     data[1] = static_cast<uint8_t>((value >> 8) & 0xFF);
     data[2] = static_cast<uint8_t>((value >> 16) & 0xFF);
     data[3] = static_cast<uint8_t>((value >> 24) & 0xFF);
+}
+
+static bool host_packet_has_magic(uint8_t const *data) {
+    return data != nullptr
+        && data[HostPacketMagic0] == 'D'
+        && data[HostPacketMagic1] == 'S'
+        && data[HostPacketMagic2] == '5'
+        && data[HostPacketMagic3] == 'B';
 }
 
 static void audio_debug_update_max_u32(uint32_t &current, uint32_t candidate) {
@@ -366,6 +455,97 @@ static void drain_audio_queues() {
     drain_queue(&audio_fifo);
     clear_opus_buffer();
     bt_drain_audio_stream();
+}
+
+static void clear_host_reassembly() {
+    host_reassembly_generation = 0;
+    host_reassembly_sequence = 0;
+    host_reassembly_chunk_count = 0;
+    host_reassembly_received_mask = 0;
+    host_reassembly_expected_length = 0;
+    host_reassembly_received_bytes = 0;
+    memset(host_reassembly_buffer, 0, sizeof(host_reassembly_buffer));
+}
+
+static void clear_mic_queues() {
+    drain_queue(&mic_fifo);
+    drain_queue(&mic_decode_fifo);
+}
+
+static void enter_fallback(AudioFallbackReason reason) {
+    const bool changed = audio_runtime_mode != AudioRuntimeFallbackPicoLocal || audio_fallback_reason != reason;
+    if (!changed) {
+        return;
+    }
+    audio_debug_log(
+        AudioDebugHostMode,
+        static_cast<uint8_t>(AudioRuntimeFallbackPicoLocal),
+        static_cast<uint8_t>(reason),
+        clamp_debug_u8(host_stream_generation),
+        0,
+        0
+    );
+    audio_runtime_mode = AudioRuntimeFallbackPicoLocal;
+    audio_fallback_reason = reason;
+    host_stream_active = false;
+    host_last_frame_us = 0;
+    clear_host_reassembly();
+    if (!audio_initialized) {
+        return;
+    }
+    clear_mic_queues();
+    drain_audio_queues();
+}
+
+static bool host_heartbeat_healthy(uint32_t now) {
+    return host_last_heartbeat_us != 0
+        && static_cast<uint32_t>(now - host_last_heartbeat_us) < HOST_HEARTBEAT_TIMEOUT_US;
+}
+
+static bool host_stream_healthy(uint32_t now) {
+    if (!host_stream_active) {
+        return false;
+    }
+    if (host_last_frame_us != 0) {
+        return static_cast<uint32_t>(now - host_last_frame_us) < HOST_STREAM_TIMEOUT_US;
+    }
+    return host_stream_started_us != 0
+        && static_cast<uint32_t>(now - host_stream_started_us) < HOST_STREAM_START_GRACE_US;
+}
+
+static void audio_host_poll() {
+    const uint32_t now = time_us_32();
+    if (!host_audio_requested) {
+        if (audio_runtime_mode != AudioRuntimeFallbackPicoLocal || audio_fallback_reason != AudioFallbackHostDisabled) {
+            enter_fallback(AudioFallbackHostDisabled);
+        }
+        return;
+    }
+
+    if (!host_heartbeat_healthy(now)) {
+        enter_fallback(AudioFallbackHeartbeatTimeout);
+        return;
+    }
+
+    if (!host_stream_healthy(now)) {
+        enter_fallback(AudioFallbackStreamTimeout);
+        return;
+    }
+
+    if (audio_runtime_mode != AudioRuntimeHostEncodedActive) {
+        audio_runtime_mode = AudioRuntimeHostEncodedActive;
+        audio_fallback_reason = AudioFallbackNone;
+        drain_audio_queues();
+        clear_partial_audio_state();
+        audio_debug_log(
+            AudioDebugHostMode,
+            static_cast<uint8_t>(AudioRuntimeHostEncodedActive),
+            0,
+            clamp_debug_u8(host_stream_generation),
+            0,
+            0
+        );
+    }
 }
 
 static void clear_partial_audio_state() {
@@ -596,6 +776,215 @@ void audio_set_quiet_mode(bool enabled) {
 
 bool audio_quiet_mode_enabled() {
     return quiet_mode_enabled;
+}
+
+void audio_host_set_requested(bool enabled) {
+    host_audio_requested = enabled;
+    if (!enabled) {
+        enter_fallback(AudioFallbackHostDisabled);
+    } else {
+        host_last_heartbeat_us = time_us_32();
+    }
+}
+
+void audio_host_note_heartbeat() {
+    host_last_heartbeat_us = time_us_32();
+}
+
+void audio_host_start_stream() {
+    host_audio_requested = true;
+    host_stream_active = true;
+    host_stream_started_us = time_us_32();
+    host_last_heartbeat_us = host_stream_started_us;
+    host_last_frame_us = 0;
+    host_stream_generation++;
+    if (host_stream_generation == 0) {
+        host_stream_generation = 1;
+    }
+    clear_host_reassembly();
+    if (audio_initialized) {
+        audio_runtime_mode = AudioRuntimeHostEncodedActive;
+        audio_fallback_reason = AudioFallbackNone;
+        drain_audio_queues();
+        clear_partial_audio_state();
+    }
+}
+
+void audio_host_stop_stream(AudioFallbackReason reason) {
+    host_stream_active = false;
+    host_last_frame_us = 0;
+    clear_host_reassembly();
+    enter_fallback(reason);
+}
+
+void audio_host_set_duplex_requested(bool enabled) {
+    host_duplex_requested = enabled;
+    if (!enabled && audio_initialized) {
+        clear_mic_queues();
+    }
+}
+
+bool audio_duplex_active() {
+    return host_duplex_requested && audio_runtime_mode == AudioRuntimeHostEncodedActive && bt_is_controller_connected();
+}
+
+static bool submit_host_audio_report(uint8_t const *report, uint16_t len) {
+    if (report == nullptr || len != HOST_AUDIO_REPORT_SIZE || report[0] != REPORT_ID) {
+        host_frames_dropped++;
+        enter_fallback(AudioFallbackInvalidPacket);
+        return false;
+    }
+
+    uint8_t packet[HOST_AUDIO_REPORT_SIZE];
+    memcpy(packet, report, sizeof(packet));
+    packet[0] = REPORT_ID;
+    packet[1] = reportSeqCounter << 4;
+    reportSeqCounter = (reportSeqCounter + 1) & 0x0F;
+    packet[10] = packetCounter++;
+    if (!bt_write_audio_stream(packet, sizeof(packet))) {
+        host_frames_dropped++;
+        return false;
+    }
+
+    host_frames_received++;
+    host_last_frame_us = time_us_32();
+    audio_debug_log(
+        AudioDebugHostFrame,
+        clamp_debug_u8(queue_get_level(&audio_fifo)),
+        clamp_debug_u8(host_frames_received),
+        clamp_debug_u8(host_stream_generation),
+        packet[10],
+        reportSeqCounter
+    );
+    return true;
+}
+
+bool audio_host_receive_packet(uint8_t const *data, uint16_t len) {
+    if (data == nullptr || len < HOST_PACKET_HEADER_SIZE || !host_packet_has_magic(data)) {
+        host_frames_dropped++;
+        enter_fallback(AudioFallbackInvalidPacket);
+        return false;
+    }
+    if (data[HostPacketProtocolMajor] != 1) {
+        host_frames_dropped++;
+        enter_fallback(AudioFallbackInvalidPacket);
+        return false;
+    }
+
+    const uint8_t type = data[HostPacketType];
+    const uint16_t packet_generation = read_le_u16(data + HostPacketGeneration);
+    const uint16_t sequence = read_le_u16(data + HostPacketSequence);
+    const uint8_t chunk_index = data[HostPacketChunkIndex];
+    const uint8_t chunk_count = data[HostPacketChunkCount];
+    const uint16_t payload_length = read_le_u16(data + HostPacketPayloadLength);
+
+    switch (type) {
+        case HostAudioHello:
+        case HostAudioHeartbeat:
+            audio_host_note_heartbeat();
+            return true;
+
+        case HostAudioStart:
+            audio_host_start_stream();
+            return true;
+
+        case HostAudioStop:
+            audio_host_stop_stream(AudioFallbackCompanionStop);
+            return true;
+
+        case HostAudioSetDuplexEnabled:
+            audio_host_set_duplex_requested(true);
+            audio_host_note_heartbeat();
+            return true;
+
+        case HostAudioSetDuplexDisabled:
+            audio_host_set_duplex_requested(false);
+            audio_host_note_heartbeat();
+            return true;
+
+        case HostAudioFrameChunk:
+            break;
+
+        default:
+            host_frames_dropped++;
+            enter_fallback(AudioFallbackInvalidPacket);
+            return false;
+    }
+
+    audio_host_note_heartbeat();
+    if (!host_audio_requested || !host_stream_active || packet_generation != host_stream_generation) {
+        host_frames_dropped++;
+        return false;
+    }
+    if (chunk_count == 0 || chunk_count > 10 || chunk_index >= chunk_count || payload_length > HOST_PACKET_PAYLOAD_SIZE) {
+        host_frames_dropped++;
+        enter_fallback(AudioFallbackInvalidPacket);
+        return false;
+    }
+
+    if (
+        host_reassembly_generation != packet_generation
+        || host_reassembly_sequence != sequence
+        || host_reassembly_chunk_count != chunk_count
+    ) {
+        clear_host_reassembly();
+        host_reassembly_generation = packet_generation;
+        host_reassembly_sequence = sequence;
+        host_reassembly_chunk_count = chunk_count;
+    }
+
+    const uint16_t offset = static_cast<uint16_t>(chunk_index) * HOST_PACKET_PAYLOAD_SIZE;
+    if (offset + payload_length > sizeof(host_reassembly_buffer)) {
+        host_frames_dropped++;
+        enter_fallback(AudioFallbackInvalidPacket);
+        return false;
+    }
+    memcpy(host_reassembly_buffer + offset, data + HostPacketPayload, payload_length);
+    host_reassembly_received_mask = static_cast<uint16_t>(host_reassembly_received_mask | (1u << chunk_index));
+    const uint16_t received_end = offset + payload_length;
+    if (received_end > host_reassembly_received_bytes) {
+        host_reassembly_received_bytes = received_end;
+    }
+    if (chunk_index + 1 == chunk_count) {
+        host_reassembly_expected_length = received_end;
+    }
+
+    const uint16_t expected_mask = static_cast<uint16_t>((1u << chunk_count) - 1u);
+    if (
+        host_reassembly_received_mask != expected_mask
+        || host_reassembly_expected_length == 0
+        || host_reassembly_received_bytes < host_reassembly_expected_length
+    ) {
+        return true;
+    }
+
+    const bool submitted = submit_host_audio_report(host_reassembly_buffer, host_reassembly_expected_length);
+    clear_host_reassembly();
+    return submitted;
+}
+
+void audio_get_host_status(audio_host_status *status) {
+    if (status == nullptr) {
+        return;
+    }
+
+    const uint32_t now = time_us_32();
+    memset(status, 0, sizeof(*status));
+    status->mode = static_cast<uint8_t>(audio_runtime_mode);
+    status->fallback_reason = static_cast<uint8_t>(audio_fallback_reason);
+    status->host_requested = host_audio_requested;
+    status->heartbeat_healthy = host_heartbeat_healthy(now);
+    status->stream_active = host_stream_active;
+    status->stream_healthy = host_stream_healthy(now);
+    status->duplex_requested = host_duplex_requested;
+    status->duplex_active = audio_duplex_active();
+    status->stream_generation = host_stream_generation;
+    status->heartbeat_age_ms = host_last_heartbeat_us == 0 ? 0xffffffffu : static_cast<uint32_t>(now - host_last_heartbeat_us) / 1000u;
+    status->frame_age_ms = host_last_frame_us == 0 ? 0xffffffffu : static_cast<uint32_t>(now - host_last_frame_us) / 1000u;
+    status->host_frames_received = host_frames_received;
+    status->host_frames_dropped = host_frames_dropped;
+    status->mic_packets_received = mic_packets_received;
+    status->mic_packets_dropped = mic_packets_dropped;
 }
 
 void audio_set_haptics_buffer_length(uint8_t length) {
@@ -879,7 +1268,64 @@ static bool process_usb_audio_packet() {
     return true;
 }
 
+static void process_mic_usb_output() {
+    if (!audio_duplex_active()) {
+        clear_mic_queues();
+        return;
+    }
+
+    static mic_decode_element decoded{};
+    if (!queue_try_remove(&mic_decode_fifo, &decoded)) {
+        return;
+    }
+
+    const uint16_t written = tud_audio_write(decoded.data, decoded.len);
+    if (written != decoded.len) {
+        mic_packets_dropped++;
+        audio_debug_log(
+            AudioDebugMicPacket,
+            1,
+            clamp_debug_u8(written),
+            clamp_debug_u8(decoded.len),
+            clamp_debug_u8(mic_packets_dropped),
+            0
+        );
+    }
+}
+
+void audio_mic_add_packet(uint8_t const *data, uint16_t len) {
+    if (data == nullptr || len < HOST_MIC_OPUS_SIZE || !audio_duplex_active()) {
+        if (len != 0) {
+            mic_packets_dropped++;
+        }
+        return;
+    }
+
+    static mic_packet_element packet{};
+    memcpy(packet.data, data, HOST_MIC_OPUS_SIZE);
+    if (queue_is_full(&mic_fifo)) {
+        queue_try_remove(&mic_fifo, NULL);
+        mic_packets_dropped++;
+    }
+    if (queue_try_add(&mic_fifo, &packet)) {
+        mic_packets_received++;
+        audio_debug_log(
+            AudioDebugMicPacket,
+            2,
+            clamp_debug_u8(mic_packets_received),
+            clamp_debug_u8(queue_get_level(&mic_fifo)),
+            0,
+            0
+        );
+    } else {
+        mic_packets_dropped++;
+    }
+}
+
 void audio_loop() {
+    process_mic_usb_output();
+    audio_host_poll();
+
     if (!bt_is_controller_connected()) {
         int16_t discard[192];
         while (tud_audio_available()) {
@@ -887,6 +1333,9 @@ void audio_loop() {
         }
         if (speaker_route_active || last_audio_us != 0) {
             audio_handle_controller_disconnect();
+        }
+        if (audio_runtime_mode == AudioRuntimeHostEncodedActive) {
+            enter_fallback(AudioFallbackControllerDisconnected);
         }
         return;
     }
@@ -899,6 +1348,14 @@ void audio_loop() {
         if (speaker_route_active) {
             bt_set_speaker_output_enabled(false);
             speaker_route_active = false;
+        }
+        return;
+    }
+
+    if (audio_runtime_mode == AudioRuntimeHostEncodedActive) {
+        int16_t discard[192];
+        while (tud_audio_available()) {
+            tud_audio_read(discard, sizeof(discard));
         }
         return;
     }
@@ -920,6 +1377,8 @@ void audio_init() {
     resampler.SetFeedMode(true);
     resampler.Prealloc(2, 24, 6);
     queue_init(&audio_fifo,sizeof(audio_raw_element),2);
+    queue_init(&mic_fifo,sizeof(mic_packet_element),4);
+    queue_init(&mic_decode_fifo,sizeof(mic_decode_element),4);
     critical_section_init(&opus_cs);
     opus_cs_ready = true;
     multicore_launch_core1_with_stack(core1_entry,audio_core1_stack,sizeof(audio_core1_stack));
@@ -927,6 +1386,7 @@ void audio_init() {
 }
 
 static OpusEncoder *encoder;
+static OpusDecoder *mic_decoder;
 static WDL_Resampler resampler_audio;
 static uint32_t core1_audio_stream_generation = 0;
 
@@ -946,6 +1406,100 @@ static void reset_core1_audio_pipeline(uint32_t generation) {
     );
 }
 
+static bool core1_process_mic() {
+    static mic_packet_element mic_packet{};
+    if (!queue_try_remove(&mic_fifo, &mic_packet)) {
+        return false;
+    }
+    if (mic_decoder == nullptr || !audio_duplex_active()) {
+        return true;
+    }
+
+    static int16_t decoded_mono[HOST_MIC_OPUS_FRAMES * HOST_MIC_INPUT_CHANNELS];
+    const int decoded_samples = opus_decode(
+        mic_decoder,
+        mic_packet.data,
+        HOST_MIC_OPUS_SIZE,
+        decoded_mono,
+        HOST_MIC_OPUS_FRAMES,
+        false
+    );
+    if (decoded_samples <= 0) {
+        mic_packets_dropped++;
+        audio_debug_log(AudioDebugMicPacket, 0, clamp_debug_u8(mic_packets_dropped), 0, 0, 0);
+        return true;
+    }
+
+    static mic_decode_element decoded{};
+    const int frames = std::min(decoded_samples, HOST_MIC_OPUS_FRAMES);
+    for (int frame = 0; frame < frames; frame++) {
+        decoded.data[frame * HOST_MIC_USB_CHANNELS] = decoded_mono[frame];
+        decoded.data[frame * HOST_MIC_USB_CHANNELS + 1] = decoded_mono[frame];
+    }
+    decoded.len = static_cast<uint16_t>(frames * HOST_MIC_USB_CHANNELS * sizeof(int16_t));
+    if (queue_is_full(&mic_decode_fifo)) {
+        queue_try_remove(&mic_decode_fifo, NULL);
+        mic_packets_dropped++;
+    }
+    if (!queue_try_add(&mic_decode_fifo, &decoded)) {
+        mic_packets_dropped++;
+    }
+    return true;
+}
+
+static bool core1_process_speaker() {
+    static audio_raw_element audio_element{};
+    if (!queue_try_remove(&audio_fifo, &audio_element)) {
+        return false;
+    }
+
+    uint32_t current_generation = audio_stream_generation;
+    if (audio_element.generation != current_generation) {
+        audio_stats_note_generation_drop();
+        reset_core1_audio_pipeline(current_generation);
+        return true;
+    }
+    if (core1_audio_stream_generation != current_generation) {
+        reset_core1_audio_pipeline(current_generation);
+    }
+
+    // Resample 512 frames to 480 frames to avoid noise. Thanks @Junhoo.
+    WDL_ResampleSample *in_buf;
+    int nframes = resampler_audio.ResamplePrepare(512, 2, &in_buf);
+    for (int i = 0; i < nframes * 2;i++) {
+        in_buf[i] = audio_element.data[i];
+    }
+    static WDL_ResampleSample out_buf[480 * 2];
+    resampler_audio.ResampleOut(out_buf,nframes,480,2);
+    static uint8_t encoded[sizeof(opus_buf)];
+    const uint32_t encode_start_us = time_us_32();
+    const opus_int32 encoded_bytes = opus_encode_float(encoder,out_buf,480,encoded,sizeof(encoded));
+    audio_stats_note_opus_encode(static_cast<uint32_t>(time_us_32() - encode_start_us));
+    if (encoded_bytes < 0) {
+        audio_debug_log(
+            AudioDebugOpusFifoAddFail,
+            clamp_debug_u8(queue_get_level(&audio_fifo)),
+            opus_debug_level(),
+            0,
+            0,
+            0
+        );
+        return true;
+    }
+    current_generation = audio_stream_generation;
+    if (audio_element.generation != current_generation) {
+        audio_stats_note_generation_drop();
+        reset_core1_audio_pipeline(current_generation);
+        return true;
+    }
+    critical_section_enter_blocking(&opus_cs);
+    memcpy(opus_buf, encoded, sizeof(opus_buf));
+    opus_buf_generation = audio_element.generation;
+    opus_buf_valid = true;
+    critical_section_exit(&opus_cs);
+    return true;
+}
+
 static void core1_entry() {
     int error = 0;
     encoder = opus_encoder_create(48000,2,OPUS_APPLICATION_AUDIO,&error);
@@ -961,54 +1515,17 @@ static void core1_entry() {
     resampler_audio.SetRates(51200,48000);
     resampler_audio.SetFeedMode(true);
     resampler_audio.Prealloc(2, 512, 480);
+    mic_decoder = opus_decoder_create(48000, HOST_MIC_INPUT_CHANNELS, &error);
+    if (error != 0) {
+        DS5_LOG("[Audio] OpusDecoder create failed\n");
+        mic_decoder = nullptr;
+    }
 
     while (true) {
-        static audio_raw_element audio_element{};
-        queue_remove_blocking(&audio_fifo,&audio_element);
-
-        uint32_t current_generation = audio_stream_generation;
-        if (audio_element.generation != current_generation) {
-            audio_stats_note_generation_drop();
-            reset_core1_audio_pipeline(current_generation);
-            continue;
+        const bool did_speaker = core1_process_speaker();
+        const bool did_mic = core1_process_mic();
+        if (!did_speaker && !did_mic) {
+            sleep_us(250);
         }
-        if (core1_audio_stream_generation != current_generation) {
-            reset_core1_audio_pipeline(current_generation);
-        }
-
-        // Resample 512 frames to 480 frames to avoid noise. Thanks @Junhoo.
-        WDL_ResampleSample *in_buf;
-        int nframes = resampler_audio.ResamplePrepare(512, 2, &in_buf);
-        for (int i = 0; i < nframes * 2;i++) {
-            in_buf[i] = audio_element.data[i];
-        }
-        static WDL_ResampleSample out_buf[480 * 2];
-        resampler_audio.ResampleOut(out_buf,nframes,480,2);
-        static uint8_t encoded[sizeof(opus_buf)];
-        const uint32_t encode_start_us = time_us_32();
-        const opus_int32 encoded_bytes = opus_encode_float(encoder,out_buf,480,encoded,sizeof(encoded));
-        audio_stats_note_opus_encode(static_cast<uint32_t>(time_us_32() - encode_start_us));
-        if (encoded_bytes < 0) {
-            audio_debug_log(
-                AudioDebugOpusFifoAddFail,
-                clamp_debug_u8(queue_get_level(&audio_fifo)),
-                opus_debug_level(),
-                0,
-                0,
-                0
-            );
-            continue;
-        }
-        current_generation = audio_stream_generation;
-        if (audio_element.generation != current_generation) {
-            audio_stats_note_generation_drop();
-            reset_core1_audio_pipeline(current_generation);
-            continue;
-        }
-        critical_section_enter_blocking(&opus_cs);
-        memcpy(opus_buf, encoded, sizeof(opus_buf));
-        opus_buf_generation = audio_element.generation;
-        opus_buf_valid = true;
-        critical_section_exit(&opus_cs);
     }
 }

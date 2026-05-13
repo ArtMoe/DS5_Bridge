@@ -64,6 +64,8 @@ const FULL_REAPPLY_COMMANDS = [
   COMMAND_ID.SET_CLASSIC_RUMBLE_GAIN,
   COMMAND_ID.SET_TRIGGER_EFFECT_INTENSITY,
   COMMAND_ID.SET_SPEAKER_VOLUME,
+  COMMAND_ID.SET_HOST_AUDIO_ENABLED,
+  COMMAND_ID.SET_DUPLEX_ENABLED,
   COMMAND_ID.SET_LED_ENABLED,
   COMMAND_ID.SET_IDLE_DISCONNECT_ENABLED,
   COMMAND_ID.SET_USB_SUSPEND_DISCONNECT_ENABLED,
@@ -104,11 +106,18 @@ class MockHidDevice {
     if (reportId === REPORT_ID.AUDIO_STATS) {
       return [...(this.audioStatsReports.shift() ?? audioStatsReport())];
     }
+    if (reportId === REPORT_ID.HOST_AUDIO_STATUS) {
+      return hostAudioStatusReport();
+    }
     throw new Error(`Unexpected report ID: ${reportId}`);
   }
 
   sendFeatureReport(report: number[]): number {
     this.sentReports.push([...report]);
+    return report.length;
+  }
+
+  write(report: number[]): number {
     return report.length;
   }
 
@@ -270,6 +279,17 @@ function audioStatsReport(values: Partial<{
   writeU32(report, 52, values.audio0x36EnqueuedCount ?? 0);
   writeU32(report, 56, values.audio0x36SentCount ?? 0);
   writeU32(report, 60, values.criticalStarvingAudioCount ?? 0);
+  return report;
+}
+
+function hostAudioStatusReport(): number[] {
+  const report = new Array<number>(REPORT_LENGTH).fill(0);
+  report[0] = REPORT_ID.HOST_AUDIO_STATUS;
+  writeMagic(report);
+  report[5] = 1;
+  report[6] = 0;
+  report[7] = 0;
+  report[8] = 1;
   return report;
 }
 

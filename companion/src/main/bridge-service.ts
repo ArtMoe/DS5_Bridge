@@ -13,10 +13,13 @@ import {
   ProtocolError,
   ackUserMessage,
   buildCommandReport,
+  buildHostAudioStreamReport,
   parseAckReport,
   parseAudioDebugReport,
   parseAudioStatsReport,
+  parseHostAudioStatusReport,
   parseStatusReport,
+  HOST_AUDIO_PACKET_TYPE,
   normalizeBridgePresetId,
   pollingRateModeValue
 } from '../shared/protocol';
@@ -24,6 +27,7 @@ import type {
   AudioDebugEventPayload,
   AudioDebugStatsPayload,
   BridgePresetId,
+  HostAudioStatusPayload,
   BridgeStatusPayload,
   MuteButtonMode,
   MuteKeyboardBehavior,
@@ -40,6 +44,7 @@ import type {
 import { SettingsStore } from './settings-store';
 
 const POLL_INTERVAL_MS = 500;
+const HOST_AUDIO_HEARTBEAT_MS = 250;
 const LOW_BATTERY_PERCENT = 20;
 const AUDIO_DEBUG_LOG_LINE_LIMIT = 300;
 const STARTUP_REAPPLY_MIN_SETTLE_MS = 0;
@@ -49,7 +54,7 @@ const DUALSENSE_PRODUCT_IDS = new Set([0x0ce6, 0x0df2]);
 type HidDevice = HID.Device;
 type BridgeDiagnosticsWithoutAudioLog = Omit<
   BridgeDiagnostics,
-  'audioDebugLogPath' | 'audioDebugLogLines' | 'audioDebugDroppedCount' | 'audioDebugStats'
+  'audioDebugLogPath' | 'audioDebugLogLines' | 'audioDebugDroppedCount' | 'audioDebugStats' | 'hostAudioStatus'
 >;
 
 type CommandOptions = {
@@ -149,7 +154,8 @@ function emptyDiagnostics(rawDevices: HidDeviceSummary[]): BridgeDiagnostics {
     audioDebugLogPath: null,
     audioDebugLogLines: [],
     audioDebugDroppedCount: 0,
-    audioDebugStats: null
+    audioDebugStats: null,
+    hostAudioStatus: null
   };
 }
 
@@ -267,6 +273,7 @@ export class BridgeService extends EventEmitter {
   private device: HID.HID | null = null;
   private devicePath: string | null = null;
   private pollTimer: NodeJS.Timeout | null = null;
+  private hostAudioHeartbeatTimer: NodeJS.Timeout | null = null;
   private snapshot: BridgeSnapshot;
   private lastEmittedSnapshotSignature: string | null = null;
   private commandSequence = 0;
@@ -283,7 +290,10 @@ export class BridgeService extends EventEmitter {
   private audioDebugLogLines: string[] = [];
   private audioDebugDroppedCount = 0;
   private audioDebugStats: AudioDebugStatsPayload | null = null;
+  private hostAudioStatus: HostAudioStatusPayload | null = null;
   private lastAudioStatsSignature: string | null = null;
+  private hostAudioCommandActive = false;
+  private hostAudioHeartbeatBusy = false;
   private previousControllerConnected: boolean | null = null;
   private lowBatteryToastActive = false;
 
@@ -303,12 +313,19 @@ export class BridgeService extends EventEmitter {
     this.pollTimer = setInterval(() => {
       this.poll().catch((error) => this.publishError(error));
     }, POLL_INTERVAL_MS);
+    this.hostAudioHeartbeatTimer = setInterval(() => {
+      this.pulseHostAudio().catch((error) => this.publishError(error));
+    }, HOST_AUDIO_HEARTBEAT_MS);
   }
 
   stop(): void {
     if (this.pollTimer) {
       clearInterval(this.pollTimer);
       this.pollTimer = null;
+    }
+    if (this.hostAudioHeartbeatTimer) {
+      clearInterval(this.hostAudioHeartbeatTimer);
+      this.hostAudioHeartbeatTimer = null;
     }
     this.closeDevice();
   }
@@ -331,7 +348,8 @@ export class BridgeService extends EventEmitter {
       audioDebugLogPath: this.audioDebugLogPath,
       audioDebugLogLines: [...this.audioDebugLogLines],
       audioDebugDroppedCount: this.audioDebugDroppedCount,
-      audioDebugStats: this.audioDebugStats ? { ...this.audioDebugStats } : null
+      audioDebugStats: this.audioDebugStats ? { ...this.audioDebugStats } : null,
+      hostAudioStatus: this.hostAudioStatus ? { ...this.hostAudioStatus } : null
     };
   }
 
@@ -376,6 +394,21 @@ export class BridgeService extends EventEmitter {
       }
     } catch {
       // Keep diagnostics best-effort so normal status polling is not blocked.
+    }
+  }
+
+  private readHostAudioStatus(): void {
+    if (!this.device) {
+      this.hostAudioStatus = null;
+      return;
+    }
+
+    try {
+      this.hostAudioStatus = parseHostAudioStatusReport(
+        this.device.getFeatureReport(REPORT_ID.HOST_AUDIO_STATUS, REPORT_LENGTH)
+      );
+    } catch {
+      this.hostAudioStatus = null;
     }
   }
 
@@ -468,6 +501,45 @@ export class BridgeService extends EventEmitter {
     this.snapshot.settings = this.settingsStore.update(customSettingUpdate({
       speakerEnabled: enabled
     }));
+    this.emitSnapshot();
+    return this.getSnapshot();
+  }
+
+  async setHostEncodedAudioEnabled(enabled: boolean): Promise<BridgeSnapshot> {
+    if (enabled) {
+      await this.sendCommand(COMMAND_ID.SET_HOST_AUDIO_ENABLED, 1, { expectSettingsRevisionChange: true });
+      await this.sendCommand(COMMAND_ID.START_HOST_AUDIO, 0, { throwOnCommandError: false });
+      this.hostAudioCommandActive = true;
+      this.sendHostAudioStreamReport(HOST_AUDIO_PACKET_TYPE.HELLO);
+    } else {
+      await this.sendCommand(COMMAND_ID.STOP_HOST_AUDIO, 0, { throwOnCommandError: false });
+      await this.sendCommand(COMMAND_ID.SET_HOST_AUDIO_ENABLED, 0, { expectSettingsRevisionChange: true });
+      this.hostAudioCommandActive = false;
+    }
+    this.snapshot.settings = this.settingsStore.update(customSettingUpdate({
+      hostEncodedAudioEnabled: enabled,
+      duplexMicEnabled: enabled ? this.snapshot.settings.duplexMicEnabled : false
+    }));
+    if (!enabled) {
+      await this.sendCommand(COMMAND_ID.SET_DUPLEX_ENABLED, 0, { throwOnCommandError: false });
+    }
+    this.readHostAudioStatus();
+    this.emitSnapshot();
+    return this.getSnapshot();
+  }
+
+  async setDuplexMicEnabled(enabled: boolean): Promise<BridgeSnapshot> {
+    const nextEnabled = enabled && this.settingsStore.get().hostEncodedAudioEnabled;
+    await this.sendCommand(COMMAND_ID.SET_DUPLEX_ENABLED, nextEnabled ? 1 : 0, {
+      expectSettingsRevisionChange: true
+    });
+    this.sendHostAudioStreamReport(
+      nextEnabled ? HOST_AUDIO_PACKET_TYPE.SET_DUPLEX_ENABLED : HOST_AUDIO_PACKET_TYPE.SET_DUPLEX_DISABLED
+    );
+    this.snapshot.settings = this.settingsStore.update(customSettingUpdate({
+      duplexMicEnabled: nextEnabled
+    }));
+    this.readHostAudioStatus();
     this.emitSnapshot();
     return this.getSnapshot();
   }
@@ -717,6 +789,45 @@ export class BridgeService extends EventEmitter {
     return ack;
   }
 
+  private sendHostAudioStreamReport(packetType: number): void {
+    if (!this.device) {
+      return;
+    }
+    try {
+      this.device.write(buildHostAudioStreamReport({ packetType }));
+    } catch {
+      // Older firmware exposes only feature reports. The status path will show
+      // fallback if the interrupt OUT stream is unavailable.
+    }
+  }
+
+  private async pulseHostAudio(): Promise<void> {
+    const settings = this.settingsStore.get();
+    if (!settings.hostEncodedAudioEnabled || this.hostAudioHeartbeatBusy) {
+      return;
+    }
+    this.hostAudioHeartbeatBusy = true;
+    try {
+      await this.ensureCompanionDevice();
+      if (!this.device) {
+        this.hostAudioCommandActive = false;
+        return;
+      }
+      if (!this.hostAudioCommandActive) {
+        await this.sendCommand(COMMAND_ID.SET_HOST_AUDIO_ENABLED, 1, { throwOnCommandError: false });
+        await this.sendCommand(COMMAND_ID.START_HOST_AUDIO, 0, { throwOnCommandError: false });
+        if (settings.duplexMicEnabled) {
+          await this.sendCommand(COMMAND_ID.SET_DUPLEX_ENABLED, 1, { throwOnCommandError: false });
+        }
+        this.hostAudioCommandActive = true;
+      }
+      this.sendHostAudioStreamReport(HOST_AUDIO_PACKET_TYPE.HEARTBEAT);
+      this.readHostAudioStatus();
+    } finally {
+      this.hostAudioHeartbeatBusy = false;
+    }
+  }
+
   private async poll(): Promise<void> {
     if (Date.now() < this.pollPausedUntil) {
       return;
@@ -770,6 +881,7 @@ export class BridgeService extends EventEmitter {
 
     this.readAudioDebugEvents();
     this.readAudioDebugStats();
+    this.readHostAudioStatus();
     this.maybeEmitStatusToasts(status);
 
     const previousUptime = this.lastUptimeSeconds;
@@ -956,6 +1068,23 @@ export class BridgeService extends EventEmitter {
       await this.sendCommand(COMMAND_ID.RESET_ADAPTIVE_TRIGGERS, 0, { throwOnCommandError: false });
     }
     await this.applySpeakerSettings(settings, expectSettingsRevisionChange);
+    await this.sendCommand(
+      COMMAND_ID.SET_HOST_AUDIO_ENABLED,
+      settings.hostEncodedAudioEnabled ? 1 : 0,
+      { expectSettingsRevisionChange }
+    );
+    if (settings.hostEncodedAudioEnabled) {
+      await this.sendCommand(COMMAND_ID.START_HOST_AUDIO, 0, { throwOnCommandError: false });
+      await this.sendCommand(
+        COMMAND_ID.SET_DUPLEX_ENABLED,
+        settings.duplexMicEnabled ? 1 : 0,
+        { expectSettingsRevisionChange }
+      );
+      this.hostAudioCommandActive = true;
+    } else {
+      await this.sendCommand(COMMAND_ID.SET_DUPLEX_ENABLED, 0, { throwOnCommandError: false });
+      this.hostAudioCommandActive = false;
+    }
     await this.sendCommand(COMMAND_ID.SET_LED_ENABLED, settings.ledEnabled ? 1 : 0, {
       expectSettingsRevisionChange
     });
@@ -1039,6 +1168,8 @@ export class BridgeService extends EventEmitter {
     }
     this.device = null;
     this.devicePath = null;
+    this.hostAudioCommandActive = false;
+    this.hostAudioStatus = null;
   }
 
   private emitSnapshot(): void {
@@ -1061,7 +1192,8 @@ export class BridgeService extends EventEmitter {
         audioDebugLogPath: this.snapshot.diagnostics.audioDebugLogPath,
         audioDebugLogLineCount: this.snapshot.diagnostics.audioDebugLogLines.length,
         audioDebugLogTail: this.snapshot.diagnostics.audioDebugLogLines.at(-1) ?? null,
-        audioDebugDroppedCount: this.snapshot.diagnostics.audioDebugDroppedCount
+        audioDebugDroppedCount: this.snapshot.diagnostics.audioDebugDroppedCount,
+        hostAudioStatus: this.snapshot.diagnostics.hostAudioStatus
       }
     });
     if (signature === this.lastEmittedSnapshotSignature) {

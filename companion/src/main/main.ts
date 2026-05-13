@@ -385,6 +385,10 @@ function registerIpc(service: BridgeService): void {
   ));
   ipcMain.handle('bridge:setSpeakerVolume', (_event, value: number) => service.setSpeakerVolume(value));
   ipcMain.handle('bridge:setSpeakerEnabled', (_event, value: boolean) => service.setSpeakerEnabled(value));
+  ipcMain.handle('bridge:setHostEncodedAudioEnabled', (_event, value: boolean) => (
+    service.setHostEncodedAudioEnabled(value)
+  ));
+  ipcMain.handle('bridge:setDuplexMicEnabled', (_event, value: boolean) => service.setDuplexMicEnabled(value));
   ipcMain.handle('bridge:setLightbarColor', (_event, color: string, brightness: number) => (
     service.setLightbarColor(color, brightness)
   ));

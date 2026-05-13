@@ -73,6 +73,13 @@ void on_bt_data(CHANNEL_TYPE channel, uint8_t *data, uint16_t len) {
         return;
     }
 
+#ifdef ENABLE_COMPANION
+    if ((data[2] & 0x02) != 0) {
+        audio_mic_add_packet(data + 4, len > 4 ? static_cast<uint16_t>(len - 4) : 0);
+        return;
+    }
+#endif
+
     if ((data[56] & 1) != (interrupt_in_data[53] & 1)) {
         set_headset(data[56] & 1);
     }
