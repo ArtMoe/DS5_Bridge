@@ -1,4 +1,4 @@
-name: Build release firmware
+name: Build release artifacts
 
 on:
   release:
@@ -14,7 +14,7 @@ permissions:
   contents: write
 
 jobs:
-  build:
+  firmware:
     name: Build and upload companion UF2
     runs-on: ubuntu-latest
 
@@ -57,3 +57,36 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           gh release upload "${{ github.event.release.tag_name }}" artifacts/*.uf2 --clobber
+
+  companion-installer:
+    name: Build and upload Windows companion installer
+    runs-on: windows-latest
+
+    steps:
+      - name: Checkout release ref
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.release.tag_name }}
+          submodules: recursive
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: companion/package-lock.json
+
+      - name: Install companion dependencies
+        working-directory: companion
+        run: npm ci
+
+      - name: Build Windows companion installer
+        working-directory: companion
+        run: npm run installer:win
+
+      - name: Upload Windows companion installer to release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          $installer = Get-ChildItem companion/artifacts/installer/DS5-Bridge-Companion-Setup-*.exe | Select-Object -First 1
+          gh release upload "${{ github.event.release.tag_name }}" $installer.FullName --clobber

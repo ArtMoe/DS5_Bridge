@@ -12,6 +12,7 @@ const outDir = path.join(companionDir, 'artifacts', `DS5 Bridge-win32-x64-${stam
 const appDir = path.join(outDir, 'resources', 'app');
 const assetDir = path.join('assets', 'controllers');
 const appIcon = path.join(repoDir, assetDir, 'ds5-bridge_app-icon-tile.ico');
+const appPackage = JSON.parse(fs.readFileSync(path.join(companionDir, 'package.json'), 'utf8'));
 const appAssets = [
   'ds5-bridge_app-icon-tile.ico',
   'ds5-bridge_app-icon-tile.png',
@@ -74,9 +75,11 @@ if (fs.existsSync(electronExe)) {
 if (fs.existsSync(bridgeExe)) {
   await rcedit(bridgeExe, {
     icon: appIcon,
+    'file-version': appPackage.version,
+    'product-version': appPackage.version,
     'version-string': {
       FileDescription: 'DS5 Bridge Companion',
-      InternalFilename: 'DS5 Bridge.exe',
+      InternalName: 'DS5 Bridge',
       OriginalFilename: 'DS5 Bridge.exe',
       ProductName: 'DS5 Bridge'
     }

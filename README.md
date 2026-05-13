@@ -14,12 +14,14 @@ for tuning the controller without reflashing the Pico.
 
 ## Quick Start
 
-1. Download the latest release package from this repository.
+1. Download the latest release firmware and Windows companion installer from
+   this repository.
 2. With the Pico 2 W unplugged, hold `BOOTSEL`, then connect it to your PC.
 3. Copy the release `.uf2` firmware file to the mounted Pico storage device.
 4. Put the DualSense controller into Bluetooth pairing mode.
 5. Disconnect and reconnect the Pico 2 W, then wait for the controller to pair.
-6. Open the companion app and choose a preset or customize the controller.
+6. Install and open the companion app, then choose a preset or customize the
+   controller.
 
 The controller appears on your PC after the bridge connects to the DualSense
 over Bluetooth.
