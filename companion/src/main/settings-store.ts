@@ -9,6 +9,8 @@ export const DEFAULT_SETTINGS: CompanionSettings = {
   hapticsEnabled: true,
   hapticsGainPercent: 100,
   hapticsBufferLength: 64,
+  classicRumbleEnabled: true,
+  classicRumbleGainPercent: 100,
   adaptiveTriggersEnabled: true,
   triggerEffectIntensityPercent: 100,
   triggerTestMode: 'feedback',
@@ -71,6 +73,12 @@ function normalizeSettings(value: Partial<CompanionSettings> | null | undefined)
     hapticsBufferLength: Number.isFinite(value?.hapticsBufferLength)
       ? Math.max(64, Math.min(255, Math.round(value!.hapticsBufferLength!)))
       : DEFAULT_SETTINGS.hapticsBufferLength,
+    classicRumbleEnabled: typeof value?.classicRumbleEnabled === 'boolean'
+      ? value.classicRumbleEnabled
+      : DEFAULT_SETTINGS.classicRumbleEnabled,
+    classicRumbleGainPercent: Number.isFinite(value?.classicRumbleGainPercent)
+      ? Math.max(0, Math.min(200, Math.round(value!.classicRumbleGainPercent!)))
+      : DEFAULT_SETTINGS.classicRumbleGainPercent,
     adaptiveTriggersEnabled: typeof value?.adaptiveTriggersEnabled === 'boolean'
       ? value.adaptiveTriggersEnabled
       : DEFAULT_SETTINGS.adaptiveTriggersEnabled,

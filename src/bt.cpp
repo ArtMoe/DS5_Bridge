@@ -147,6 +147,7 @@ static void hci_packet_handler(uint8_t packet_type, uint16_t channel, uint8_t *p
 static void l2cap_packet_handler(uint8_t packet_type, uint16_t channel, uint8_t *packet, uint16_t size);
 static bool build_interrupt_output_packet(uint8_t *data, uint16_t len, vector<uint8_t> &packet);
 static bool enqueue_state_output(uint8_t *data, uint16_t len, uint8_t reason);
+static void init_state_report(uint8_t *report);
 static bool select_next_output_packet_locked(output_packet &packet, uint32_t now);
 
 static btstack_packet_callback_registration_t hci_event_callback_registration, l2cap_event_callback_registration;
@@ -183,6 +184,7 @@ static bool lightbar_restore_pending = false;
 static uint32_t lightbar_restore_at_us = 0;
 static uint8_t state_report_seq = 0;
 static bool speaker_output_enabled = false;
+static uint8_t classic_rumble_gain_percent = 100;
 
 static void update_max_u32(uint32_t &current, uint32_t candidate) {
     if (candidate > current) {
@@ -235,6 +237,62 @@ bool bt_is_controller_connected() {
 
 uint8_t bt_controller_type() {
     return controller_type;
+}
+
+void bt_set_classic_rumble_gain(uint8_t gain_percent) {
+    classic_rumble_gain_percent = gain_percent > 200 ? 200 : gain_percent;
+}
+
+uint8_t bt_classic_rumble_gain() {
+    return classic_rumble_gain_percent;
+}
+
+static uint8_t scale_classic_rumble_byte(uint8_t value) {
+    const uint16_t scaled = static_cast<uint16_t>(value) * classic_rumble_gain_percent;
+    return static_cast<uint8_t>(scaled >= 25500 ? 255 : (scaled + 50) / 100);
+}
+
+static bool apply_classic_rumble_gain(uint8_t *data, uint16_t len) {
+    if (data == nullptr || len < 3 + DS_OUTPUT_REPORT_COMMON_SIZE) {
+        return false;
+    }
+    if (data[0] != DS_OUTPUT_REPORT_BT || data[2] != DS_OUTPUT_TAG) {
+        return false;
+    }
+
+    uint8_t *payload = data + 3;
+    const uint16_t payload_len = len - 3;
+    const uint8_t flag0 = payload[OUTPUT_PAYLOAD_VALID_FLAG0_OFFSET];
+    const uint8_t flag2 = payload[OUTPUT_PAYLOAD_VALID_FLAG2_OFFSET];
+    const bool has_rumble = (flag0 & (
+        DS_OUTPUT_VALID_FLAG0_COMPATIBLE_VIBRATION
+        | DS_OUTPUT_VALID_FLAG0_HAPTICS_SELECT
+    )) != 0 || (flag2 & DS_OUTPUT_VALID_FLAG2_COMPATIBLE_VIBRATION2) != 0;
+    if (!has_rumble || payload_len <= OUTPUT_PAYLOAD_MOTOR_LEFT_OFFSET) {
+        return false;
+    }
+
+    const uint8_t right = payload[OUTPUT_PAYLOAD_MOTOR_RIGHT_OFFSET];
+    const uint8_t left = payload[OUTPUT_PAYLOAD_MOTOR_LEFT_OFFSET];
+    payload[OUTPUT_PAYLOAD_MOTOR_RIGHT_OFFSET] = scale_classic_rumble_byte(right);
+    payload[OUTPUT_PAYLOAD_MOTOR_LEFT_OFFSET] = scale_classic_rumble_byte(left);
+    return payload[OUTPUT_PAYLOAD_MOTOR_RIGHT_OFFSET] != right
+        || payload[OUTPUT_PAYLOAD_MOTOR_LEFT_OFFSET] != left;
+}
+
+void bt_set_classic_rumble_output(uint8_t right, uint8_t left) {
+    if (hid_interrupt_cid == 0) {
+        return;
+    }
+
+    uint8_t report[DS_OUTPUT_REPORT_BT_SIZE];
+    init_state_report(report);
+    report[3 + OUTPUT_PAYLOAD_VALID_FLAG0_OFFSET] = DS_OUTPUT_VALID_FLAG0_COMPATIBLE_VIBRATION
+        | DS_OUTPUT_VALID_FLAG0_HAPTICS_SELECT;
+    report[3 + OUTPUT_PAYLOAD_VALID_FLAG2_OFFSET] = DS_OUTPUT_VALID_FLAG2_COMPATIBLE_VIBRATION2;
+    report[3 + OUTPUT_PAYLOAD_MOTOR_RIGHT_OFFSET] = scale_classic_rumble_byte(right);
+    report[3 + OUTPUT_PAYLOAD_MOTOR_LEFT_OFFSET] = scale_classic_rumble_byte(left);
+    bt_write(report, sizeof(report));
 }
 
 static uint8_t scale_lightbar_channel(uint8_t channel, uint8_t brightness_percent) {
@@ -1456,6 +1514,7 @@ void bt_write(uint8_t *data, uint16_t len) {
 bool bt_write_classified_output(uint8_t *data, uint16_t len) {
     output_counters.normal_0x31_rx_count++;
     bt_sanitize_host_speaker_amp_ownership(data, len);
+    apply_classic_rumble_gain(data, len);
     split_state_from_mixed_output(data, len);
     const uint8_t reason = classify_output_report(data, len);
     if (reason == OutputReasonStateNoop) {

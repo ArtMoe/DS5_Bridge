@@ -845,6 +845,11 @@ button {
   margin-bottom: 12px;
 }
 
+.haptics-flip-button {
+  margin-left: auto;
+  white-space: nowrap;
+}
+
 .feature-icon {
   width: 30px;
   height: 30px;

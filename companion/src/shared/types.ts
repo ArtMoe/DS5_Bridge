@@ -14,6 +14,8 @@ export interface CompanionSettings {
   hapticsEnabled: boolean;
   hapticsGainPercent: number;
   hapticsBufferLength: number;
+  classicRumbleEnabled: boolean;
+  classicRumbleGainPercent: number;
   adaptiveTriggersEnabled: boolean;
   triggerEffectIntensityPercent: number;
   triggerTestMode: TriggerTestMode;

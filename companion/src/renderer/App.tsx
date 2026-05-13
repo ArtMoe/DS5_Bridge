@@ -695,6 +695,7 @@ export function App() {
   const [showDiagnostics, setShowDiagnostics] = useState(false);
   const [activeControlTab, setActiveControlTab] = useState<ControlTab>('haptics');
   const [hapticsValue, setHapticsValue] = useState(100);
+  const [classicRumbleValue, setClassicRumbleValue] = useState(100);
   const [speakerVolumeValue, setSpeakerVolumeValue] = useState(100);
   const [lightbarColor, setLightbarColor] = useState('#ffff00');
   const [customLightbarColor, setCustomLightbarColor] = useState<string | null>(() => {
@@ -712,16 +713,19 @@ export function App() {
   const [pendingAction, setPendingAction] = useState<string | null>(null);
   const [showBridgeSettings, setShowBridgeSettings] = useState(false);
   const [showNotificationsMenu, setShowNotificationsMenu] = useState(false);
+  const [showClassicRumbleControl, setShowClassicRumbleControl] = useState(false);
   const [testLocked, setTestLocked] = useState(false);
   const [speakerTestLocked, setSpeakerTestLocked] = useState(false);
   const [speakerOutputAvailable, setSpeakerOutputAvailable] = useState<boolean | null>(null);
   const [speakerTestError, setSpeakerTestError] = useState<string | null>(null);
   const [triggerTestLocked, setTriggerTestLocked] = useState(false);
   const [hapticsCommitPending, setHapticsCommitPending] = useState(false);
+  const [classicRumbleCommitPending, setClassicRumbleCommitPending] = useState(false);
   const [speakerVolumeCommitPending, setSpeakerVolumeCommitPending] = useState(false);
   const [lightbarCommitPending, setLightbarCommitPending] = useState(false);
   const [sleepConfirmVisible, setSleepConfirmVisible] = useState(false);
   const hapticsEditingRef = useRef(false);
+  const classicRumbleEditingRef = useRef(false);
   const speakerVolumeEditingRef = useRef(false);
   const lightbarBrightnessEditingRef = useRef(false);
   const triggerEffectEditingRef = useRef(false);
@@ -740,6 +744,7 @@ export function App() {
       if (!cancelled) {
         setSnapshot(next);
         setHapticsValue(snapHapticsValue(next.settings.hapticsGainPercent));
+        setClassicRumbleValue(snapHapticsValue(next.settings.classicRumbleGainPercent));
         setSpeakerVolumeValue(snapSpeakerVolume(next.settings.speakerVolumePercent));
         const nextLightbarColor = lightbarColorFromSnapshot(next);
         setLightbarColor(nextLightbarColor);
@@ -756,6 +761,9 @@ export function App() {
       setSnapshot(next);
       if (!hapticsEditingRef.current) {
         setHapticsValue(snapHapticsValue(next.settings.hapticsGainPercent));
+      }
+      if (!classicRumbleEditingRef.current) {
+        setClassicRumbleValue(snapHapticsValue(next.settings.classicRumbleGainPercent));
       }
       if (!speakerVolumeEditingRef.current) {
         setSpeakerVolumeValue(snapSpeakerVolume(next.settings.speakerVolumePercent));
@@ -901,6 +909,8 @@ export function App() {
   const sleepControllerSupported = Boolean(snapshot?.status?.firmwareFlags.sleepControllerControl);
   const pollingRateControlSupported = Boolean(snapshot?.status?.firmwareFlags.pollingRateControl);
   const hapticsEnabled = Boolean(snapshot?.settings.hapticsEnabled);
+  const classicRumbleEnabled = Boolean(snapshot?.settings.classicRumbleEnabled);
+  const activeHapticsFeatureEnabled = showClassicRumbleControl ? classicRumbleEnabled : hapticsEnabled;
   const speakerEnabled = Boolean(snapshot?.settings.speakerEnabled);
   const adaptiveTriggersEnabled = Boolean(snapshot?.settings.adaptiveTriggersEnabled);
   const lightbarEnabled = Boolean(snapshot?.settings.lightbarEnabled);
@@ -917,6 +927,7 @@ export function App() {
     || !hapticsEnabled
     || pendingAction !== null
     || hapticsCommitPending
+    || classicRumbleCommitPending
     || speakerVolumeCommitPending
     || lightbarCommitPending
     || testLocked
@@ -924,7 +935,19 @@ export function App() {
     || audioStreamActive
     || Boolean(snapshot?.status?.testHapticsBusy)
     || Boolean(snapshot?.status?.testHapticsCooldown);
+  const testRumbleUnavailable = !connected
+    || !classicRumbleEnabled
+    || pendingAction !== null
+    || hapticsCommitPending
+    || classicRumbleCommitPending
+    || speakerVolumeCommitPending
+    || lightbarCommitPending
+    || testLocked
+    || gameStreamActive
+    || audioStreamActive
+    || Boolean(snapshot?.status?.testHapticsBusy);
   const hapticsTestReady = !testHapticsUnavailable;
+  const rumbleTestReady = !testRumbleUnavailable;
   const hapticsStatusLabel = testLocked || snapshot?.status?.testHapticsBusy
     ? 'Testing'
     : snapshot?.status?.testHapticsCooldown
@@ -938,16 +961,36 @@ export function App() {
             : connected && pendingAction !== null
               ? 'Command Pending'
               : 'Unavailable';
+  const rumbleStatusLabel = testLocked
+    ? 'Testing'
+    : rumbleTestReady
+      ? 'Ready'
+      : connected && gameStreamActive
+        ? 'Game Active'
+        : connected && audioStreamActive
+          ? 'Audio Active'
+          : connected && pendingAction !== null
+            ? 'Command Pending'
+            : 'Unavailable';
   const hapticsStatusTone = testLocked || snapshot?.status?.testHapticsBusy || hapticsTestReady
     ? 'good'
     : connected && (snapshot?.status?.testHapticsCooldown || gameStreamActive || audioStreamActive || pendingAction !== null)
       ? 'warn'
       : 'idle';
+  const rumbleStatusTone = testLocked || rumbleTestReady
+    ? 'good'
+    : connected && (gameStreamActive || audioStreamActive || pendingAction !== null)
+      ? 'warn'
+      : 'idle';
+  const activeFeedbackTestUnavailable = showClassicRumbleControl ? testRumbleUnavailable : testHapticsUnavailable;
+  const activeFeedbackStatusLabel = showClassicRumbleControl ? rumbleStatusLabel : hapticsStatusLabel;
+  const activeFeedbackStatusTone = showClassicRumbleControl ? rumbleStatusTone : hapticsStatusTone;
   const testSpeakerUnavailable = !connected
     || !speakerVolumeSupported
     || !speakerEnabled
     || pendingAction !== null
     || hapticsCommitPending
+    || classicRumbleCommitPending
     || speakerVolumeCommitPending
     || lightbarCommitPending
     || speakerTestLocked
@@ -1051,6 +1094,7 @@ export function App() {
       `state=${snapshot.state}`,
       `firmware=${snapshot.status.firmwareVersion}`,
       `triggerEffectIntensity=${snapshot.settings.triggerEffectIntensityPercent}%`,
+      `classicRumble=${snapshot.settings.classicRumbleEnabled ? snapshot.settings.classicRumbleGainPercent : 0}%`,
       `appSpeakerSlider=${snapshot.settings.speakerVolumePercent}%`,
       `firmwareSpeakerGate=${snapshot.status.speakerVolumePercent}%`,
       `audioRecent=${snapshot.status.audioRecent ? 'true' : 'false'}`,
@@ -1134,6 +1178,35 @@ export function App() {
     } finally {
       setHapticsCommitPending(false);
       hapticsEditingRef.current = false;
+    }
+  }
+
+  async function commitClassicRumbleValue(value = classicRumbleValue) {
+    const snappedValue = snapHapticsValue(value);
+    if (
+      !snapshot
+      || snapshot.state !== 'connected'
+      || !snapshot.settings.classicRumbleEnabled
+      || snappedValue === snapshot.settings.classicRumbleGainPercent
+      || classicRumbleCommitPending
+    ) {
+      classicRumbleEditingRef.current = false;
+      return;
+    }
+
+    setClassicRumbleCommitPending(true);
+    classicRumbleEditingRef.current = true;
+    try {
+      const next = await window.bridge.setClassicRumbleGain(snappedValue);
+      setSnapshot(next);
+      setClassicRumbleValue(snapHapticsValue(next.settings.classicRumbleGainPercent));
+    } catch {
+      const next = await window.bridge.getStatus();
+      setSnapshot(next);
+      setClassicRumbleValue(snapHapticsValue(next.settings.classicRumbleGainPercent));
+    } finally {
+      setClassicRumbleCommitPending(false);
+      classicRumbleEditingRef.current = false;
     }
   }
 
@@ -1277,6 +1350,13 @@ export function App() {
     void commitHapticsValue(snappedValue);
   }
 
+  function setClassicRumblePreset(value: number) {
+    const snappedValue = snapHapticsValue(value);
+    classicRumbleEditingRef.current = true;
+    setClassicRumbleValue(snappedValue);
+    void commitClassicRumbleValue(snappedValue);
+  }
+
   function setSpeakerPreset(value: number) {
     const snappedValue = snapSpeakerVolume(value);
     speakerVolumeEditingRef.current = true;
@@ -1295,9 +1375,15 @@ export function App() {
     return LIGHTBAR_COLOR_NAMES[normalized] ?? 'Custom';
   }
 
-  function runTestHaptics() {
+  function runFeedbackTest() {
     setTestLocked(true);
-    void runAction('test', async () => {
+    void runAction(showClassicRumbleControl ? 'test-rumble' : 'test', async () => {
+      if (snapshot && showClassicRumbleControl) {
+        if (classicRumbleValue !== snapshot.settings.classicRumbleGainPercent) {
+          await window.bridge.setClassicRumbleGain(classicRumbleValue);
+        }
+        return window.bridge.testClassicRumble();
+      }
       if (snapshot && hapticsValue !== snapshot.settings.hapticsGainPercent) {
         await window.bridge.setHapticsGain(hapticsValue);
       }
@@ -1378,6 +1464,13 @@ export function App() {
   function toggleHapticsEnabled() {
     if (!snapshot) return;
     void runAction('haptics-enabled', () => window.bridge.setHapticsEnabled(!snapshot.settings.hapticsEnabled));
+  }
+
+  function toggleClassicRumbleEnabled() {
+    if (!snapshot) return;
+    void runAction('classic-rumble-enabled', () => (
+      window.bridge.setClassicRumbleEnabled(!snapshot.settings.classicRumbleEnabled)
+    ));
   }
 
   function toggleSpeakerEnabled() {
@@ -1790,10 +1883,10 @@ export function App() {
                   <button
                     type="button"
                     role="switch"
-                    aria-checked={snapshot.settings.hapticsEnabled}
-                    className={`switch ${snapshot.settings.hapticsEnabled ? 'on' : ''}`}
+                    aria-checked={activeHapticsFeatureEnabled}
+                    className={`switch ${activeHapticsFeatureEnabled ? 'on' : ''}`}
                     disabled={!connected || pendingAction !== null}
-                    onClick={toggleHapticsEnabled}
+                    onClick={showClassicRumbleControl ? toggleClassicRumbleEnabled : toggleHapticsEnabled}
                   >
                     <span />
                   </button>
@@ -1802,61 +1895,112 @@ export function App() {
               <div className="feature-card-grid">
                 <section className="feature-card">
                   <div className="feature-card-title">
-                    <span className="feature-icon"><Sparkles size={20} /></span>
+                    <span className="feature-icon">
+                      {showClassicRumbleControl ? <SlidersHorizontal size={20} /> : <Sparkles size={20} />}
+                    </span>
                     <div className="title-copy">
-                      <h3>Intensity</h3>
-                      <p>Set the overall strength of haptic feedback.</p>
+                      <h3>{showClassicRumbleControl ? 'Rumble' : 'Intensity'}</h3>
+                      <p>
+                        {showClassicRumbleControl
+                          ? 'Scale game rumble motor strength.'
+                          : 'Set the overall strength of haptic feedback.'}
+                      </p>
                     </div>
+                    <button
+                      type="button"
+                      className="card-flip-button haptics-flip-button"
+                      onClick={() => setShowClassicRumbleControl((value) => !value)}
+                    >
+                      {showClassicRumbleControl ? <Sparkles size={17} /> : <SlidersHorizontal size={17} />}
+                      {showClassicRumbleControl ? 'Haptics' : 'Rumble'}
+                    </button>
                   </div>
                   <div className="framed-slider">
                     <label className="slider-row">
                       <span>0%</span>
                       <div className="range-control">
-                        <input
-                          type="range"
-                          min="0"
-                          max="200"
-                          step={HAPTICS_STEP}
-                          value={hapticsValue}
-                          disabled={!connected || !snapshot.settings.hapticsEnabled}
-                          style={{ '--range-fill': `${hapticsValue / 2}%` } as CSSProperties}
-                          onPointerDown={() => {
-                            hapticsEditingRef.current = true;
-                          }}
-                          onChange={(event) => setHapticsValue(snapHapticsValue(Number(event.currentTarget.value)))}
-                          onPointerUp={() => void commitHapticsValue()}
-                          onKeyDown={(event) => {
-                            if (event.key === 'ArrowLeft' || event.key === 'ArrowRight' || event.key === 'Home' || event.key === 'End') {
+                        {showClassicRumbleControl ? (
+                          <input
+                            type="range"
+                            min="0"
+                            max="200"
+                            step={HAPTICS_STEP}
+                            value={classicRumbleValue}
+                            disabled={!connected || !snapshot.settings.classicRumbleEnabled}
+                            style={{ '--range-fill': `${classicRumbleValue / 2}%` } as CSSProperties}
+                            onPointerDown={() => {
+                              classicRumbleEditingRef.current = true;
+                            }}
+                            onChange={(event) => setClassicRumbleValue(snapHapticsValue(Number(event.currentTarget.value)))}
+                            onPointerUp={() => void commitClassicRumbleValue()}
+                            onKeyDown={(event) => {
+                              if (event.key === 'ArrowLeft' || event.key === 'ArrowRight' || event.key === 'Home' || event.key === 'End') {
+                                classicRumbleEditingRef.current = true;
+                              }
+                            }}
+                            onKeyUp={(event) => {
+                              if (event.key === 'ArrowLeft' || event.key === 'ArrowRight' || event.key === 'Home' || event.key === 'End') {
+                                void commitClassicRumbleValue();
+                              }
+                            }}
+                            onBlur={() => void commitClassicRumbleValue()}
+                          />
+                        ) : (
+                          <input
+                            type="range"
+                            min="0"
+                            max="200"
+                            step={HAPTICS_STEP}
+                            value={hapticsValue}
+                            disabled={!connected || !snapshot.settings.hapticsEnabled}
+                            style={{ '--range-fill': `${hapticsValue / 2}%` } as CSSProperties}
+                            onPointerDown={() => {
                               hapticsEditingRef.current = true;
-                            }
-                          }}
-                          onKeyUp={(event) => {
-                            if (event.key === 'ArrowLeft' || event.key === 'ArrowRight' || event.key === 'Home' || event.key === 'End') {
-                              void commitHapticsValue();
-                            }
-                          }}
-                          onBlur={() => void commitHapticsValue()}
-                        />
+                            }}
+                            onChange={(event) => setHapticsValue(snapHapticsValue(Number(event.currentTarget.value)))}
+                            onPointerUp={() => void commitHapticsValue()}
+                            onKeyDown={(event) => {
+                              if (event.key === 'ArrowLeft' || event.key === 'ArrowRight' || event.key === 'Home' || event.key === 'End') {
+                                hapticsEditingRef.current = true;
+                              }
+                            }}
+                            onKeyUp={(event) => {
+                              if (event.key === 'ArrowLeft' || event.key === 'ArrowRight' || event.key === 'Home' || event.key === 'End') {
+                                void commitHapticsValue();
+                              }
+                            }}
+                            onBlur={() => void commitHapticsValue()}
+                          />
+                        )}
                         <div className="range-ticks" aria-hidden="true">
                           {HAPTICS_SLIDER_TICKS.map((value) => (
                             <span key={value} className={sliderTickClass(value, 200)} />
                           ))}
                         </div>
                       </div>
-                      <strong>{hapticsValue}%</strong>
+                      <strong>{showClassicRumbleControl ? classicRumbleValue : hapticsValue}%</strong>
                     </label>
                   </div>
-                  <p>Balanced feedback across both motors.</p>
+                  <p>{showClassicRumbleControl ? 'Applies to game rumble output.' : 'Balanced feedback across both motors.'}</p>
                   <div className="segmented-row">
                     {HAPTICS_PRESETS.map(([label, value]) => {
                       const presetValue = snapHapticsValue(Number(value));
+                      const currentValue = showClassicRumbleControl ? classicRumbleValue : hapticsValue;
                       return (
                         <button
                           key={label}
                           type="button"
-                          className={hapticsValue === presetValue ? 'active' : ''}
-                          disabled={!connected || !snapshot.settings.hapticsEnabled || hapticsCommitPending}
-                          onClick={() => setHapticsPreset(presetValue)}
+                          className={currentValue === presetValue ? 'active' : ''}
+                          disabled={
+                            !connected
+                            || (showClassicRumbleControl ? !snapshot.settings.classicRumbleEnabled : !snapshot.settings.hapticsEnabled)
+                            || (showClassicRumbleControl ? classicRumbleCommitPending : hapticsCommitPending)
+                          }
+                          onClick={() => (
+                            showClassicRumbleControl
+                              ? setClassicRumblePreset(presetValue)
+                              : setHapticsPreset(presetValue)
+                          )}
                         >
                           {label}
                         </button>
@@ -1872,9 +2016,17 @@ export function App() {
                       <p>Run a short test to feel the current settings.</p>
                     </div>
                   </div>
-                  <button className="primary-action" type="button" disabled={testHapticsUnavailable} onClick={runTestHaptics}>
+                  <button className="primary-action" type="button" disabled={activeFeedbackTestUnavailable} onClick={runFeedbackTest}>
                     <Play size={15} />
-                    {connected && gameStreamActive
+                    {showClassicRumbleControl
+                      ? connected && gameStreamActive
+                        ? 'Game Active'
+                        : connected && audioStreamActive
+                          ? 'Audio Active'
+                        : connected && testLocked
+                          ? 'Testing'
+                          : 'Test Rumble'
+                    : connected && gameStreamActive
                       ? 'Game Active'
                       : connected && audioStreamActive
                         ? 'Audio Active'
@@ -1886,10 +2038,10 @@ export function App() {
                     <span className="stop-glyph" aria-hidden="true" />
                     Stop Test
                   </button>
-                  <div className={`feature-status test-status ${hapticsStatusTone}`}>
+                  <div className={`feature-status test-status ${activeFeedbackStatusTone}`}>
                     <span className="status-badge">
-                      <span className={`dot ${hapticsStatusTone}`} />
-                      <strong>{hapticsStatusLabel}</strong>
+                      <span className={`dot ${activeFeedbackStatusTone}`} />
+                      <strong>{activeFeedbackStatusLabel}</strong>
                     </span>
                   </div>
                 </section>

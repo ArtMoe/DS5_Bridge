@@ -374,6 +374,8 @@ function registerIpc(service: BridgeService): void {
   ipcMain.handle('bridge:setHapticsGain', (_event, value: number) => service.setHapticsGain(value));
   ipcMain.handle('bridge:setHapticsEnabled', (_event, value: boolean) => service.setHapticsEnabled(value));
   ipcMain.handle('bridge:setHapticsBufferLength', (_event, value: number) => service.setHapticsBufferLength(value));
+  ipcMain.handle('bridge:setClassicRumbleGain', (_event, value: number) => service.setClassicRumbleGain(value));
+  ipcMain.handle('bridge:setClassicRumbleEnabled', (_event, value: boolean) => service.setClassicRumbleEnabled(value));
   ipcMain.handle('bridge:setTriggerEffectIntensity', (_event, value: number) => (
     service.setTriggerEffectIntensity(value)
   ));
@@ -419,6 +421,7 @@ function registerIpc(service: BridgeService): void {
   ));
   ipcMain.handle('bridge:testNotification', () => service.testNotification());
   ipcMain.handle('bridge:testHaptics', () => service.testHaptics());
+  ipcMain.handle('bridge:testClassicRumble', () => service.testClassicRumble());
   ipcMain.handle('bridge:testAdaptiveTriggers', (_event, value?: TriggerTestMode, target?: TriggerTestTarget) => (
     service.testAdaptiveTriggers(value, target)
   ));

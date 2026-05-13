@@ -26,6 +26,8 @@ constexpr uint8_t kMuteKeyboardModifierMask = 0x0F;
 constexpr uint8_t kMuteKeyboardHoldFlag = 0x80;
 constexpr uint32_t kKeyboardPressDurationUs = 40000;
 constexpr uint32_t kMuteLedFlashDurationUs = 120000;
+constexpr uint32_t kClassicRumbleTestDurationUs = 650000;
+constexpr uint8_t kClassicRumbleTestAmplitude = 160;
 constexpr uint32_t kAdaptiveTriggerTestDurationUs = 2500000;
 constexpr uint8_t kTriggerEffectSize = 11;
 constexpr uint8_t kTriggerEffectRightOffset = 10;
@@ -61,6 +63,8 @@ enum CommandId : uint8_t {
     CommandSetSleepKeybindEnabled = 0x10,
     CommandSleepController = 0x11,
     CommandSetPollingRateMode = 0x12,
+    CommandSetClassicRumbleGain = 0x13,
+    CommandTestClassicRumble = 0x14,
 };
 
 enum AckResult : uint8_t {
@@ -104,6 +108,8 @@ bool mute_keyboard_pressed = false;
 uint32_t mute_keyboard_release_at_us = 0;
 bool mute_led_flash_pending = false;
 uint32_t mute_led_flash_until_us = 0;
+bool classic_rumble_test_active = false;
+uint32_t classic_rumble_test_until_us = 0;
 uint8_t trigger_effect_intensity_percent = 100;
 uint8_t adaptive_trigger_test_mode = kTriggerTestModeFeedback;
 uint8_t adaptive_trigger_test_target = kTriggerTargetBoth;
@@ -185,6 +191,9 @@ void set_lightbar_color(uint8_t red, uint8_t green, uint8_t blue, uint8_t bright
 void restore_defaults() {
     volume[0] = DEFAULT_COMPANION_SPEAKER_GAIN;
     volume[1] = 1.0f;
+    bt_set_classic_rumble_gain(100);
+    classic_rumble_test_active = false;
+    bt_set_classic_rumble_output(0, 0);
     audio_set_haptics_buffer_length(64);
     trigger_effect_intensity_percent = 100;
     adaptive_trigger_test_mode = kTriggerTestModeFeedback;
@@ -333,6 +342,31 @@ bool schedule_adaptive_trigger_test(uint8_t mode, uint8_t target) {
     adaptive_trigger_test_active = trigger_effect_intensity_percent > 0;
     adaptive_trigger_test_until_us = time_us_32() + kAdaptiveTriggerTestDurationUs;
     return true;
+}
+
+bool schedule_classic_rumble_test() {
+    if (
+        !bt_is_controller_connected()
+        || usb_host_hid_output_recent()
+        || classic_rumble_test_active
+    ) {
+        return false;
+    }
+
+    bt_set_classic_rumble_output(kClassicRumbleTestAmplitude, kClassicRumbleTestAmplitude);
+    classic_rumble_test_active = true;
+    classic_rumble_test_until_us = time_us_32() + kClassicRumbleTestDurationUs;
+    return true;
+}
+
+void classic_rumble_test_loop() {
+    if (!classic_rumble_test_active) {
+        return;
+    }
+    if (!bt_is_controller_connected() || static_cast<int32_t>(time_us_32() - classic_rumble_test_until_us) >= 0) {
+        classic_rumble_test_active = false;
+        bt_set_classic_rumble_output(0, 0);
+    }
 }
 
 void reset_adaptive_trigger_test() {
@@ -631,6 +665,32 @@ void handle_command(uint8_t const *buffer, uint16_t bufsize) {
             set_ack(command_id, sequence, AckOk);
             return;
 
+        case CommandSetClassicRumbleGain:
+            if (value > 200) {
+                set_ack(command_id, sequence, AckInvalidValue);
+                return;
+            }
+            bt_set_classic_rumble_gain(static_cast<uint8_t>(value));
+            settings_revision++;
+            set_ack(command_id, sequence, AckOk);
+            return;
+
+        case CommandTestClassicRumble:
+            if (value != 0) {
+                set_ack(command_id, sequence, AckInvalidValue);
+                return;
+            }
+            if (!bt_is_controller_connected()) {
+                set_ack(command_id, sequence, AckNotConnected);
+                return;
+            }
+            if (!schedule_classic_rumble_test()) {
+                set_ack(command_id, sequence, AckBusy);
+                return;
+            }
+            set_ack(command_id, sequence, AckOk);
+            return;
+
         case CommandSetTriggerEffectIntensity:
             if (value > 100) {
                 set_ack(command_id, sequence, AckInvalidValue);
@@ -781,6 +841,7 @@ void companion_init() {
 
 void companion_loop() {
     audio_test_haptics_loop();
+    classic_rumble_test_loop();
     mute_keyboard_loop();
     adaptive_trigger_test_loop();
 }

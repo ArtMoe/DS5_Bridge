@@ -68,6 +68,8 @@ const PRESET_SETTINGS: Record<Exclude<BridgePresetId, 'custom'>, Partial<Compani
     selectedPresetId: 'balanced',
     hapticsEnabled: true,
     hapticsGainPercent: 100,
+    classicRumbleEnabled: true,
+    classicRumbleGainPercent: 100,
     speakerEnabled: true,
     speakerVolumePercent: 30,
     adaptiveTriggersEnabled: true,
@@ -82,6 +84,7 @@ const PRESET_SETTINGS: Record<Exclude<BridgePresetId, 'custom'>, Partial<Compani
   quiet: {
     selectedPresetId: 'quiet',
     hapticsEnabled: false,
+    classicRumbleEnabled: false,
     speakerEnabled: false,
     adaptiveTriggersEnabled: false,
     lightbarEnabled: true,
@@ -95,7 +98,8 @@ const PRESET_SETTINGS: Record<Exclude<BridgePresetId, 'custom'>, Partial<Compani
   },
   'no-haptics': {
     selectedPresetId: 'no-haptics',
-    hapticsEnabled: false
+    hapticsEnabled: false,
+    classicRumbleEnabled: false
   },
   'no-triggers': {
     selectedPresetId: 'no-triggers',
@@ -398,6 +402,25 @@ export class BridgeService extends EventEmitter {
     return this.getSnapshot();
   }
 
+  async setClassicRumbleGain(percent: number): Promise<BridgeSnapshot> {
+    const value = Math.max(0, Math.min(200, Math.round(percent)));
+    const effectiveValue = this.settingsStore.get().classicRumbleEnabled ? value : 0;
+    await this.sendSettingCommand(COMMAND_ID.SET_CLASSIC_RUMBLE_GAIN, effectiveValue, customSettingUpdate({
+      classicRumbleGainPercent: value
+    }));
+    return this.getSnapshot();
+  }
+
+  async setClassicRumbleEnabled(enabled: boolean): Promise<BridgeSnapshot> {
+    const settings = this.settingsStore.get();
+    await this.sendSettingCommand(
+      COMMAND_ID.SET_CLASSIC_RUMBLE_GAIN,
+      enabled ? settings.classicRumbleGainPercent : 0,
+      customSettingUpdate({ classicRumbleEnabled: enabled })
+    );
+    return this.getSnapshot();
+  }
+
   async setTriggerEffectIntensity(percent: number): Promise<BridgeSnapshot> {
     const value = Math.max(0, Math.min(100, Math.round(percent)));
     const effectiveValue = this.settingsStore.get().adaptiveTriggersEnabled ? value : 0;
@@ -602,6 +625,11 @@ export class BridgeService extends EventEmitter {
 
   async testHaptics(): Promise<BridgeSnapshot> {
     await this.sendCommand(COMMAND_ID.TEST_HAPTICS, 0, { throwOnCommandError: false });
+    return this.getSnapshot();
+  }
+
+  async testClassicRumble(): Promise<BridgeSnapshot> {
+    await this.sendCommand(COMMAND_ID.TEST_CLASSIC_RUMBLE, 0, { throwOnCommandError: false });
     return this.getSnapshot();
   }
 
@@ -914,6 +942,11 @@ export class BridgeService extends EventEmitter {
     await this.sendCommand(COMMAND_ID.SET_HAPTICS_BUFFER_LENGTH, settings.hapticsBufferLength, {
       expectSettingsRevisionChange
     });
+    await this.sendCommand(
+      COMMAND_ID.SET_CLASSIC_RUMBLE_GAIN,
+      settings.classicRumbleEnabled ? settings.classicRumbleGainPercent : 0,
+      { expectSettingsRevisionChange }
+    );
     await this.sendCommand(
       COMMAND_ID.SET_TRIGGER_EFFECT_INTENSITY,
       settings.adaptiveTriggersEnabled ? settings.triggerEffectIntensityPercent : 0,

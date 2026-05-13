@@ -42,6 +42,9 @@ void bt_set_lightbar_color(uint8_t red, uint8_t green, uint8_t blue, uint8_t bri
 void bt_set_mute_led(bool enabled);
 void bt_set_speaker_output_enabled(bool enabled);
 void bt_refresh_speaker_output();
+void bt_set_classic_rumble_gain(uint8_t gain_percent);
+uint8_t bt_classic_rumble_gain();
+void bt_set_classic_rumble_output(uint8_t right, uint8_t left);
 void bt_set_adaptive_trigger_effect(uint8_t mode, uint8_t intensity_percent, uint8_t target = 0);
 void bt_reset_adaptive_triggers();
 void bt_schedule_lightbar_restore(uint32_t delay_ms);

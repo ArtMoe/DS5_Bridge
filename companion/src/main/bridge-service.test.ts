@@ -61,6 +61,7 @@ const FULL_REAPPLY_COMMANDS = [
   COMMAND_ID.SET_MUTE_BUTTON_ACTION,
   COMMAND_ID.SET_HAPTICS_GAIN,
   COMMAND_ID.SET_HAPTICS_BUFFER_LENGTH,
+  COMMAND_ID.SET_CLASSIC_RUMBLE_GAIN,
   COMMAND_ID.SET_TRIGGER_EFFECT_INTENSITY,
   COMMAND_ID.SET_SPEAKER_VOLUME,
   COMMAND_ID.SET_LED_ENABLED,
@@ -458,6 +459,20 @@ describe('BridgeService', () => {
     expect(snapshot.diagnostics.lastAck?.resultCode).toBe(ACK_RESULT.ERR_NOT_CONNECTED);
   });
 
+  it('sends rumble test commands without rejecting busy ACKs', async () => {
+    const service = serviceFixture();
+    const device = new MockHidDevice();
+    device.ackResults = [ACK_RESULT.ERR_BUSY];
+    hidMock.state.devicesList = [companionDeviceInfo()];
+    hidMock.state.openDevices.set('companion-path', device);
+
+    const snapshot = await service.testClassicRumble();
+
+    expect(device.sentReports.at(-1)?.[7]).toBe(COMMAND_ID.TEST_CLASSIC_RUMBLE);
+    expect(snapshot.diagnostics.lastError).toBe('Test is busy');
+    expect(snapshot.diagnostics.lastAck?.resultCode).toBe(ACK_RESULT.ERR_BUSY);
+  });
+
   it('sends and stores mute button keyboard bindings', async () => {
     const service = serviceFixture();
     const device = new MockHidDevice();
@@ -559,6 +574,22 @@ describe('BridgeService', () => {
     expect(command?.[9]).toBe(1);
     expect(snapshot.settings.sleepKeybindEnabled).toBe(true);
     expect(snapshot.status?.sleepKeybindEnabled).toBe(true);
+  });
+
+  it('sends and stores classic rumble gain', async () => {
+    const service = serviceFixture();
+    const device = new MockHidDevice();
+    device.status = statusReport({ controllerConnected: false });
+    hidMock.state.devicesList = [companionDeviceInfo()];
+    hidMock.state.openDevices.set('companion-path', device);
+
+    await poll(service);
+    const snapshot = await service.setClassicRumbleGain(140);
+
+    const command = device.sentReports.at(-1);
+    expect(command?.[7]).toBe(COMMAND_ID.SET_CLASSIC_RUMBLE_GAIN);
+    expect(command?.[9]).toBe(140);
+    expect(snapshot.settings.classicRumbleGainPercent).toBe(140);
   });
 
   it('sends and stores polling rate settings', async () => {
@@ -700,10 +731,13 @@ describe('BridgeService', () => {
 
     await poll(service);
     await service.setHapticsEnabled(false);
+    await service.setClassicRumbleEnabled(false);
     await service.setSpeakerEnabled(false);
     const snapshot = await service.setAdaptiveTriggersEnabled(false);
 
-    expect(device.sentReports.at(-4)?.[7]).toBe(COMMAND_ID.SET_HAPTICS_GAIN);
+    expect(device.sentReports.at(-5)?.[7]).toBe(COMMAND_ID.SET_HAPTICS_GAIN);
+    expect(device.sentReports.at(-5)?.[9]).toBe(0);
+    expect(device.sentReports.at(-4)?.[7]).toBe(COMMAND_ID.SET_CLASSIC_RUMBLE_GAIN);
     expect(device.sentReports.at(-4)?.[9]).toBe(0);
     expect(device.sentReports.at(-3)?.[7]).toBe(COMMAND_ID.SET_SPEAKER_VOLUME);
     expect(device.sentReports.at(-3)?.[9]).toBe(0);
@@ -711,6 +745,7 @@ describe('BridgeService', () => {
     expect(device.sentReports.at(-2)?.[9]).toBe(0);
     expect(device.sentReports.at(-1)?.[7]).toBe(COMMAND_ID.RESET_ADAPTIVE_TRIGGERS);
     expect(snapshot.settings.hapticsEnabled).toBe(false);
+    expect(snapshot.settings.classicRumbleEnabled).toBe(false);
     expect(snapshot.settings.speakerEnabled).toBe(false);
     expect(snapshot.settings.adaptiveTriggersEnabled).toBe(false);
   });
@@ -730,6 +765,7 @@ describe('BridgeService', () => {
     const commands = device.sentReports.map((report) => [report[7], report[9]]);
 
     expect(commands).toContainEqual([COMMAND_ID.SET_HAPTICS_GAIN, 0]);
+    expect(commands).toContainEqual([COMMAND_ID.SET_CLASSIC_RUMBLE_GAIN, 0]);
     expect(commands).toContainEqual([COMMAND_ID.SET_TRIGGER_EFFECT_INTENSITY, 0]);
     expect(commands).toContainEqual([COMMAND_ID.RESET_ADAPTIVE_TRIGGERS, 0]);
     expect(commands).toContainEqual([COMMAND_ID.SET_SPEAKER_VOLUME, 0]);

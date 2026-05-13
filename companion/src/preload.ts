@@ -11,6 +11,12 @@ const api = {
   setHapticsBufferLength: (value: number): Promise<BridgeSnapshot> => (
     ipcRenderer.invoke('bridge:setHapticsBufferLength', value)
   ),
+  setClassicRumbleGain: (value: number): Promise<BridgeSnapshot> => (
+    ipcRenderer.invoke('bridge:setClassicRumbleGain', value)
+  ),
+  setClassicRumbleEnabled: (value: boolean): Promise<BridgeSnapshot> => (
+    ipcRenderer.invoke('bridge:setClassicRumbleEnabled', value)
+  ),
   setTriggerEffectIntensity: (value: number): Promise<BridgeSnapshot> => (
     ipcRenderer.invoke('bridge:setTriggerEffectIntensity', value)
   ),
@@ -57,6 +63,7 @@ const api = {
   ),
   testNotification: (): Promise<BridgeSnapshot> => ipcRenderer.invoke('bridge:testNotification'),
   testHaptics: (): Promise<BridgeSnapshot> => ipcRenderer.invoke('bridge:testHaptics'),
+  testClassicRumble: (): Promise<BridgeSnapshot> => ipcRenderer.invoke('bridge:testClassicRumble'),
   testAdaptiveTriggers: (mode?: TriggerTestMode, target?: TriggerTestTarget): Promise<BridgeSnapshot> => (
     ipcRenderer.invoke('bridge:testAdaptiveTriggers', mode, target)
   ),
