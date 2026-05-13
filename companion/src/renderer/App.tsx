@@ -15,6 +15,7 @@ import {
   Settings2,
   SlidersHorizontal,
   Sparkles,
+  Vibrate,
   Volume2,
   VolumeX,
   X,
@@ -1896,14 +1897,14 @@ export function App() {
                 <section className="feature-card">
                   <div className="feature-card-title">
                     <span className="feature-icon">
-                      {showClassicRumbleControl ? <SlidersHorizontal size={20} /> : <Sparkles size={20} />}
+                      {showClassicRumbleControl ? <Vibrate size={20} /> : <Sparkles size={20} />}
                     </span>
                     <div className="title-copy">
                       <h3>{showClassicRumbleControl ? 'Rumble' : 'Intensity'}</h3>
                       <p>
                         {showClassicRumbleControl
                           ? 'Scale game rumble motor strength.'
-                          : 'Set the overall strength of haptic feedback.'}
+                          : 'Scale haptic feedback strength.'}
                       </p>
                     </div>
                     <button
@@ -1911,7 +1912,7 @@ export function App() {
                       className="card-flip-button haptics-flip-button"
                       onClick={() => setShowClassicRumbleControl((value) => !value)}
                     >
-                      {showClassicRumbleControl ? <Sparkles size={17} /> : <SlidersHorizontal size={17} />}
+                      {showClassicRumbleControl ? <Sparkles size={17} /> : <Vibrate size={17} />}
                       {showClassicRumbleControl ? 'Haptics' : 'Rumble'}
                     </button>
                   </div>
