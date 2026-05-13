@@ -13,7 +13,7 @@ import {
   ProtocolError,
   ackUserMessage,
   buildCommandReport,
-  buildHostAudioFrameChunkReports,
+  buildHostAudioFastFrameReports,
   buildHostAudioStreamReport,
   parseAckReport,
   parseAudioDebugReport,
@@ -42,11 +42,14 @@ import type {
   CompanionSettings,
   HidDeviceSummary
 } from '../shared/types';
+import { HostAudioEngine, type HostAudioFramePayload } from './host-audio-engine';
 import { SettingsStore } from './settings-store';
 
 const POLL_INTERVAL_MS = 500;
 const HOST_AUDIO_HEARTBEAT_MS = 250;
-const HOST_AUDIO_SYNTHETIC_FRAME_MS = 30;
+const HOST_AUDIO_ACTIVE_POLL_INTERVAL_MS = 5000;
+const HOST_AUDIO_STATUS_READ_INTERVAL_MS = 5000;
+const HOST_AUDIO_MAX_QUEUED_FRAMES = 2;
 const LOW_BATTERY_PERCENT = 20;
 const AUDIO_DEBUG_LOG_LINE_LIMIT = 300;
 const STARTUP_REAPPLY_MIN_SETTLE_MS = 0;
@@ -245,6 +248,12 @@ function formatAudioDebugEvent(event: AudioDebugEventPayload): string {
       return `${prefix} [Audio] PREROLL: encoded silence requested=${arg0} queued=${arg1} opus_fifo=${arg2} skip=${arg3}`;
     case AUDIO_DEBUG_EVENT.USB_SILENCE_TAIL:
       return `${prefix} [Audio] TAIL: forwarding USB silence frames=${arg0} audio_fifo=${arg1} opus_ready=${arg2} packet=${arg3} reportSeq=${arg4}`;
+    case AUDIO_DEBUG_EVENT.HOST_MODE:
+      return `${prefix} [HostPico] MODE runtime=${arg0} reason=${arg1} generation=${arg2}`;
+    case AUDIO_DEBUG_EVENT.HOST_FRAME:
+      return `${prefix} [HostPico] FRAME submitted audio_fifo=${arg0} received=${arg1} generation=${arg2} packet=${arg3} reportSeq=${arg4}`;
+    case AUDIO_DEBUG_EVENT.MIC_PACKET:
+      return `${prefix} [HostPico] MIC arg0=${arg0} arg1=${arg1} arg2=${arg2} arg3=${arg3} arg4=${arg4}`;
     default:
       return `${prefix} [Audio] UNKNOWN code=${event.eventCode} args=${event.args.join(',')}`;
   }
@@ -276,7 +285,7 @@ export class BridgeService extends EventEmitter {
   private devicePath: string | null = null;
   private pollTimer: NodeJS.Timeout | null = null;
   private hostAudioHeartbeatTimer: NodeJS.Timeout | null = null;
-  private hostAudioSyntheticFrameTimer: NodeJS.Timeout | null = null;
+  private readonly hostAudioEngine = new HostAudioEngine();
   private snapshot: BridgeSnapshot;
   private lastEmittedSnapshotSignature: string | null = null;
   private commandSequence = 0;
@@ -297,7 +306,14 @@ export class BridgeService extends EventEmitter {
   private lastAudioStatsSignature: string | null = null;
   private hostAudioCommandActive = false;
   private hostAudioHeartbeatBusy = false;
-  private hostAudioFrameSequence = 0;
+  private hostAudioReportQueue: number[][] = [];
+  private hostAudioWritePumpActive = false;
+  private hostAudioFrameCount = 0;
+  private hostAudioChunkWriteCount = 0;
+  private hostAudioFrameDropCount = 0;
+  private lastHostAudioStageLogAt = 0;
+  private lastHostAudioStatusReadAt = 0;
+  private lastHostAudioActivePollAt = 0;
   private previousControllerConnected: boolean | null = null;
   private lowBatteryToastActive = false;
 
@@ -310,6 +326,14 @@ export class BridgeService extends EventEmitter {
       settings: this.settingsStore.get(),
       diagnostics: this.withAudioDebugDiagnostics(emptyDiagnostics([]))
     };
+    this.hostAudioEngine.on('frame', (frame: HostAudioFramePayload) => this.sendHostAudioFrame(frame));
+    this.hostAudioEngine.on('error', (error: Error) => this.publishError(error));
+    this.hostAudioEngine.on('status', (line: string) => {
+      if (line) {
+        this.appendAudioDebugLines([`[HostHelper] ${line}`]);
+      }
+      this.emitSnapshot();
+    });
   }
 
   start(): void {
@@ -320,9 +344,6 @@ export class BridgeService extends EventEmitter {
     this.hostAudioHeartbeatTimer = setInterval(() => {
       this.pulseHostAudio().catch((error) => this.publishError(error));
     }, HOST_AUDIO_HEARTBEAT_MS);
-    this.hostAudioSyntheticFrameTimer = setInterval(() => {
-      this.sendSyntheticHostAudioFrame();
-    }, HOST_AUDIO_SYNTHETIC_FRAME_MS);
   }
 
   stop(): void {
@@ -334,10 +355,7 @@ export class BridgeService extends EventEmitter {
       clearInterval(this.hostAudioHeartbeatTimer);
       this.hostAudioHeartbeatTimer = null;
     }
-    if (this.hostAudioSyntheticFrameTimer) {
-      clearInterval(this.hostAudioSyntheticFrameTimer);
-      this.hostAudioSyntheticFrameTimer = null;
-    }
+    void this.hostAudioEngine.stop();
     this.closeDevice();
   }
 
@@ -418,9 +436,17 @@ export class BridgeService extends EventEmitter {
       this.hostAudioStatus = parseHostAudioStatusReport(
         this.device.getFeatureReport(REPORT_ID.HOST_AUDIO_STATUS, REPORT_LENGTH)
       );
+      this.lastHostAudioStatusReadAt = Date.now();
     } catch {
       this.hostAudioStatus = null;
     }
+  }
+
+  private readHostAudioStatusThrottled(force = false): void {
+    if (!force && Date.now() - this.lastHostAudioStatusReadAt < HOST_AUDIO_STATUS_READ_INTERVAL_MS) {
+      return;
+    }
+    this.readHostAudioStatus();
   }
 
   async setHapticsGain(percent: number): Promise<BridgeSnapshot> {
@@ -522,12 +548,11 @@ export class BridgeService extends EventEmitter {
       await this.sendCommand(COMMAND_ID.START_HOST_AUDIO, 0, { throwOnCommandError: false });
       this.hostAudioCommandActive = true;
       this.sendHostAudioStreamReport(HOST_AUDIO_PACKET_TYPE.HELLO);
-      this.hostAudioFrameSequence = 0;
     } else {
       await this.sendCommand(COMMAND_ID.STOP_HOST_AUDIO, 0, { throwOnCommandError: false });
       await this.sendCommand(COMMAND_ID.SET_HOST_AUDIO_ENABLED, 0, { expectSettingsRevisionChange: true });
       this.hostAudioCommandActive = false;
-      this.hostAudioFrameSequence = 0;
+      await this.hostAudioEngine.stop();
     }
     this.snapshot.settings = this.settingsStore.update(customSettingUpdate({
       hostEncodedAudioEnabled: enabled,
@@ -537,7 +562,7 @@ export class BridgeService extends EventEmitter {
       await this.sendCommand(COMMAND_ID.SET_DUPLEX_ENABLED, 0, { throwOnCommandError: false });
     }
     this.readHostAudioStatus();
-    this.sendSyntheticHostAudioFrame();
+    await this.updateHostAudioEngine();
     this.emitSnapshot();
     return this.getSnapshot();
   }
@@ -821,7 +846,7 @@ export class BridgeService extends EventEmitter {
     return this.writeHostAudioStreamReport(buildHostAudioStreamReport({ packetType }));
   }
 
-  private sendSyntheticHostAudioFrame(): void {
+  private sendHostAudioFrame(payload: HostAudioFramePayload): void {
     const settings = this.settingsStore.get();
     const generation = this.hostAudioStatus?.streamGeneration ?? 0;
     if (
@@ -833,17 +858,66 @@ export class BridgeService extends EventEmitter {
       return;
     }
 
-    const reports = buildHostAudioFrameChunkReports({
-      streamGeneration: generation,
-      frameSequence: this.hostAudioFrameSequence
+    const reports = buildHostAudioFastFrameReports({
+      frame: payload.frame,
+      frameSequence: payload.sequence
     });
-    for (const report of reports) {
-      if (!this.writeHostAudioStreamReport(report)) {
-        this.hostAudioCommandActive = false;
+
+    this.hostAudioFrameCount++;
+    if (this.hostAudioReportQueue.length >= reports.length * HOST_AUDIO_MAX_QUEUED_FRAMES) {
+      this.hostAudioReportQueue.splice(0, reports.length);
+      this.hostAudioFrameDropCount++;
+    }
+    this.hostAudioReportQueue.push(...reports);
+    this.logHostAudioStage('enqueue');
+    this.pumpHostAudioReports();
+  }
+
+  private pumpHostAudioReports(): void {
+    if (this.hostAudioWritePumpActive) {
+      return;
+    }
+    this.hostAudioWritePumpActive = true;
+    const pump = () => {
+      const report = this.hostAudioReportQueue.shift();
+      if (!report) {
+        this.hostAudioWritePumpActive = false;
         return;
       }
+      if (!this.writeHostAudioStreamReport(report)) {
+        this.hostAudioReportQueue = [];
+        this.hostAudioWritePumpActive = false;
+        this.hostAudioCommandActive = false;
+        this.logHostAudioStage('write-failed');
+        return;
+      }
+      this.hostAudioChunkWriteCount++;
+      this.logHostAudioStage('write');
+      setImmediate(pump);
+    };
+    setImmediate(pump);
+  }
+
+  private logHostAudioStage(stage: string): void {
+    const now = Date.now();
+    if (stage !== 'write-failed' && now - this.lastHostAudioStageLogAt < 1000) {
+      return;
     }
-    this.hostAudioFrameSequence = (this.hostAudioFrameSequence + 1) & 0xffff;
+    this.lastHostAudioStageLogAt = now;
+    const picoReceived = this.hostAudioStatus?.hostFramesReceived ?? 0;
+    const picoDropped = this.hostAudioStatus?.hostFramesDropped ?? 0;
+    this.appendAudioDebugLines([
+      `[HostBridge] stage=${stage} helperFrames=${this.hostAudioFrameCount} chunksWritten=${this.hostAudioChunkWriteCount} queuedChunks=${this.hostAudioReportQueue.length} appDroppedFrames=${this.hostAudioFrameDropCount} picoReceivedFrames=${picoReceived} picoDroppedFrames=${picoDropped} generation=${this.hostAudioStatus?.streamGeneration ?? 0}`
+    ]);
+  }
+
+  private async updateHostAudioEngine(): Promise<void> {
+    const settings = this.settingsStore.get();
+    if (!settings.hostEncodedAudioEnabled || !this.device || !this.hostAudioCommandActive) {
+      await this.hostAudioEngine.stop();
+      return;
+    }
+    await this.hostAudioEngine.start(this.devicePath);
   }
 
   private async pulseHostAudio(): Promise<void> {
@@ -858,30 +932,45 @@ export class BridgeService extends EventEmitter {
         this.hostAudioCommandActive = false;
         return;
       }
-      this.readHostAudioStatus();
-      if (!this.hostAudioCommandActive || this.hostAudioStatus?.streamActive === false) {
+      const helperWasActive = this.hostAudioEngine.isActive();
+      if (!helperWasActive) {
+        this.readHostAudioStatusThrottled(!this.hostAudioCommandActive);
+      }
+      if (!this.hostAudioCommandActive || (!helperWasActive && this.hostAudioStatus?.streamActive === false)) {
         await this.sendCommand(COMMAND_ID.SET_HOST_AUDIO_ENABLED, 1, { throwOnCommandError: false });
         await this.sendCommand(COMMAND_ID.START_HOST_AUDIO, 0, { throwOnCommandError: false });
         if (settings.duplexMicEnabled) {
           await this.sendCommand(COMMAND_ID.SET_DUPLEX_ENABLED, 1, { throwOnCommandError: false });
         }
         this.hostAudioCommandActive = true;
-        this.hostAudioFrameSequence = 0;
         this.readHostAudioStatus();
       }
-      this.sendHostAudioStreamReport(HOST_AUDIO_PACKET_TYPE.HEARTBEAT);
-      await this.sendCommand(COMMAND_ID.HOST_AUDIO_HEARTBEAT, 0, { throwOnCommandError: false });
-      this.sendSyntheticHostAudioFrame();
-      this.readHostAudioStatus();
+      await this.updateHostAudioEngine();
+      const helperIsActive = this.hostAudioEngine.isActive();
+      if (!helperIsActive && !this.sendHostAudioStreamReport(HOST_AUDIO_PACKET_TYPE.HEARTBEAT)) {
+        await this.sendCommand(COMMAND_ID.HOST_AUDIO_HEARTBEAT, 0, { throwOnCommandError: false });
+      }
+      if (!helperIsActive) {
+        this.readHostAudioStatusThrottled();
+      }
     } finally {
       this.hostAudioHeartbeatBusy = false;
     }
   }
 
   private async poll(): Promise<void> {
-    if (Date.now() < this.pollPausedUntil) {
+    const now = Date.now();
+    if (now < this.pollPausedUntil) {
       return;
     }
+    const hostAudioActive = this.settingsStore.get().hostEncodedAudioEnabled && this.hostAudioCommandActive;
+    if (
+      hostAudioActive
+      && now - this.lastHostAudioActivePollAt < HOST_AUDIO_ACTIVE_POLL_INTERVAL_MS
+    ) {
+      return;
+    }
+    this.lastHostAudioActivePollAt = now;
 
     const devices = HID.devices();
     const rawDevices = devices.map(summarizeDevice);
@@ -929,9 +1018,13 @@ export class BridgeService extends EventEmitter {
       return;
     }
 
-    this.readAudioDebugEvents();
-    this.readAudioDebugStats();
-    this.readHostAudioStatus();
+    if (hostAudioActive && !this.hostAudioEngine.isActive()) {
+      this.readHostAudioStatusThrottled();
+    } else if (!hostAudioActive) {
+      this.readAudioDebugEvents();
+      this.readAudioDebugStats();
+      this.readHostAudioStatus();
+    }
     this.maybeEmitStatusToasts(status);
 
     const previousUptime = this.lastUptimeSeconds;
@@ -1131,13 +1224,12 @@ export class BridgeService extends EventEmitter {
         { expectSettingsRevisionChange }
       );
       this.hostAudioCommandActive = true;
-      this.hostAudioFrameSequence = 0;
       this.readHostAudioStatus();
-      this.sendSyntheticHostAudioFrame();
+      await this.updateHostAudioEngine();
     } else {
       await this.sendCommand(COMMAND_ID.SET_DUPLEX_ENABLED, 0, { throwOnCommandError: false });
       this.hostAudioCommandActive = false;
-      this.hostAudioFrameSequence = 0;
+      await this.hostAudioEngine.stop();
     }
     await this.sendCommand(COMMAND_ID.SET_LED_ENABLED, settings.ledEnabled ? 1 : 0, {
       expectSettingsRevisionChange
@@ -1224,7 +1316,12 @@ export class BridgeService extends EventEmitter {
     this.devicePath = null;
     this.hostAudioCommandActive = false;
     this.hostAudioStatus = null;
-    this.hostAudioFrameSequence = 0;
+    this.hostAudioReportQueue = [];
+    this.hostAudioWritePumpActive = false;
+    this.hostAudioFrameCount = 0;
+    this.hostAudioChunkWriteCount = 0;
+    this.hostAudioFrameDropCount = 0;
+    void this.hostAudioEngine.stop();
   }
 
   private emitSnapshot(): void {

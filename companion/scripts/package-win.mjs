@@ -12,6 +12,7 @@ const outDir = path.join(companionDir, 'artifacts', `DS5 Bridge-win32-x64-${stam
 const appDir = path.join(outDir, 'resources', 'app');
 const assetDir = path.join('assets', 'controllers');
 const appIcon = path.join(repoDir, assetDir, 'ds5-bridge_app-icon-tile.ico');
+const hostAudioHelperDir = path.join(companionDir, 'native', 'HostAudioHelper', 'bin', 'publish', 'win-x64');
 const appPackage = JSON.parse(fs.readFileSync(path.join(companionDir, 'package.json'), 'utf8'));
 const appAssets = [
   'ds5-bridge_app-icon-tile.ico',
@@ -64,6 +65,9 @@ if (!fs.existsSync(electronDist)) {
 if (!fs.existsSync(path.join(companionDir, 'dist'))) {
   throw new Error('Companion dist is missing. Run npm run build first.');
 }
+if (!fs.existsSync(path.join(hostAudioHelperDir, 'HostAudioHelper.exe'))) {
+  throw new Error('Host audio helper is missing. Run npm run build:host-audio first.');
+}
 
 copyRecursive(electronDist, outDir);
 
@@ -91,6 +95,7 @@ copyRecursive(path.join(companionDir, 'package.json'), path.join(appDir, 'packag
 for (const asset of appAssets) {
   copyRecursive(path.join(repoDir, assetDir, asset), path.join(appDir, assetDir, asset));
 }
+copyRecursive(hostAudioHelperDir, path.join(outDir, 'resources', 'native', 'HostAudioHelper'));
 for (const packageName of runtimePackages) {
   copyPackage(packageName);
 }

@@ -55,12 +55,13 @@
 #define SPEAKER_USB_SILENCE_TAIL_US 500000
 #define SPEAKER_SILENCE_PREROLL_USB_PACKETS 24
 #define HOST_HEARTBEAT_TIMEOUT_US 750000
-#define HOST_STREAM_TIMEOUT_US 100000
-#define HOST_STREAM_START_GRACE_US 250000
+#define HOST_STREAM_TIMEOUT_US 250000
+#define HOST_STREAM_START_GRACE_US 500000
 #define HOST_PACKET_HEADER_SIZE 16
 #define HOST_PACKET_PAYLOAD_SIZE 47
 #define HOST_FRAME_REASSEMBLY_SIZE 448
 #define HOST_AUDIO_REPORT_SIZE REPORT_SIZE
+#define HOST_AUDIO_COMPACT_REPORT_SIZE (SAMPLE_SIZE + 200)
 #define HOST_MIC_OPUS_SIZE 71
 #define HOST_MIC_OPUS_FRAMES 480
 #define HOST_MIC_INPUT_CHANNELS 1
@@ -98,6 +99,7 @@ enum HostAudioPacketType : uint8_t {
     HostAudioFrameChunk = 5,
     HostAudioSetDuplexEnabled = 6,
     HostAudioSetDuplexDisabled = 7,
+    HostAudioFastFrameFragment = 8,
 };
 
 enum HostPacketOffsets : uint8_t {
@@ -115,6 +117,15 @@ enum HostPacketOffsets : uint8_t {
     HostPacketChunkCount = 13,
     HostPacketPayloadLength = 14,
     HostPacketPayload = 16,
+};
+
+enum HostFastPacketOffsets : uint8_t {
+    HostFastPacketType = 0,
+    HostFastPacketSequence = 1,
+    HostFastPacketFragmentIndex = 3,
+    HostFastPacketFragmentCount = 4,
+    HostFastPacketPayloadLength = 5,
+    HostFastPacketPayload = 6,
 };
 
 struct mic_packet_element {
@@ -506,6 +517,9 @@ static bool host_stream_healthy(uint32_t now) {
     if (!host_stream_active) {
         return false;
     }
+    if (host_heartbeat_healthy(now)) {
+        return true;
+    }
     if (host_last_frame_us != 0) {
         return static_cast<uint32_t>(now - host_last_frame_us) < HOST_STREAM_TIMEOUT_US;
     }
@@ -522,13 +536,8 @@ static void audio_host_poll() {
         return;
     }
 
-    if (!host_heartbeat_healthy(now)) {
-        enter_fallback(AudioFallbackHeartbeatTimeout);
-        return;
-    }
-
     if (!host_stream_healthy(now)) {
-        enter_fallback(AudioFallbackStreamTimeout);
+        enter_fallback(host_heartbeat_healthy(now) ? AudioFallbackStreamTimeout : AudioFallbackHeartbeatTimeout);
         return;
     }
 
@@ -829,18 +838,48 @@ bool audio_duplex_active() {
 }
 
 static bool submit_host_audio_report(uint8_t const *report, uint16_t len) {
-    if (report == nullptr || len != HOST_AUDIO_REPORT_SIZE || report[0] != REPORT_ID) {
+    if (report == nullptr) {
         host_frames_dropped++;
         enter_fallback(AudioFallbackInvalidPacket);
         return false;
     }
 
     uint8_t packet[HOST_AUDIO_REPORT_SIZE];
-    memcpy(packet, report, sizeof(packet));
+    if (len == HOST_AUDIO_COMPACT_REPORT_SIZE) {
+        memset(packet, 0, sizeof(packet));
+        packet[0] = REPORT_ID;
+        packet[2] = 0x11 | (1 << 7);
+        packet[3] = 7;
+        packet[4] = 0b11111110;
+        const uint8_t buffer_length = haptics_buffer_length;
+        packet[5] = buffer_length;
+        packet[6] = buffer_length;
+        packet[7] = buffer_length;
+        packet[8] = buffer_length;
+        packet[9] = buffer_length;
+        packet[11] = 0x10 | (1 << 7);
+        packet[12] = sizeof(state_data);
+        memcpy(packet + 13, state_data, sizeof(state_data));
+        packet[76] = 0x12 | (1 << 7);
+        packet[77] = SAMPLE_SIZE;
+        memcpy(packet + 78, report, SAMPLE_SIZE);
+        packet[142] = (plug_headset ? 0x16 : 0x13) | (1 << 7);
+        packet[143] = 200;
+        memcpy(packet + 144, report + SAMPLE_SIZE, 200);
+    } else if (len == HOST_AUDIO_REPORT_SIZE && report[0] == REPORT_ID) {
+        memcpy(packet, report, sizeof(packet));
+    } else {
+        host_frames_dropped++;
+        enter_fallback(AudioFallbackInvalidPacket);
+        return false;
+    }
+
     packet[0] = REPORT_ID;
     packet[1] = reportSeqCounter << 4;
     reportSeqCounter = (reportSeqCounter + 1) & 0x0F;
     packet[10] = packetCounter++;
+    bt_set_speaker_output_enabled(true);
+    speaker_route_active = true;
     if (!bt_write_audio_stream(packet, sizeof(packet))) {
         host_frames_dropped++;
         return false;
@@ -848,18 +887,71 @@ static bool submit_host_audio_report(uint8_t const *report, uint16_t len) {
 
     host_frames_received++;
     host_last_frame_us = time_us_32();
-    audio_debug_log(
-        AudioDebugHostFrame,
-        clamp_debug_u8(queue_get_level(&audio_fifo)),
-        clamp_debug_u8(host_frames_received),
-        clamp_debug_u8(host_stream_generation),
-        packet[10],
-        reportSeqCounter
-    );
     return true;
 }
 
 bool audio_host_receive_packet(uint8_t const *data, uint16_t len) {
+    if (data != nullptr && len >= HostFastPacketPayload && data[HostFastPacketType] == HostAudioFastFrameFragment) {
+        audio_host_note_heartbeat();
+        if (!host_audio_requested || !host_stream_active) {
+            host_frames_dropped++;
+            return false;
+        }
+
+        const uint16_t sequence = read_le_u16(data + HostFastPacketSequence);
+        const uint8_t fragment_index = data[HostFastPacketFragmentIndex];
+        const uint8_t fragment_count = data[HostFastPacketFragmentCount];
+        const uint8_t payload_length = data[HostFastPacketPayloadLength];
+        if (
+            payload_length == 0
+            || payload_length > 57
+            || fragment_count == 0
+            || fragment_count > 5
+            || fragment_index >= fragment_count
+            || static_cast<uint16_t>(payload_length + HostFastPacketPayload) > len
+        ) {
+            host_frames_dropped++;
+            enter_fallback(AudioFallbackInvalidPacket);
+            return false;
+        }
+
+        if (host_reassembly_sequence != sequence || host_reassembly_chunk_count != fragment_count) {
+            clear_host_reassembly();
+            host_reassembly_sequence = sequence;
+            host_reassembly_chunk_count = fragment_count;
+        }
+
+        const uint16_t offset = static_cast<uint16_t>(fragment_index) * 57;
+        if (offset + payload_length > HOST_AUDIO_COMPACT_REPORT_SIZE) {
+            host_frames_dropped++;
+            clear_host_reassembly();
+            return false;
+        }
+
+        memcpy(host_reassembly_buffer + offset, data + HostFastPacketPayload, payload_length);
+        host_reassembly_received_mask = static_cast<uint16_t>(host_reassembly_received_mask | (1u << fragment_index));
+        const uint16_t received_end = offset + payload_length;
+        if (received_end > host_reassembly_received_bytes) {
+            host_reassembly_received_bytes = received_end;
+        }
+        if (fragment_index + 1 == fragment_count) {
+            host_reassembly_expected_length = received_end;
+        }
+        host_last_frame_us = time_us_32();
+        const uint16_t expected_mask = static_cast<uint16_t>((1u << fragment_count) - 1u);
+        if (
+            host_reassembly_received_mask != expected_mask
+            || host_reassembly_expected_length != HOST_AUDIO_COMPACT_REPORT_SIZE
+            || host_reassembly_received_bytes < HOST_AUDIO_COMPACT_REPORT_SIZE
+        ) {
+            return true;
+        }
+
+        const bool submitted = submit_host_audio_report(host_reassembly_buffer, HOST_AUDIO_COMPACT_REPORT_SIZE);
+        clear_host_reassembly();
+        return submitted;
+    }
+
     if (data == nullptr || len < HOST_PACKET_HEADER_SIZE || !host_packet_has_magic(data)) {
         host_frames_dropped++;
         enter_fallback(AudioFallbackInvalidPacket);
@@ -922,6 +1014,7 @@ bool audio_host_receive_packet(uint8_t const *data, uint16_t len) {
         return false;
     }
 
+    host_last_frame_us = time_us_32();
     if (
         host_reassembly_generation != packet_generation
         || host_reassembly_sequence != sequence

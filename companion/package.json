@@ -10,7 +10,8 @@
   "scripts": {
     "dev": "npm run build && electron .",
     "typecheck": "tsc -p tsconfig.main.json --noEmit && tsc -p tsconfig.json --noEmit",
-    "build": "tsc -p tsconfig.main.json && vite build",
+    "build:host-audio": "dotnet publish native/HostAudioHelper/HostAudioHelper.csproj -c Release -r win-x64 --self-contained false -o native/HostAudioHelper/bin/publish/win-x64",
+    "build": "npm run build:host-audio && tsc -p tsconfig.main.json && vite build",
     "package:win": "npm run build && node scripts/package-win.mjs",
     "installer:win": "npm run build && electron-builder --win nsis --x64",
     "test": "vitest run src",
@@ -43,6 +44,13 @@
           "ds5-bridge_app-icon-tile.ico",
           "ds5-bridge_app-icon-tile.png",
           "ds5-bridge_mark.png"
+        ]
+      },
+      {
+        "from": "native/HostAudioHelper/bin/publish/win-x64",
+        "to": "native/HostAudioHelper",
+        "filter": [
+          "**/*"
         ]
       }
     ],

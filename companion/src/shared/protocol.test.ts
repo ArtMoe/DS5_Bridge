@@ -3,6 +3,9 @@ import {
   ACK_RESULT,
   AUDIO_DEBUG_EVENT,
   COMMAND_ID,
+  HOST_AUDIO_COMPACT_FRAME_LENGTH,
+  HOST_AUDIO_FAST_FRAME_CHUNK_COUNT,
+  HOST_AUDIO_FAST_PAYLOAD_LENGTH,
   HOST_AUDIO_FRAME_CHUNK_COUNT,
   HOST_AUDIO_PACKET_TYPE,
   HOST_AUDIO_PAYLOAD_LENGTH,
@@ -10,8 +13,8 @@ import {
   MAGIC,
   REPORT_ID,
   buildCommandReport,
+  buildHostAudioFastFrameReports,
   buildHostAudioFrameChunkReports,
-  buildSyntheticHostAudioFrame,
   normalizeBridgePresetId,
   parseAudioDebugReport,
   parseAudioStatsReport,
@@ -199,7 +202,9 @@ describe('companion protocol', () => {
   });
 
   it('chunks a synthetic host audio frame for the companion OUT stream', () => {
-    const frame = buildSyntheticHostAudioFrame();
+    const frame = new Array<number>(HOST_AUDIO_REPORT_FRAME_LENGTH).fill(0);
+    frame[0] = 0x36;
+    frame[76] = 0x92;
     const reports = buildHostAudioFrameChunkReports({
       streamGeneration: 7,
       frameSequence: 33,
@@ -218,6 +223,21 @@ describe('companion protocol', () => {
     expect(reports[0][14]).toBe(HOST_AUDIO_FRAME_CHUNK_COUNT);
     expect(reports[0][15]).toBe(HOST_AUDIO_PAYLOAD_LENGTH);
     expect(reports.at(-1)?.[15]).toBe(HOST_AUDIO_REPORT_FRAME_LENGTH % HOST_AUDIO_PAYLOAD_LENGTH);
+  });
+
+  it('chunks compact host audio frames with the fast stream format', () => {
+    const frame = new Array<number>(HOST_AUDIO_COMPACT_FRAME_LENGTH).fill(0).map((_, index) => index & 0xff);
+    const reports = buildHostAudioFastFrameReports({ frame, frameSequence: 42 });
+
+    expect(reports).toHaveLength(HOST_AUDIO_FAST_FRAME_CHUNK_COUNT);
+    expect(reports[0][0]).toBe(REPORT_ID.HOST_AUDIO_STREAM);
+    expect(reports[0][1]).toBe(HOST_AUDIO_PACKET_TYPE.FAST_FRAME_FRAGMENT);
+    expect(reports[0][2]).toBe(42);
+    expect(reports[0][4]).toBe(0);
+    expect(reports[0][5]).toBe(HOST_AUDIO_FAST_FRAME_CHUNK_COUNT);
+    expect(reports[0][6]).toBe(HOST_AUDIO_FAST_PAYLOAD_LENGTH);
+    expect(reports[0][7]).toBe(0);
+    expect(reports.at(-1)?.[6]).toBe(HOST_AUDIO_COMPACT_FRAME_LENGTH % HOST_AUDIO_FAST_PAYLOAD_LENGTH);
   });
 
   it('builds polling rate command reports', () => {

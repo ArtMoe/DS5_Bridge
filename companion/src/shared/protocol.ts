@@ -32,7 +32,10 @@ export const AUDIO_DEBUG_EVENT = {
   SPEAKER_ROUTE: 13,
   QUIET_MODE: 14,
   SILENCE_PREROLL: 15,
-  USB_SILENCE_TAIL: 16
+  USB_SILENCE_TAIL: 16,
+  HOST_MODE: 17,
+  HOST_FRAME: 18,
+  MIC_PACKET: 19
 } as const;
 
 export const AUDIO_DEBUG_RECORD_SIZE = 14;
@@ -71,24 +74,16 @@ export const HOST_AUDIO_PACKET_TYPE = {
   STOP: 4,
   FRAME_CHUNK: 5,
   SET_DUPLEX_ENABLED: 6,
-  SET_DUPLEX_DISABLED: 7
+  SET_DUPLEX_DISABLED: 7,
+  FAST_FRAME_FRAGMENT: 8
 } as const;
 
 export const HOST_AUDIO_PAYLOAD_LENGTH = 47;
+export const HOST_AUDIO_FAST_PAYLOAD_LENGTH = 57;
 export const HOST_AUDIO_REPORT_FRAME_LENGTH = 398;
+export const HOST_AUDIO_COMPACT_FRAME_LENGTH = 264;
 export const HOST_AUDIO_FRAME_CHUNK_COUNT = Math.ceil(HOST_AUDIO_REPORT_FRAME_LENGTH / HOST_AUDIO_PAYLOAD_LENGTH);
-
-const SYNTHETIC_HOST_AUDIO_STATE_PAYLOAD = [
-  0xfd, 0xe3, 0x00, 0x00,
-  0x7f, 0x64,
-  0xff, 0x09, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
-  0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
-  0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
-  0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x0a,
-  0x04, 0x00, 0x00, 0x00, 0x01,
-  0x00,
-  0xff, 0xd7, 0x00
-] as const;
+export const HOST_AUDIO_FAST_FRAME_CHUNK_COUNT = Math.ceil(HOST_AUDIO_COMPACT_FRAME_LENGTH / HOST_AUDIO_FAST_PAYLOAD_LENGTH);
 
 export const ACK_RESULT = {
   OK: 0x00,
@@ -566,33 +561,12 @@ export function buildHostAudioStreamReport(options: {
   return report;
 }
 
-export function buildSyntheticHostAudioFrame(): number[] {
-  const frame = new Array<number>(HOST_AUDIO_REPORT_FRAME_LENGTH).fill(0);
-  frame[0] = 0x36;
-  frame[2] = 0x11 | 0x80;
-  frame[3] = 7;
-  frame[4] = 0xfe;
-  frame[5] = 64;
-  frame[6] = 64;
-  frame[7] = 64;
-  frame[8] = 64;
-  frame[9] = 64;
-  frame[11] = 0x10 | 0x80;
-  frame[12] = 63;
-  for (let index = 0; index < SYNTHETIC_HOST_AUDIO_STATE_PAYLOAD.length; index += 1) {
-    frame[13 + index] = SYNTHETIC_HOST_AUDIO_STATE_PAYLOAD[index];
-  }
-  frame[76] = 0x12 | 0x80;
-  frame[77] = 64;
-  return frame;
-}
-
 export function buildHostAudioFrameChunkReports(options: {
   streamGeneration: number;
   frameSequence: number;
-  frame?: ArrayLike<number>;
+  frame: ArrayLike<number>;
 }): number[][] {
-  const frame = options.frame ?? buildSyntheticHostAudioFrame();
+  const frame = options.frame;
   const chunkCount = Math.ceil(frame.length / HOST_AUDIO_PAYLOAD_LENGTH);
   const reports: number[][] = [];
   for (let chunkIndex = 0; chunkIndex < chunkCount; chunkIndex += 1) {
@@ -610,6 +584,32 @@ export function buildHostAudioFrameChunkReports(options: {
       chunkCount,
       payload
     }));
+  }
+  return reports;
+}
+
+export function buildHostAudioFastFrameReports(options: {
+  frame: ArrayLike<number>;
+  frameSequence?: number;
+}): number[][] {
+  const frame = options.frame;
+  const sequence = options.frameSequence ?? 0;
+  const fragmentCount = Math.ceil(frame.length / HOST_AUDIO_FAST_PAYLOAD_LENGTH);
+  const reports: number[][] = [];
+  for (let offset = 0, fragmentIndex = 0; offset < frame.length; offset += HOST_AUDIO_FAST_PAYLOAD_LENGTH, fragmentIndex += 1) {
+    const payloadLength = Math.min(HOST_AUDIO_FAST_PAYLOAD_LENGTH, frame.length - offset);
+    const report = new Array<number>(REPORT_LENGTH).fill(0);
+    report[0] = REPORT_ID.HOST_AUDIO_STREAM;
+    report[1] = HOST_AUDIO_PACKET_TYPE.FAST_FRAME_FRAGMENT;
+    report[2] = sequence & 0xff;
+    report[3] = (sequence >> 8) & 0xff;
+    report[4] = fragmentIndex & 0xff;
+    report[5] = fragmentCount & 0xff;
+    report[6] = payloadLength & 0xff;
+    for (let index = 0; index < payloadLength; index += 1) {
+      report[7 + index] = frame[offset + index] & 0xff;
+    }
+    reports.push(report);
   }
   return reports;
 }
