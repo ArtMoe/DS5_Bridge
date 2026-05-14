@@ -65,7 +65,7 @@
 #define HOST_MIC_OPUS_SIZE 71
 #define HOST_MIC_OPUS_FRAMES 480
 #define HOST_MIC_INPUT_CHANNELS 1
-#define HOST_MIC_USB_CHANNELS 2
+#define HOST_MIC_USB_CHANNELS 1
 using std::clamp;
 using std::max;
 
@@ -629,7 +629,7 @@ static bool send_audio_haptics_packet(const int8_t *haptic_buf, bool include_spe
     reportSeqCounter = (reportSeqCounter + 1) & 0x0F;
     pkt[2] = 0x11 | (1 << 7);
     pkt[3] = 7;
-    pkt[4] = 0b11111110;
+    pkt[4] = 0b11111111;
     const uint8_t buffer_length = haptics_buffer_length;
     pkt[5] = buffer_length;
     pkt[6] = buffer_length;
@@ -1362,11 +1362,6 @@ static bool process_usb_audio_packet() {
 }
 
 static void process_mic_usb_output() {
-    if (!audio_duplex_active()) {
-        clear_mic_queues();
-        return;
-    }
-
     static mic_decode_element decoded{};
     if (!queue_try_remove(&mic_decode_fifo, &decoded)) {
         return;
@@ -1387,7 +1382,7 @@ static void process_mic_usb_output() {
 }
 
 void audio_mic_add_packet(uint8_t const *data, uint16_t len) {
-    if (data == nullptr || len < HOST_MIC_OPUS_SIZE || !audio_duplex_active()) {
+    if (data == nullptr || len < HOST_MIC_OPUS_SIZE) {
         if (len != 0) {
             mic_packets_dropped++;
         }
@@ -1470,8 +1465,8 @@ void audio_init() {
     resampler.SetFeedMode(true);
     resampler.Prealloc(2, 24, 6);
     queue_init(&audio_fifo,sizeof(audio_raw_element),2);
-    queue_init(&mic_fifo,sizeof(mic_packet_element),4);
-    queue_init(&mic_decode_fifo,sizeof(mic_decode_element),4);
+    queue_init(&mic_fifo,sizeof(mic_packet_element),2);
+    queue_init(&mic_decode_fifo,sizeof(mic_decode_element),2);
     critical_section_init(&opus_cs);
     opus_cs_ready = true;
     multicore_launch_core1_with_stack(core1_entry,audio_core1_stack,sizeof(audio_core1_stack));
@@ -1504,7 +1499,7 @@ static bool core1_process_mic() {
     if (!queue_try_remove(&mic_fifo, &mic_packet)) {
         return false;
     }
-    if (mic_decoder == nullptr || !audio_duplex_active()) {
+    if (mic_decoder == nullptr) {
         return true;
     }
 
@@ -1526,8 +1521,9 @@ static bool core1_process_mic() {
     static mic_decode_element decoded{};
     const int frames = std::min(decoded_samples, HOST_MIC_OPUS_FRAMES);
     for (int frame = 0; frame < frames; frame++) {
-        decoded.data[frame * HOST_MIC_USB_CHANNELS] = decoded_mono[frame];
-        decoded.data[frame * HOST_MIC_USB_CHANNELS + 1] = decoded_mono[frame];
+        for (int channel = 0; channel < HOST_MIC_USB_CHANNELS; channel++) {
+            decoded.data[frame * HOST_MIC_USB_CHANNELS + channel] = decoded_mono[frame];
+        }
     }
     decoded.len = static_cast<uint16_t>(frames * HOST_MIC_USB_CHANNELS * sizeof(int16_t));
     if (queue_is_full(&mic_decode_fifo)) {

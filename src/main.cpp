@@ -69,16 +69,18 @@ void interrupt_loop() {
 
 void on_bt_data(CHANNEL_TYPE channel, uint8_t *data, uint16_t len) {
     // DS5_LOG("[Main] BT data callback: channel=%u len=%u\n", channel, len);
-    if (data == nullptr || channel != INTERRUPT || data[1] != 0x31 || len < 3 + sizeof(interrupt_in_data)) {
+    if (data == nullptr || channel != INTERRUPT || len <= 2 || data[1] != 0x31) {
         return;
     }
 
-#ifdef ENABLE_COMPANION
     if ((data[2] & 0x02) != 0) {
         audio_mic_add_packet(data + 4, len > 4 ? static_cast<uint16_t>(len - 4) : 0);
         return;
     }
-#endif
+
+    if (len < 3 + sizeof(interrupt_in_data)) {
+        return;
+    }
 
     if ((data[56] & 1) != (interrupt_in_data[53] & 1)) {
         set_headset(data[56] & 1);
