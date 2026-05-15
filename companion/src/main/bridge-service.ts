@@ -597,6 +597,7 @@ export class BridgeService extends EventEmitter {
       await this.sendCommand(COMMAND_ID.SET_HOST_AUDIO_ENABLED, 0, { expectSettingsRevisionChange: true });
       this.hostAudioCommandActive = false;
       await this.hostAudioEngine.stop();
+      await this.micKeepaliveEngine.stop();
     }
     this.snapshot.settings = this.settingsStore.update(customSettingUpdate({
       hostEncodedAudioEnabled: enabled,
@@ -967,7 +968,9 @@ export class BridgeService extends EventEmitter {
 
   private async updateMicKeepaliveEngine(controllerConnected: boolean): Promise<void> {
     try {
-      if (!controllerConnected) {
+      const settings = this.settingsStore.get();
+      const hostAudioActive = settings.hostEncodedAudioEnabled && this.hostAudioCommandActive;
+      if (!controllerConnected || !hostAudioActive) {
         await this.micKeepaliveEngine.stop();
         return;
       }
@@ -1287,6 +1290,7 @@ export class BridgeService extends EventEmitter {
       await this.sendCommand(COMMAND_ID.SET_DUPLEX_ENABLED, 0, { throwOnCommandError: false });
       this.hostAudioCommandActive = false;
       await this.hostAudioEngine.stop();
+      await this.micKeepaliveEngine.stop();
     }
     await this.sendCommand(COMMAND_ID.SET_LED_ENABLED, settings.ledEnabled ? 1 : 0, {
       expectSettingsRevisionChange

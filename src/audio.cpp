@@ -255,6 +255,10 @@ static void audio_host_poll();
 static void process_mic_usb_output();
 static void clear_partial_audio_state();
 
+static bool host_mic_path_active() {
+    return audio_runtime_mode == AudioRuntimeHostEncodedActive && bt_is_controller_connected();
+}
+
 static void clamp_state_speaker_volume() {
     if (state_data[STATE_PAYLOAD_SPEAKER_VOLUME_OFFSET] > STATE_PAYLOAD_SPEAKER_VOLUME_SAFE_MAX) {
         state_data[STATE_PAYLOAD_SPEAKER_VOLUME_OFFSET] = STATE_PAYLOAD_SPEAKER_VOLUME_SAFE_MAX;
@@ -775,7 +779,13 @@ static bool audio_silence_tail_active(uint32_t now) {
 }
 
 bool audio_recent() {
-    return audio_silence_tail_active(time_us_32());
+    const uint32_t now = time_us_32();
+    if (audio_silence_tail_active(now)) {
+        return true;
+    }
+    return audio_runtime_mode == AudioRuntimeHostEncodedActive
+        && host_last_frame_us != 0
+        && static_cast<uint32_t>(now - host_last_frame_us) < SPEAKER_USB_SILENCE_TAIL_US;
 }
 
 bool audio_haptics_ready() {
@@ -858,7 +868,7 @@ void audio_host_set_duplex_requested(bool enabled) {
 }
 
 bool audio_duplex_active() {
-    return audio_runtime_mode == AudioRuntimeHostEncodedActive && bt_is_controller_connected();
+    return host_mic_path_active();
 }
 
 static bool submit_host_audio_report(uint8_t const *report, uint16_t len) {
@@ -1109,7 +1119,7 @@ void audio_get_host_status(audio_host_status *status) {
     status->mic_last_decoded_samples = mic_last_decoded_samples;
     status->mic_last_written_bytes = mic_last_written_bytes;
     status->mic_peak_permille = mic_peak_permille;
-    status->mic_usb_streaming = usb_mic_streaming_active();
+    status->mic_usb_streaming = host_mic_path_active() && usb_mic_streaming_active();
 }
 
 void audio_set_haptics_buffer_length(uint8_t length) {
@@ -1394,7 +1404,7 @@ static bool process_usb_audio_packet() {
 }
 
 static void process_mic_usb_output() {
-    if (!usb_mic_streaming_active()) {
+    if (!host_mic_path_active() || !usb_mic_streaming_active()) {
         if (mic_usb_playout_started || mic_usb_pending_len != 0) {
             tud_audio_clear_ep_in_ff();
         }
@@ -1479,6 +1489,9 @@ static void process_mic_usb_output() {
 }
 
 void audio_mic_add_packet(uint8_t const *data, uint16_t len) {
+    if (!host_mic_path_active()) {
+        return;
+    }
     if (data == nullptr || len < HOST_MIC_OPUS_SIZE) {
         if (len != 0) {
             mic_packets_dropped++;
@@ -1734,6 +1747,9 @@ static bool core1_process_mic_plc() {
 }
 
 static bool core1_process_mic_burst() {
+    if (!host_mic_path_active()) {
+        return false;
+    }
     bool did_mic = false;
     for (uint8_t packet = 0; packet < HOST_MIC_CORE1_BURST_LIMIT; packet++) {
         if (!core1_process_mic()) {
