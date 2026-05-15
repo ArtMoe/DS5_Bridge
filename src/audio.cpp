@@ -66,6 +66,9 @@
 #define HOST_MIC_OPUS_FRAMES 480
 #define HOST_MIC_INPUT_CHANNELS 1
 #define HOST_MIC_USB_CHANNELS 1
+#define HOST_MIC_QUEUE_DEPTH 6
+#define HOST_MIC_USB_WRITE_INTERVAL_US 1000
+#define HOST_MIC_USB_PACKET_BYTES (48 * HOST_MIC_USB_CHANNELS * sizeof(int16_t))
 using std::clamp;
 using std::max;
 
@@ -233,6 +236,10 @@ static uint32_t mic_usb_write_short = 0;
 static uint16_t mic_last_decoded_samples = 0;
 static uint16_t mic_last_written_bytes = 0;
 static uint16_t mic_peak_permille = 0;
+static uint32_t mic_last_usb_write_us = 0;
+static mic_decode_element mic_usb_pending{};
+static uint16_t mic_usb_pending_offset = 0;
+static uint16_t mic_usb_pending_len = 0;
 
 static void core1_entry();
 static void reset_core1_audio_pipeline(uint32_t generation);
@@ -488,6 +495,9 @@ static void clear_host_reassembly() {
 static void clear_mic_queues() {
     drain_queue(&mic_fifo);
     drain_queue(&mic_decode_fifo);
+    mic_last_usb_write_us = 0;
+    mic_usb_pending_offset = 0;
+    mic_usb_pending_len = 0;
 }
 
 static void enter_fallback(AudioFallbackReason reason) {
@@ -835,13 +845,10 @@ void audio_host_stop_stream(AudioFallbackReason reason) {
 
 void audio_host_set_duplex_requested(bool enabled) {
     host_duplex_requested = enabled;
-    if (!enabled && audio_initialized) {
-        clear_mic_queues();
-    }
 }
 
 bool audio_duplex_active() {
-    return host_duplex_requested && audio_runtime_mode == AudioRuntimeHostEncodedActive && bt_is_controller_connected();
+    return audio_runtime_mode == AudioRuntimeHostEncodedActive && bt_is_controller_connected();
 }
 
 static bool submit_host_audio_report(uint8_t const *report, uint16_t len) {
@@ -1377,21 +1384,43 @@ static bool process_usb_audio_packet() {
 }
 
 static void process_mic_usb_output() {
-    static mic_decode_element decoded{};
-    if (!queue_try_remove(&mic_decode_fifo, &decoded)) {
+    const uint32_t now = time_us_32();
+    if (
+        mic_last_usb_write_us != 0
+        && static_cast<uint32_t>(now - mic_last_usb_write_us) < HOST_MIC_USB_WRITE_INTERVAL_US
+    ) {
         return;
     }
 
-    const uint16_t written = tud_audio_write(decoded.data, decoded.len);
+    if (mic_usb_pending_offset >= mic_usb_pending_len) {
+        if (!queue_try_remove(&mic_decode_fifo, &mic_usb_pending)) {
+            return;
+        }
+        mic_usb_pending_offset = 0;
+        mic_usb_pending_len = mic_usb_pending.len;
+    }
+
+    const uint16_t remaining = static_cast<uint16_t>(mic_usb_pending_len - mic_usb_pending_offset);
+    const uint16_t target = std::min<uint16_t>(remaining, HOST_MIC_USB_PACKET_BYTES);
+    const uint8_t *data = reinterpret_cast<uint8_t const *>(mic_usb_pending.data) + mic_usb_pending_offset;
+    const uint16_t written = tud_audio_write(data, target);
     mic_last_written_bytes = written;
-    if (written != decoded.len) {
+    if (written > 0) {
+        mic_last_usb_write_us = now;
+        mic_usb_pending_offset = static_cast<uint16_t>(mic_usb_pending_offset + written);
+    }
+    if (mic_usb_pending_offset >= mic_usb_pending_len) {
+        mic_usb_pending_offset = 0;
+        mic_usb_pending_len = 0;
+    }
+    if (written != target) {
         mic_usb_write_short++;
         mic_packets_dropped++;
         audio_debug_log(
             AudioDebugMicPacket,
             1,
             clamp_debug_u8(written),
-            clamp_debug_u8(decoded.len),
+            clamp_debug_u8(target),
             clamp_debug_u8(mic_packets_dropped),
             0
         );
@@ -1484,8 +1513,8 @@ void audio_init() {
     resampler.SetFeedMode(true);
     resampler.Prealloc(2, 24, 6);
     queue_init(&audio_fifo,sizeof(audio_raw_element),2);
-    queue_init(&mic_fifo,sizeof(mic_packet_element),2);
-    queue_init(&mic_decode_fifo,sizeof(mic_decode_element),2);
+    queue_init(&mic_fifo,sizeof(mic_packet_element),HOST_MIC_QUEUE_DEPTH);
+    queue_init(&mic_decode_fifo,sizeof(mic_decode_element),HOST_MIC_QUEUE_DEPTH);
     critical_section_init(&opus_cs);
     opus_cs_ready = true;
     multicore_launch_core1_with_stack(core1_entry,audio_core1_stack,sizeof(audio_core1_stack));

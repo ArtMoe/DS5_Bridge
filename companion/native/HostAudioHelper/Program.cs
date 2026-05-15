@@ -21,8 +21,8 @@ static class AudioConstants
     public const int CompactFrameBytes = 264;
     public const int HapticBuckets = 32;
     public const int WasapiBufferMilliseconds = 10;
-    public const int MaxQueuedReports = 6;
-    public const int MaxBufferedReports = 2;
+    public const int MaxQueuedReports = 8;
+    public const int MaxBufferedReports = 4;
     public const byte HostAudioStreamReportId = 0x07;
     public const byte FastFrameFragmentType = 0x08;
     public const int FastPayloadBytes = 57;
@@ -44,6 +44,7 @@ sealed class HostAudioHelper : IDisposable
     private readonly float[] hapticLeftBlock = new float[AudioConstants.PicoInputBlockFrames];
     private readonly float[] hapticRightBlock = new float[AudioConstants.PicoInputBlockFrames];
     private readonly byte[] writePrefix = new byte[2];
+    private readonly byte[] hidReport = new byte[AudioConstants.HidReportBytes];
     private readonly byte[] report = new byte[AudioConstants.CompactFrameBytes];
     private readonly BlockingCollection<byte[]> reportQueue = new(AudioConstants.MaxQueuedReports);
     private readonly ManualResetEventSlim stopped = new(false);
@@ -74,6 +75,7 @@ sealed class HostAudioHelper : IDisposable
     public HostAudioHelper(HelperOptions options)
     {
         this.options = options;
+        RaiseSchedulingPriority();
         encoder = new OpusEncoder(AudioConstants.TargetSampleRate, 2, OpusApplication.OPUS_APPLICATION_AUDIO)
         {
             Bitrate = 160000,
@@ -580,6 +582,7 @@ sealed class HostAudioHelper : IDisposable
     {
         try
         {
+            TrySetThreadPriority(ThreadPriority.AboveNormal);
             var stdout = Console.OpenStandardOutput();
             var stopwatch = Stopwatch.StartNew();
             var nextWriteTicks = 0L;
@@ -663,13 +666,12 @@ sealed class HostAudioHelper : IDisposable
 
     private bool TryWriteFrameToHid(byte[] frame)
     {
-        Span<byte> hidReport = stackalloc byte[AudioConstants.HidReportBytes];
         var sequence = frameSequence++;
         var fragmentIndex = 0;
         var fragmentCount = (frame.Length + AudioConstants.FastPayloadBytes - 1) / AudioConstants.FastPayloadBytes;
         for (var offset = 0; offset < frame.Length; offset += AudioConstants.FastPayloadBytes)
         {
-            hidReport.Clear();
+            Array.Clear(hidReport);
             var payloadLength = Math.Min(AudioConstants.FastPayloadBytes, frame.Length - offset);
             hidReport[0] = AudioConstants.HostAudioStreamReportId;
             hidReport[1] = AudioConstants.FastFrameFragmentType;
@@ -678,8 +680,8 @@ sealed class HostAudioHelper : IDisposable
             hidReport[4] = (byte)fragmentIndex;
             hidReport[5] = (byte)fragmentCount;
             hidReport[6] = (byte)payloadLength;
-            frame.AsSpan(offset, payloadLength).CopyTo(hidReport[7..]);
-            if (!TryWriteHidReport(hidReport.ToArray()))
+            Buffer.BlockCopy(frame, offset, hidReport, 7, payloadLength);
+            if (!TryWriteHidReport(hidReport))
             {
                 return false;
             }
@@ -699,14 +701,17 @@ sealed class HostAudioHelper : IDisposable
 
         try
         {
-            var asyncResult = stream.BeginWrite(report, 0, report.Length, null, null);
-            if (!asyncResult.AsyncWaitHandle.WaitOne(AudioConstants.HidWriteTimeoutMilliseconds))
+            var start = Stopwatch.GetTimestamp();
+            stream.Write(report, 0, report.Length);
+            var elapsedUs = (Stopwatch.GetTimestamp() - start) * 1000000 / Stopwatch.Frequency;
+            if (elapsedUs > AudioConstants.HidWriteTimeoutMilliseconds * 1000)
             {
-                Console.Error.WriteLine("status: companion HID direct output timed out; using stdout frame transport");
-                DisableHidTransport();
-                return false;
+                writeLateEvents++;
+                if (elapsedUs > maxWriteLateUs)
+                {
+                    maxWriteLateUs = elapsedUs;
+                }
             }
-            stream.EndWrite(asyncResult);
             return true;
         }
         catch (Exception error)
@@ -714,6 +719,28 @@ sealed class HostAudioHelper : IDisposable
             Console.Error.WriteLine($"status: companion HID direct output failed: {error.GetType().Name}: {error.Message}; using stdout frame transport");
             DisableHidTransport();
             return false;
+        }
+    }
+
+    private static void RaiseSchedulingPriority()
+    {
+        try
+        {
+            Process.GetCurrentProcess().PriorityClass = ProcessPriorityClass.High;
+        }
+        catch
+        {
+        }
+    }
+
+    private static void TrySetThreadPriority(ThreadPriority priority)
+    {
+        try
+        {
+            Thread.CurrentThread.Priority = priority;
+        }
+        catch
+        {
         }
     }
 

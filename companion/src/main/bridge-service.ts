@@ -558,8 +558,10 @@ export class BridgeService extends EventEmitter {
     if (enabled) {
       await this.sendCommand(COMMAND_ID.SET_HOST_AUDIO_ENABLED, 1, { expectSettingsRevisionChange: true });
       await this.sendCommand(COMMAND_ID.START_HOST_AUDIO, 0, { throwOnCommandError: false });
+      await this.sendCommand(COMMAND_ID.SET_DUPLEX_ENABLED, 1, { throwOnCommandError: false });
       this.hostAudioCommandActive = true;
       this.sendHostAudioStreamReport(HOST_AUDIO_PACKET_TYPE.HELLO);
+      this.sendHostAudioStreamReport(HOST_AUDIO_PACKET_TYPE.SET_DUPLEX_ENABLED);
     } else {
       await this.sendCommand(COMMAND_ID.STOP_HOST_AUDIO, 0, { throwOnCommandError: false });
       await this.sendCommand(COMMAND_ID.SET_HOST_AUDIO_ENABLED, 0, { expectSettingsRevisionChange: true });
@@ -580,12 +582,13 @@ export class BridgeService extends EventEmitter {
   }
 
   async setDuplexMicEnabled(enabled: boolean): Promise<BridgeSnapshot> {
-    const nextEnabled = enabled && this.settingsStore.get().hostEncodedAudioEnabled;
-    await this.sendCommand(COMMAND_ID.SET_DUPLEX_ENABLED, nextEnabled ? 1 : 0, {
+    const hostEncodedAudioEnabled = this.settingsStore.get().hostEncodedAudioEnabled;
+    const nextEnabled = enabled && hostEncodedAudioEnabled;
+    await this.sendCommand(COMMAND_ID.SET_DUPLEX_ENABLED, hostEncodedAudioEnabled ? 1 : 0, {
       expectSettingsRevisionChange: true
     });
     this.sendHostAudioStreamReport(
-      nextEnabled ? HOST_AUDIO_PACKET_TYPE.SET_DUPLEX_ENABLED : HOST_AUDIO_PACKET_TYPE.SET_DUPLEX_DISABLED
+      hostEncodedAudioEnabled ? HOST_AUDIO_PACKET_TYPE.SET_DUPLEX_ENABLED : HOST_AUDIO_PACKET_TYPE.SET_DUPLEX_DISABLED
     );
     this.snapshot.settings = this.settingsStore.update(customSettingUpdate({
       duplexMicEnabled: nextEnabled
@@ -964,20 +967,18 @@ export class BridgeService extends EventEmitter {
       if (!this.hostAudioCommandActive || (!helperWasActive && this.hostAudioStatus?.streamActive === false)) {
         await this.sendCommand(COMMAND_ID.SET_HOST_AUDIO_ENABLED, 1, { throwOnCommandError: false });
         await this.sendCommand(COMMAND_ID.START_HOST_AUDIO, 0, { throwOnCommandError: false });
-        if (settings.duplexMicEnabled) {
-          await this.sendCommand(COMMAND_ID.SET_DUPLEX_ENABLED, 1, { throwOnCommandError: false });
-        }
+        await this.sendCommand(COMMAND_ID.SET_DUPLEX_ENABLED, 1, { throwOnCommandError: false });
         this.hostAudioCommandActive = true;
         this.readHostAudioStatus();
       }
       await this.updateHostAudioEngine();
       const helperIsActive = this.hostAudioEngine.isActive();
-      if (!helperIsActive && !this.sendHostAudioStreamReport(HOST_AUDIO_PACKET_TYPE.HEARTBEAT)) {
+      if (helperIsActive) {
+        await this.sendCommand(COMMAND_ID.HOST_AUDIO_HEARTBEAT, 0, { throwOnCommandError: false });
+      } else if (!this.sendHostAudioStreamReport(HOST_AUDIO_PACKET_TYPE.HEARTBEAT)) {
         await this.sendCommand(COMMAND_ID.HOST_AUDIO_HEARTBEAT, 0, { throwOnCommandError: false });
       }
-      if (!helperIsActive) {
-        this.readHostAudioStatusThrottled();
-      }
+      this.readHostAudioStatusThrottled();
     } finally {
       this.hostAudioHeartbeatBusy = false;
     }
@@ -1246,7 +1247,7 @@ export class BridgeService extends EventEmitter {
       await this.sendCommand(COMMAND_ID.START_HOST_AUDIO, 0, { throwOnCommandError: false });
       await this.sendCommand(
         COMMAND_ID.SET_DUPLEX_ENABLED,
-        settings.duplexMicEnabled ? 1 : 0,
+        1,
         { expectSettingsRevisionChange }
       );
       this.hostAudioCommandActive = true;
