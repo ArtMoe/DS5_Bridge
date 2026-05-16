@@ -30,6 +30,7 @@ static class AudioConstants
     public const int HidWriteTimeoutMilliseconds = 4;
     public const int DiagnosticsIntervalMilliseconds = 2000;
     public const int MicKeepaliveBufferMilliseconds = 10;
+    public const int SpeakerWarmupMilliseconds = 300;
     public const float SpeakerGainRampStepPermille = 1000f / (TargetSampleRate * 0.02f);
     public static readonly long FrameIntervalTicks = Stopwatch.Frequency * PicoInputBlockFrames / TargetSampleRate;
 }
@@ -44,6 +45,7 @@ sealed class HostAudioHelper : IDisposable
     private readonly float[] speakerBlock = new float[AudioConstants.PicoInputBlockFrames * 2];
     private readonly float[] hapticLeftBlock = new float[AudioConstants.PicoInputBlockFrames];
     private readonly float[] hapticRightBlock = new float[AudioConstants.PicoInputBlockFrames];
+    private readonly object speakerWarmupSync = new();
     private readonly byte[] writePrefix = new byte[2];
     private readonly byte[] hidReport = new byte[AudioConstants.HidReportBytes];
     private readonly byte[] report = new byte[AudioConstants.CompactFrameBytes];
@@ -52,8 +54,10 @@ sealed class HostAudioHelper : IDisposable
     private readonly Task writerTask;
     private readonly Task diagnosticsTask;
     private MMDeviceEnumerator? enumerator;
+    private MMDevice? renderDevice;
     private WasapiLoopbackCapture? capture;
     private WasapiCapture? micCapture;
+    private WasapiOut? speakerWarmupOutput;
     private HidStream? hidStream;
     private int picoBlockFrameIndex;
     private bool picoBlockHasHaptics;
@@ -135,6 +139,7 @@ sealed class HostAudioHelper : IDisposable
         Stop();
         capture?.Dispose();
         micCapture?.Dispose();
+        StopSpeakerWarmup();
         hidStream?.Dispose();
         enumerator?.Dispose();
         reportQueue.CompleteAdding();
@@ -161,6 +166,7 @@ sealed class HostAudioHelper : IDisposable
 
         TryOpenCompanionHid();
         var device = SelectRenderEndpoint(enumerator, options.DeviceName);
+        renderDevice = device;
         capture = new WasapiLoopbackCapture(device);
         SetWasapiBufferMilliseconds(capture, AudioConstants.WasapiBufferMilliseconds);
         capture.DataAvailable += OnDataAvailable;
@@ -176,11 +182,13 @@ sealed class HostAudioHelper : IDisposable
         Console.Error.WriteLine(
             $"status: capturing '{device.FriendlyName}' {capture.WaveFormat.SampleRate}Hz {capture.WaveFormat.Channels}ch {capture.WaveFormat.BitsPerSample}bit {capture.WaveFormat.Encoding}");
         capture.StartRecording();
+        StartSpeakerWarmup();
         Console.Error.WriteLine("status: recording-started");
     }
 
     private void Stop()
     {
+        StopSpeakerWarmup();
         try
         {
             micCapture?.StopRecording();
@@ -218,6 +226,75 @@ sealed class HostAudioHelper : IDisposable
             $"status: mic keepalive opening '{device.FriendlyName}' {micCapture.WaveFormat.SampleRate}Hz {micCapture.WaveFormat.Channels}ch {micCapture.WaveFormat.BitsPerSample}bit {micCapture.WaveFormat.Encoding}");
         micCapture.StartRecording();
         Console.Error.WriteLine("status: mic keepalive started");
+    }
+
+    private void StartSpeakerWarmup()
+    {
+        var device = renderDevice;
+        if (disposed || device is null)
+        {
+            return;
+        }
+
+        try
+        {
+            lock (speakerWarmupSync)
+            {
+                StopSpeakerWarmupLocked();
+                var output = new WasapiOut(device, AudioClientShareMode.Shared, false, AudioConstants.WasapiBufferMilliseconds);
+                var provider = new TimedSilenceWaveProvider(
+                    new WaveFormat(AudioConstants.TargetSampleRate, 16, 2),
+                    AudioConstants.SpeakerWarmupMilliseconds
+                );
+                speakerWarmupOutput = output;
+                output.PlaybackStopped += (_, _) =>
+                {
+                    lock (speakerWarmupSync)
+                    {
+                        if (speakerWarmupOutput == output)
+                        {
+                            speakerWarmupOutput = null;
+                        }
+                    }
+                    output.Dispose();
+                };
+                output.Init(provider);
+                output.Play();
+            }
+            Console.Error.WriteLine("status: speaker warmup silence started");
+        }
+        catch (Exception error)
+        {
+            Console.Error.WriteLine($"error: speaker warmup failed: {error.Message}");
+        }
+    }
+
+    private void StopSpeakerWarmup()
+    {
+        lock (speakerWarmupSync)
+        {
+            StopSpeakerWarmupLocked();
+        }
+    }
+
+    private void StopSpeakerWarmupLocked()
+    {
+        var output = speakerWarmupOutput;
+        speakerWarmupOutput = null;
+        if (output is null)
+        {
+            return;
+        }
+
+        try
+        {
+            output.Stop();
+        }
+        catch (Exception error)
+        {
+            Console.Error.WriteLine($"error: speaker warmup stop failed: {error.Message}");
+        }
+        output.Dispose();
     }
 
     private void TryOpenCompanionHid()
@@ -573,6 +650,12 @@ sealed class HostAudioHelper : IDisposable
         )
         {
             Volatile.Write(ref targetSpeakerGainPermille, VolumePercentToPermille(speakerVolumePercent));
+            return;
+        }
+
+        if (parts.Length == 1 && string.Equals(parts[0], "warm-speaker", StringComparison.OrdinalIgnoreCase))
+        {
+            StartSpeakerWarmup();
         }
     }
 
@@ -818,6 +901,32 @@ sealed class HostAudioHelper : IDisposable
     private static byte FloatToInt8(float sample)
     {
         return unchecked((byte)(sbyte)Math.Round(Math.Clamp(sample, -1, 1) * sbyte.MaxValue));
+    }
+}
+
+sealed class TimedSilenceWaveProvider : IWaveProvider
+{
+    private int remainingBytes;
+
+    public TimedSilenceWaveProvider(WaveFormat waveFormat, int durationMilliseconds)
+    {
+        WaveFormat = waveFormat;
+        remainingBytes = waveFormat.AverageBytesPerSecond * durationMilliseconds / 1000;
+    }
+
+    public WaveFormat WaveFormat { get; }
+
+    public int Read(byte[] buffer, int offset, int count)
+    {
+        if (remainingBytes <= 0)
+        {
+            return 0;
+        }
+
+        var bytesToWrite = Math.Min(count, remainingBytes);
+        Array.Clear(buffer, offset, bytesToWrite);
+        remainingBytes -= bytesToWrite;
+        return bytesToWrite;
     }
 }
 

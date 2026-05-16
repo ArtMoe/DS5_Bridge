@@ -330,26 +330,34 @@ button {
 
 .dot {
   flex: 0 0 auto;
-  width: 11px;
-  height: 11px;
+  width: 12px;
+  height: 12px;
   border-radius: 50%;
   background: #778397;
-  box-shadow: 0 0 0 4px rgba(119, 131, 151, 0.12);
+  box-shadow:
+    0 0 0 5px rgba(119, 131, 151, 0.12),
+    0 0 14px rgba(119, 131, 151, 0.08);
 }
 
 .dot.good {
-  background: #6fd95f;
-  box-shadow: 0 0 0 4px rgba(111, 217, 95, 0.14);
+  background: #73df63;
+  box-shadow:
+    0 0 0 5px rgba(111, 217, 95, 0.14),
+    0 0 15px rgba(111, 217, 95, 0.2);
 }
 
 .dot.bad {
   background: #ff5a70;
-  box-shadow: 0 0 0 4px rgba(255, 90, 112, 0.16);
+  box-shadow:
+    0 0 0 5px rgba(255, 90, 112, 0.14),
+    0 0 15px rgba(255, 90, 112, 0.16);
 }
 
 .dot.warn {
   background: #f4c05d;
-  box-shadow: 0 0 0 4px rgba(244, 192, 93, 0.14);
+  box-shadow:
+    0 0 0 5px rgba(244, 192, 93, 0.13),
+    0 0 15px rgba(244, 192, 93, 0.16);
 }
 
 .bridge-state {
@@ -840,11 +848,13 @@ button {
 
 .system-page .feature-card-grid {
   align-items: stretch;
+  height: var(--feature-card-height);
 }
 
 .system-page .system-card {
   align-self: stretch;
-  height: auto;
+  min-height: 0;
+  height: var(--feature-card-height);
 }
 
 .feature-card-title {
@@ -986,6 +996,39 @@ button {
   margin-left: 0;
 }
 
+.audio-page .feature-card-title {
+  display: grid;
+  grid-template-columns: 30px minmax(0, 1fr);
+  position: relative;
+}
+
+.audio-page .feature-card-title .feature-icon {
+  grid-column: 1;
+}
+
+.audio-page .feature-card-title .title-copy {
+  grid-column: 2;
+}
+
+.audio-page .feature-card-title .title-copy p {
+  white-space: nowrap;
+}
+
+.audio-page .feature-card-title .title-inline-switch,
+.audio-page .feature-card-title .audio-flip-button {
+  position: absolute;
+  top: 0;
+  margin-left: 0;
+}
+
+.audio-page .feature-card-title .title-inline-switch {
+  right: 116px;
+}
+
+.audio-page .feature-card-title .audio-flip-button {
+  right: 0;
+}
+
 .mic-option-grid {
   display: grid;
   grid-template-columns: minmax(0, 1fr);
@@ -1099,11 +1142,6 @@ button {
   padding-right: 12px;
   text-align: left;
   white-space: nowrap;
-}
-
-.audio-page .test-card > .primary-action,
-.audio-page .test-card > .secondary-action {
-  --test-action-label-width: calc(((76px + 56px + 82px + 56px + 88px + 94px) / 6) - 5px);
 }
 
 .test-card > .primary-action svg,
@@ -1238,14 +1276,14 @@ button {
   min-width: 0;
   min-height: 30px;
   max-width: 100%;
-  padding: 0 11px;
-  border: 1px solid rgba(142, 164, 194, 0.22);
+  padding: 0 13px;
+  border: 1px solid rgba(112, 133, 162, 0.34);
   border-radius: var(--control-radius);
   display: inline-flex;
   align-items: center;
-  gap: 9px;
-  color: #d8e2f2;
-  background: rgba(241, 245, 255, 0.055);
+  gap: 11px;
+  color: #cdd8e8;
+  background: rgba(12, 22, 35, 0.42);
 }
 
 .status-badge strong {
@@ -1259,23 +1297,23 @@ button {
 
 .test-status.good .status-badge,
 .status-badge.good {
-  border-color: rgba(111, 217, 95, 0.28);
-  background: rgba(111, 217, 95, 0.08);
-  color: #e8f8e6;
+  border-color: rgba(112, 133, 162, 0.36);
+  background: rgba(12, 22, 35, 0.42);
+  color: #d8e3f0;
 }
 
 .test-status.warn .status-badge,
 .status-badge.warn {
-  border-color: rgba(244, 192, 93, 0.32);
-  background: rgba(244, 192, 93, 0.09);
-  color: #fff0d1;
+  border-color: rgba(112, 133, 162, 0.36);
+  background: rgba(12, 22, 35, 0.42);
+  color: #d8e3f0;
 }
 
 .test-status.bad .status-badge,
 .status-badge.bad {
-  border-color: rgba(255, 90, 112, 0.3);
-  background: rgba(255, 90, 112, 0.08);
-  color: #ffe7eb;
+  border-color: rgba(112, 133, 162, 0.36);
+  background: rgba(12, 22, 35, 0.42);
+  color: #d8e3f0;
 }
 
 .wide-select {
@@ -1773,6 +1811,7 @@ button {
 .device-card {
   display: flex;
   flex-direction: column;
+  min-height: 0;
 }
 
 .device-list {
@@ -1841,10 +1880,10 @@ button {
 }
 
 .device-diagnostics {
-  flex: 0 1 auto;
+  flex: 1 1 0;
   min-height: 0;
-  height: 230px;
-  max-height: 230px;
+  height: auto;
+  max-height: none;
   margin-top: 0;
   padding-top: 0;
   border-top: 1px solid rgba(142, 164, 194, 0.12);

@@ -62,7 +62,8 @@ describe('companion layout CSS', () => {
     expect(cssBlock('.system-page .feature-card-grid', 'align-items: stretch;')).toContain('align-items: stretch;');
     expect(cssBlock('.system-page .system-card', 'align-self: stretch;')).toContain('align-self: stretch;');
     expect(normalizedStyles).toContain('.lighting-page .feature-card, .system-page .system-card');
-    expect(cssBlock('.device-diagnostics', 'flex: 0 1 auto;')).toContain('flex: 0 1 auto;');
+    expect(cssBlock('.device-diagnostics', 'flex: 1 1 0;')).toContain('flex: 1 1 0;');
+    expect(cssBlock('.device-diagnostics', 'overflow: auto;')).toContain('overflow: auto;');
   });
 
   it('keeps test card statuses aligned and gives lighting color metadata enough room', () => {

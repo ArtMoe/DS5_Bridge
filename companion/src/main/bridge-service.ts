@@ -654,6 +654,9 @@ export class BridgeService extends EventEmitter {
     this.sendHostAudioStreamReport(
       nextEnabled ? HOST_AUDIO_PACKET_TYPE.SET_DUPLEX_ENABLED : HOST_AUDIO_PACKET_TYPE.SET_DUPLEX_DISABLED
     );
+    if (nextEnabled) {
+      this.hostAudioEngine.warmSpeakerRoute();
+    }
     this.snapshot.settings = this.settingsStore.update(customSettingUpdate({
       duplexMicEnabled: nextEnabled,
       micMuted: !nextEnabled
@@ -1011,6 +1014,9 @@ export class BridgeService extends EventEmitter {
     this.clearHostAudioReportQueue();
     this.hostAudioCommandActive = true;
     await this.hostAudioEngine.start(this.devicePath, 0);
+    if (duplexEnabled) {
+      this.hostAudioEngine.warmSpeakerRoute();
+    }
     await this.sendCommand(COMMAND_ID.SET_HOST_AUDIO_ENABLED, 1, { expectSettingsRevisionChange });
     await delay(HOST_AUDIO_START_FADE_MS);
     await this.sendCommand(COMMAND_ID.START_HOST_AUDIO, 0, { throwOnCommandError: false });
@@ -1093,6 +1099,9 @@ export class BridgeService extends EventEmitter {
         this.readHostAudioStatus();
       }
       await this.updateHostAudioEngine();
+      if (settings.duplexMicEnabled && !helperWasActive && this.hostAudioEngine.isActive()) {
+        this.hostAudioEngine.warmSpeakerRoute();
+      }
       const helperIsActive = this.hostAudioEngine.isActive();
       if (helperIsActive) {
         await this.sendCommand(COMMAND_ID.HOST_AUDIO_HEARTBEAT, 0, { throwOnCommandError: false });

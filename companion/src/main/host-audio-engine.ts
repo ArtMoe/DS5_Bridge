@@ -60,11 +60,19 @@ export class HostAudioEngine extends EventEmitter {
   setSpeakerVolumePercent(percent: number): void {
     const nextSpeakerVolumePercent = normalizeSpeakerVolumePercent(percent);
     this.activeSpeakerVolumePercent = nextSpeakerVolumePercent;
+    this.writeControlLine(`speaker-volume ${nextSpeakerVolumePercent}`);
+  }
+
+  warmSpeakerRoute(): void {
+    this.writeControlLine('warm-speaker');
+  }
+
+  private writeControlLine(line: string): void {
     const helper = this.process;
     if (!helper || helper.stdin.destroyed || !helper.stdin.writable) {
       return;
     }
-    helper.stdin.write(`speaker-volume ${nextSpeakerVolumePercent}\n`, (error) => {
+    helper.stdin.write(`${line}\n`, (error) => {
       if (error) {
         this.emit('error', error);
       }
