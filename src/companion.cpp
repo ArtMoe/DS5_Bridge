@@ -17,7 +17,7 @@ constexpr uint8_t kProtocolMajor = 1;
 constexpr uint8_t kProtocolMinor = 0;
 constexpr uint8_t kFirmwareMajor = 0;
 constexpr uint8_t kFirmwareMinor = 5;
-constexpr uint8_t kFirmwarePatch = 16;
+constexpr uint8_t kFirmwarePatch = 17;
 constexpr uint8_t kTriangleButtonBit = 0x80;
 constexpr uint8_t kHomeButtonBit = 0x01;
 constexpr uint8_t kMuteButtonBit = 0x04;
@@ -70,6 +70,8 @@ enum CommandId : uint8_t {
     CommandStartHostAudio = 0x17,
     CommandStopHostAudio = 0x18,
     CommandSetDuplexEnabled = 0x19,
+    CommandSetMicVolume = 0x1A,
+    CommandSetMicMute = 0x1B,
 };
 
 enum AckResult : uint8_t {
@@ -120,6 +122,8 @@ uint8_t adaptive_trigger_test_mode = kTriggerTestModeFeedback;
 uint8_t adaptive_trigger_test_target = kTriggerTargetBoth;
 bool adaptive_trigger_test_active = false;
 uint32_t adaptive_trigger_test_until_us = 0;
+uint8_t companion_mic_volume_percent = 100;
+bool companion_mic_muted = false;
 
 struct LastAck {
     uint8_t command_id = 0;
@@ -217,6 +221,10 @@ void restore_defaults() {
     audio_set_quiet_mode(false);
     audio_host_set_duplex_requested(false);
     audio_host_set_requested(false);
+    companion_mic_volume_percent = 100;
+    companion_mic_muted = false;
+    audio_set_mic_output_state(companion_mic_volume_percent, companion_mic_muted);
+    bt_set_microphone_state(companion_mic_volume_percent, companion_mic_muted);
     bt_set_mute_led(false);
     lightbar_override_enabled = false;
     set_lightbar_color(0xff, 0xd7, 0x00, 100);
@@ -660,6 +668,29 @@ void handle_command(uint8_t const *buffer, uint16_t bufsize) {
                 set_ack(command_id, sequence, AckOk);
                 return;
             }
+
+        case CommandSetMicVolume:
+            if (value > 100) {
+                set_ack(command_id, sequence, AckInvalidValue);
+                return;
+            }
+            companion_mic_volume_percent = static_cast<uint8_t>(value);
+            audio_set_mic_output_state(companion_mic_volume_percent, companion_mic_muted);
+            bt_set_microphone_state(companion_mic_volume_percent, companion_mic_muted);
+            settings_revision++;
+            set_ack(command_id, sequence, AckOk);
+            return;
+
+        case CommandSetMicMute:
+            if (value > 1) {
+                set_ack(command_id, sequence, AckInvalidValue);
+                return;
+            }
+            companion_mic_muted = value == 1;
+            audio_set_mic_output_state(companion_mic_volume_percent, companion_mic_muted);
+            settings_revision++;
+            set_ack(command_id, sequence, AckOk);
+            return;
 
         case CommandSetLightbarColor:
             if (value > 100) {

@@ -70,11 +70,13 @@ sealed class HostAudioHelper : IDisposable
     private long micCallbacks;
     private long micCapturedFrames;
     private int micPeakPermille;
+    private int speakerGainPermille;
     private bool disposed;
 
     public HostAudioHelper(HelperOptions options)
     {
         this.options = options;
+        speakerGainPermille = VolumePercentToPermille(options.SpeakerVolumePercent);
         RaiseSchedulingPriority();
         encoder = new OpusEncoder(AudioConstants.TargetSampleRate, 2, OpusApplication.OPUS_APPLICATION_AUDIO)
         {
@@ -104,8 +106,10 @@ sealed class HostAudioHelper : IDisposable
         {
             try
             {
-                while (Console.In.Read() >= 0)
+                string? line;
+                while ((line = Console.In.ReadLine()) is not null)
                 {
+                    ProcessControlLine(line);
                 }
             }
             catch (IOException)
@@ -527,6 +531,7 @@ sealed class HostAudioHelper : IDisposable
     private void ResampleSpeakerBlock()
     {
         const double ratio = AudioConstants.PicoInputBlockFrames / (double)AudioConstants.OpusFrameSamples;
+        var speakerGain = Volatile.Read(ref speakerGainPermille) / 1000f;
         for (var frame = 0; frame < AudioConstants.OpusFrameSamples; frame++)
         {
             var sourcePosition = (frame + 0.5) * ratio - 0.5;
@@ -535,8 +540,27 @@ sealed class HostAudioHelper : IDisposable
             var fraction = Math.Clamp(sourcePosition - sourceIndex, 0, 1);
             var left = Lerp(speakerBlock[sourceIndex * 2], speakerBlock[nextIndex * 2], fraction);
             var right = Lerp(speakerBlock[sourceIndex * 2 + 1], speakerBlock[nextIndex * 2 + 1], fraction);
-            speakerPcm[frame * 2] = FloatToInt16(left);
-            speakerPcm[frame * 2 + 1] = FloatToInt16(right);
+            speakerPcm[frame * 2] = FloatToInt16(left * speakerGain);
+            speakerPcm[frame * 2 + 1] = FloatToInt16(right * speakerGain);
+        }
+    }
+
+    private void ProcessControlLine(string line)
+    {
+        var trimmed = line.Trim();
+        if (trimmed.Length == 0)
+        {
+            return;
+        }
+
+        var parts = trimmed.Split(' ', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
+        if (
+            parts.Length == 2
+            && string.Equals(parts[0], "speaker-volume", StringComparison.OrdinalIgnoreCase)
+            && int.TryParse(parts[1], out var speakerVolumePercent)
+        )
+        {
+            Volatile.Write(ref speakerGainPermille, VolumePercentToPermille(speakerVolumePercent));
         }
     }
 
@@ -774,19 +798,25 @@ sealed class HostAudioHelper : IDisposable
         return (short)Math.Round(Math.Clamp(sample, -1, 1) * short.MaxValue);
     }
 
+    private static int VolumePercentToPermille(int percent)
+    {
+        return Math.Clamp(percent, 0, 100) * 10;
+    }
+
     private static byte FloatToInt8(float sample)
     {
         return unchecked((byte)(sbyte)Math.Round(Math.Clamp(sample, -1, 1) * sbyte.MaxValue));
     }
 }
 
-sealed record HelperOptions(string? DeviceName, string? HidPath, bool ListDevices, bool MicKeepaliveOnly, string? MicDeviceName)
+sealed record HelperOptions(string? DeviceName, string? HidPath, bool ListDevices, bool MicKeepaliveOnly, string? MicDeviceName, int SpeakerVolumePercent)
 {
     public static HelperOptions Parse(string[] args)
     {
         string? deviceName = null;
         string? hidPath = null;
         string? micDeviceName = null;
+        var speakerVolumePercent = 100;
         var listDevices = false;
         var micKeepaliveOnly = false;
 
@@ -803,6 +833,12 @@ sealed record HelperOptions(string? DeviceName, string? HidPath, bool ListDevice
                 case "--mic-device-name" when index + 1 < args.Length:
                     micDeviceName = args[++index];
                     break;
+                case "--speaker-volume" when index + 1 < args.Length:
+                    if (int.TryParse(args[++index], out var parsedSpeakerVolumePercent))
+                    {
+                        speakerVolumePercent = parsedSpeakerVolumePercent;
+                    }
+                    break;
                 case "--list-devices":
                     listDevices = true;
                     break;
@@ -812,6 +848,6 @@ sealed record HelperOptions(string? DeviceName, string? HidPath, bool ListDevice
             }
         }
 
-        return new HelperOptions(deviceName, hidPath, listDevices, micKeepaliveOnly, micDeviceName);
+        return new HelperOptions(deviceName, hidPath, listDevices, micKeepaliveOnly, micDeviceName, speakerVolumePercent);
     }
 }

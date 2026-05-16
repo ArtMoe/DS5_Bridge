@@ -22,6 +22,8 @@ export interface CompanionSettings {
   triggerTestMode: TriggerTestMode;
   speakerEnabled: boolean;
   speakerVolumePercent: number;
+  micVolumePercent: number;
+  micMuted: boolean;
   lightbarEnabled: boolean;
   lightbarColor: string;
   lightbarBrightnessPercent: number;

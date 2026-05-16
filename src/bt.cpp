@@ -184,6 +184,7 @@ static bool lightbar_restore_pending = false;
 static uint32_t lightbar_restore_at_us = 0;
 static uint8_t state_report_seq = 0;
 static bool speaker_output_enabled = false;
+static uint8_t companion_mic_volume_percent = 100;
 static uint8_t classic_rumble_gain_percent = 100;
 
 static void update_max_u32(uint32_t &current, uint32_t candidate) {
@@ -252,6 +253,11 @@ static uint8_t scale_classic_rumble_byte(uint8_t value) {
     return static_cast<uint8_t>(scaled >= 25500 ? 255 : (scaled + 50) / 100);
 }
 
+static uint8_t scale_percent_byte(uint8_t value, uint8_t gain_percent) {
+    const uint16_t scaled = static_cast<uint16_t>(value) * gain_percent;
+    return static_cast<uint8_t>(scaled >= 25500 ? 255 : (scaled + 50) / 100);
+}
+
 static bool apply_classic_rumble_gain(uint8_t *data, uint16_t len) {
     if (data == nullptr || len < 3 + DS_OUTPUT_REPORT_COMMON_SIZE) {
         return false;
@@ -278,6 +284,39 @@ static bool apply_classic_rumble_gain(uint8_t *data, uint16_t len) {
     payload[OUTPUT_PAYLOAD_MOTOR_LEFT_OFFSET] = scale_classic_rumble_byte(left);
     return payload[OUTPUT_PAYLOAD_MOTOR_RIGHT_OFFSET] != right
         || payload[OUTPUT_PAYLOAD_MOTOR_LEFT_OFFSET] != left;
+}
+
+bool bt_apply_haptics_gain_payload(uint8_t *payload, uint16_t len, uint8_t gain_percent) {
+    if (payload == nullptr || len <= OUTPUT_PAYLOAD_MOTOR_LEFT_OFFSET) {
+        return false;
+    }
+
+    const uint8_t flag0 = payload[OUTPUT_PAYLOAD_VALID_FLAG0_OFFSET];
+    const uint8_t flag2 = len > OUTPUT_PAYLOAD_VALID_FLAG2_OFFSET ? payload[OUTPUT_PAYLOAD_VALID_FLAG2_OFFSET] : 0;
+    const bool has_haptics = (flag0 & DS_OUTPUT_VALID_FLAG0_HAPTICS_SELECT) != 0
+        || (flag2 & DS_OUTPUT_VALID_FLAG2_COMPATIBLE_VIBRATION2) != 0;
+    if (!has_haptics) {
+        return false;
+    }
+
+    const uint8_t right = payload[OUTPUT_PAYLOAD_MOTOR_RIGHT_OFFSET];
+    const uint8_t left = payload[OUTPUT_PAYLOAD_MOTOR_LEFT_OFFSET];
+    const uint8_t clamped_gain = gain_percent > 200 ? 200 : gain_percent;
+    payload[OUTPUT_PAYLOAD_MOTOR_RIGHT_OFFSET] = scale_percent_byte(right, clamped_gain);
+    payload[OUTPUT_PAYLOAD_MOTOR_LEFT_OFFSET] = scale_percent_byte(left, clamped_gain);
+    return payload[OUTPUT_PAYLOAD_MOTOR_RIGHT_OFFSET] != right
+        || payload[OUTPUT_PAYLOAD_MOTOR_LEFT_OFFSET] != left;
+}
+
+bool bt_apply_haptics_gain(uint8_t *data, uint16_t len, uint8_t gain_percent) {
+    if (data == nullptr || len < 3 + DS_OUTPUT_REPORT_COMMON_SIZE) {
+        return false;
+    }
+    if (data[0] != DS_OUTPUT_REPORT_BT || data[2] != DS_OUTPUT_TAG) {
+        return false;
+    }
+
+    return bt_apply_haptics_gain_payload(data + 3, len - 3, gain_percent);
 }
 
 void bt_set_classic_rumble_output(uint8_t right, uint8_t left) {
@@ -483,6 +522,21 @@ void bt_set_mute_led(bool enabled) {
     init_state_report(report);
     report[3 + 1] = DS_OUTPUT_VALID_FLAG1_MIC_MUTE_LED_CONTROL_ENABLE;
     report[3 + 8] = enabled ? 1 : 0;
+    bt_write(report, sizeof(report));
+}
+
+void bt_set_microphone_state(uint8_t volume_percent, bool muted) {
+    (void)muted;
+    companion_mic_volume_percent = volume_percent > 100 ? 100 : volume_percent;
+
+    if (hid_interrupt_cid == 0) {
+        return;
+    }
+
+    uint8_t report[DS_OUTPUT_REPORT_BT_SIZE];
+    init_state_report(report);
+    report[3 + OUTPUT_PAYLOAD_VALID_FLAG0_OFFSET] = DS_OUTPUT_VALID_FLAG0_MIC_VOLUME_ENABLE;
+    report[3 + OUTPUT_PAYLOAD_MIC_VOLUME_OFFSET] = static_cast<uint8_t>((companion_mic_volume_percent * 51 + 50) / 100);
     bt_write(report, sizeof(report));
 }
 
@@ -1241,6 +1295,48 @@ bool bt_sanitize_host_speaker_amp_ownership(uint8_t *data, uint16_t len) {
     return changed;
 }
 
+bool bt_sanitize_host_mic_ownership_payload(uint8_t *payload, uint16_t len) {
+    if (payload == nullptr || len < DS_OUTPUT_REPORT_COMMON_SIZE) {
+        return false;
+    }
+
+    bool changed = false;
+    const uint8_t original_flag0 = payload[OUTPUT_PAYLOAD_VALID_FLAG0_OFFSET];
+    const uint8_t original_flag1 = payload[OUTPUT_PAYLOAD_VALID_FLAG1_OFFSET];
+    const uint8_t next_flag0 = original_flag0 & static_cast<uint8_t>(~DS_OUTPUT_VALID_FLAG0_MIC_VOLUME_ENABLE);
+    const uint8_t next_flag1 = original_flag1 & static_cast<uint8_t>(~DS_OUTPUT_VALID_FLAG1_MIC_MUTE_LED_CONTROL_ENABLE);
+
+    if (payload[OUTPUT_PAYLOAD_VALID_FLAG0_OFFSET] != next_flag0) {
+        payload[OUTPUT_PAYLOAD_VALID_FLAG0_OFFSET] = next_flag0;
+        changed = true;
+    }
+    if (payload[OUTPUT_PAYLOAD_VALID_FLAG1_OFFSET] != next_flag1) {
+        payload[OUTPUT_PAYLOAD_VALID_FLAG1_OFFSET] = next_flag1;
+        changed = true;
+    }
+    if ((original_flag0 & DS_OUTPUT_VALID_FLAG0_MIC_VOLUME_ENABLE) && payload[OUTPUT_PAYLOAD_MIC_VOLUME_OFFSET] != 0) {
+        payload[OUTPUT_PAYLOAD_MIC_VOLUME_OFFSET] = 0;
+        changed = true;
+    }
+    if ((original_flag1 & DS_OUTPUT_VALID_FLAG1_MIC_MUTE_LED_CONTROL_ENABLE) && payload[OUTPUT_PAYLOAD_MUTE_LED_OFFSET] != 0) {
+        payload[OUTPUT_PAYLOAD_MUTE_LED_OFFSET] = 0;
+        changed = true;
+    }
+
+    return changed;
+}
+
+bool bt_sanitize_host_mic_ownership(uint8_t *data, uint16_t len) {
+    if (data == nullptr || len < 3 + DS_OUTPUT_REPORT_COMMON_SIZE) {
+        return false;
+    }
+    if (data[0] != DS_OUTPUT_REPORT_BT || data[2] != DS_OUTPUT_TAG) {
+        return false;
+    }
+
+    return bt_sanitize_host_mic_ownership_payload(data + 3, len - 3);
+}
+
 static uint8_t classify_output_report(uint8_t const *data, uint16_t len) {
     if (data == nullptr || len < 3 + DS_OUTPUT_REPORT_COMMON_SIZE) {
         return OutputReasonCriticalPayload;
@@ -1514,6 +1610,7 @@ void bt_write(uint8_t *data, uint16_t len) {
 bool bt_write_classified_output(uint8_t *data, uint16_t len) {
     output_counters.normal_0x31_rx_count++;
     bt_sanitize_host_speaker_amp_ownership(data, len);
+    bt_sanitize_host_mic_ownership(data, len);
     apply_classic_rumble_gain(data, len);
     split_state_from_mixed_output(data, len);
     const uint8_t reason = classify_output_report(data, len);

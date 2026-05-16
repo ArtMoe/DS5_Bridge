@@ -242,6 +242,8 @@ static uint16_t mic_last_decoded_samples = 0;
 static uint16_t mic_last_written_bytes = 0;
 static uint16_t mic_peak_permille = 0;
 static volatile bool mic_usb_playout_started = false;
+static volatile uint8_t mic_output_volume_percent = 100;
+static volatile bool mic_output_muted = false;
 static mic_decode_element mic_usb_pending{};
 static uint16_t mic_usb_pending_offset = 0;
 static uint16_t mic_usb_pending_len = 0;
@@ -722,6 +724,23 @@ static bool send_audio_haptics_packet(const int8_t *haptic_buf, bool include_spe
     return bt_write_audio_stream(pkt, sizeof(pkt));
 }
 
+static void apply_haptics_gain_to_packet(uint8_t *data) {
+    if (data == nullptr) {
+        return;
+    }
+
+    const float gain = clamp(volume[1], 0.0f, 2.0f);
+    if (gain == 1.0f) {
+        return;
+    }
+
+    int8_t *samples = reinterpret_cast<int8_t *>(data);
+    for (uint16_t i = 0; i < SAMPLE_SIZE; i++) {
+        const int scaled = static_cast<int>(samples[i] * gain);
+        samples[i] = static_cast<int8_t>(clamp(scaled, -128, 127));
+    }
+}
+
 bool audio_schedule_test_haptics() {
     const uint32_t now = time_us_32();
     const bool haptics_cooling_down = test_haptics_cooldown_until_us != 0
@@ -871,6 +890,11 @@ bool audio_duplex_active() {
     return host_mic_path_active();
 }
 
+void audio_set_mic_output_state(uint8_t volume_percent, bool muted) {
+    mic_output_volume_percent = volume_percent > 100 ? 100 : volume_percent;
+    mic_output_muted = muted;
+}
+
 static bool submit_host_audio_report(uint8_t const *report, uint16_t len) {
     if (report == nullptr) {
         host_frames_dropped++;
@@ -897,11 +921,13 @@ static bool submit_host_audio_report(uint8_t const *report, uint16_t len) {
         packet[76] = 0x12 | (1 << 7);
         packet[77] = SAMPLE_SIZE;
         memcpy(packet + 78, report, SAMPLE_SIZE);
+        apply_haptics_gain_to_packet(packet + 78);
         packet[142] = (plug_headset ? 0x16 : 0x13) | (1 << 7);
         packet[143] = 200;
         memcpy(packet + 144, report + SAMPLE_SIZE, 200);
     } else if (len == HOST_AUDIO_REPORT_SIZE && report[0] == REPORT_ID) {
         memcpy(packet, report, sizeof(packet));
+        apply_haptics_gain_to_packet(packet + 78);
     } else {
         host_frames_dropped++;
         enter_fallback(AudioFallbackInvalidPacket);
@@ -1459,7 +1485,19 @@ static void process_mic_usb_output() {
         }
 
         const uint8_t *data = reinterpret_cast<uint8_t const *>(mic_usb_pending.data) + mic_usb_pending_offset;
-        const uint16_t written = tud_audio_write(data, target_len);
+        alignas(2) uint8_t scaled_data[HOST_MIC_USB_PACKET_BYTES]{};
+        uint8_t const *write_data = data;
+        const uint8_t output_percent = mic_output_muted ? 0 : mic_output_volume_percent;
+        if (output_percent < 100) {
+            const int16_t *samples = reinterpret_cast<int16_t const *>(data);
+            int16_t *scaled_samples = reinterpret_cast<int16_t *>(scaled_data);
+            const uint16_t sample_count = target_len / sizeof(int16_t);
+            for (uint16_t i = 0; i < sample_count; i++) {
+                scaled_samples[i] = static_cast<int16_t>((static_cast<int32_t>(samples[i]) * output_percent) / 100);
+            }
+            write_data = scaled_data;
+        }
+        const uint16_t written = tud_audio_write(write_data, target_len);
         mic_last_written_bytes = written;
         if (written > 0) {
             mic_usb_pending_offset = static_cast<uint16_t>(mic_usb_pending_offset + written);

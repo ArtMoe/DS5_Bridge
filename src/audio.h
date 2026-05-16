@@ -83,5 +83,6 @@ void audio_host_set_duplex_requested(bool enabled);
 bool audio_duplex_active();
 void audio_get_host_status(audio_host_status *status);
 void audio_mic_add_packet(uint8_t const *data, uint16_t len);
+void audio_set_mic_output_state(uint8_t volume_percent, bool muted);
 
 #endif //DS5_BRIDGE_AUDIO_H

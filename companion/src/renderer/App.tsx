@@ -6,6 +6,7 @@ import {
   Check,
   ChevronDown,
   Keyboard,
+  Mic,
   Minus,
   Moon,
   MoreHorizontal,
@@ -36,6 +37,7 @@ type LightbarPaletteCell = {
 
 const HAPTICS_STEP = 20;
 const SPEAKER_VOLUME_STEP = 10;
+const MIC_VOLUME_STEP = 10;
 const LIGHTBAR_BRIGHTNESS_STEP = 10;
 const TRIGGER_EFFECT_STEP = 10;
 const TEST_HAPTICS_LOCK_MS = 1100;
@@ -71,6 +73,11 @@ const HAPTICS_PRESETS: Array<[string, number]> = [
   ['High', 150]
 ];
 const SPEAKER_VOLUME_PRESETS: Array<[string, number]> = [
+  ['Low', 30],
+  ['Medium', 70],
+  ['High', 100]
+];
+const MIC_VOLUME_PRESETS: Array<[string, number]> = [
   ['Low', 30],
   ['Medium', 70],
   ['High', 100]
@@ -164,6 +171,10 @@ function snapHapticsValue(value: number): number {
 
 function snapSpeakerVolume(value: number): number {
   return Math.max(0, Math.min(100, Math.round(value / SPEAKER_VOLUME_STEP) * SPEAKER_VOLUME_STEP));
+}
+
+function snapMicVolume(value: number): number {
+  return Math.max(0, Math.min(100, Math.round(value / MIC_VOLUME_STEP) * MIC_VOLUME_STEP));
 }
 
 function snapLightbarBrightness(value: number): number {
@@ -698,6 +709,7 @@ export function App() {
   const [hapticsValue, setHapticsValue] = useState(100);
   const [classicRumbleValue, setClassicRumbleValue] = useState(100);
   const [speakerVolumeValue, setSpeakerVolumeValue] = useState(100);
+  const [micVolumeValue, setMicVolumeValue] = useState(100);
   const [lightbarColor, setLightbarColor] = useState('#ffff00');
   const [customLightbarColor, setCustomLightbarColor] = useState<string | null>(() => {
     const saved = window.localStorage.getItem('ds5bridge.customLightbarColor');
@@ -715,6 +727,7 @@ export function App() {
   const [showBridgeSettings, setShowBridgeSettings] = useState(false);
   const [showNotificationsMenu, setShowNotificationsMenu] = useState(false);
   const [showClassicRumbleControl, setShowClassicRumbleControl] = useState(false);
+  const [showMicrophoneControl, setShowMicrophoneControl] = useState(false);
   const [testLocked, setTestLocked] = useState(false);
   const [speakerTestLocked, setSpeakerTestLocked] = useState(false);
   const [speakerOutputAvailable, setSpeakerOutputAvailable] = useState<boolean | null>(null);
@@ -723,11 +736,13 @@ export function App() {
   const [hapticsCommitPending, setHapticsCommitPending] = useState(false);
   const [classicRumbleCommitPending, setClassicRumbleCommitPending] = useState(false);
   const [speakerVolumeCommitPending, setSpeakerVolumeCommitPending] = useState(false);
+  const [micVolumeCommitPending, setMicVolumeCommitPending] = useState(false);
   const [lightbarCommitPending, setLightbarCommitPending] = useState(false);
   const [sleepConfirmVisible, setSleepConfirmVisible] = useState(false);
   const hapticsEditingRef = useRef(false);
   const classicRumbleEditingRef = useRef(false);
   const speakerVolumeEditingRef = useRef(false);
+  const micVolumeEditingRef = useRef(false);
   const lightbarBrightnessEditingRef = useRef(false);
   const triggerEffectEditingRef = useRef(false);
   const bridgeSettingsRef = useRef<HTMLDivElement>(null);
@@ -747,6 +762,7 @@ export function App() {
         setHapticsValue(snapHapticsValue(next.settings.hapticsGainPercent));
         setClassicRumbleValue(snapHapticsValue(next.settings.classicRumbleGainPercent));
         setSpeakerVolumeValue(snapSpeakerVolume(next.settings.speakerVolumePercent));
+        setMicVolumeValue(snapMicVolume(next.settings.micVolumePercent));
         const nextLightbarColor = lightbarColorFromSnapshot(next);
         setLightbarColor(nextLightbarColor);
         if (!isLightbarPresetColor(nextLightbarColor)) {
@@ -768,6 +784,9 @@ export function App() {
       }
       if (!speakerVolumeEditingRef.current) {
         setSpeakerVolumeValue(snapSpeakerVolume(next.settings.speakerVolumePercent));
+      }
+      if (!micVolumeEditingRef.current) {
+        setMicVolumeValue(snapMicVolume(next.settings.micVolumePercent));
       }
       const nextLightbarColor = lightbarColorFromSnapshot(next);
       setLightbarColor(nextLightbarColor);
@@ -944,6 +963,21 @@ export function App() {
     : duplexMicEnabled
       ? 'Disabled in Fallback'
       : 'Off';
+  const micStreaming = Boolean(hostAudioStatus?.micUsbStreaming);
+  const micPacketDrops = hostAudioStatus?.micPacketsDropped ?? 0;
+  const micPeakPercent = Math.max(0, Math.min(100, Math.round((hostAudioStatus?.micPeakPermille ?? 0) / 10)));
+  const micStatusLabel = !connected
+    ? 'Unavailable'
+    : micStreaming
+      ? 'USB Streaming'
+      : hostAudioActive
+        ? 'Ready'
+        : 'Host Encoded Required';
+  const micStatusTone = micStreaming
+    ? 'good'
+    : connected && hostAudioEnabled
+      ? 'warn'
+      : 'idle';
   const speakerOutputMissing = speakerOutputAvailable === false;
   const testHapticsUnavailable = !connected
     || !hapticsEnabled
@@ -1405,6 +1439,41 @@ export function App() {
     void commitSpeakerVolume(snappedValue);
   }
 
+  async function commitMicVolume(value = micVolumeValue) {
+    if (
+      !snapshot
+      || snapshot.state !== 'connected'
+      || !hostAudioEnabled
+      || value === snapshot.settings.micVolumePercent
+      || micVolumeCommitPending
+    ) {
+      micVolumeEditingRef.current = false;
+      return;
+    }
+
+    setMicVolumeCommitPending(true);
+    micVolumeEditingRef.current = true;
+    try {
+      const next = await window.bridge.setMicVolume(value);
+      setSnapshot(next);
+      setMicVolumeValue(snapMicVolume(next.settings.micVolumePercent));
+    } catch {
+      const next = await window.bridge.getStatus();
+      setSnapshot(next);
+      setMicVolumeValue(snapMicVolume(next.settings.micVolumePercent));
+    } finally {
+      setMicVolumeCommitPending(false);
+      micVolumeEditingRef.current = false;
+    }
+  }
+
+  function setMicPreset(value: number) {
+    const snappedValue = snapMicVolume(value);
+    micVolumeEditingRef.current = true;
+    setMicVolumeValue(snappedValue);
+    void commitMicVolume(snappedValue);
+  }
+
   function setTriggerIntensityPreset(value: number) {
     const snappedValue = snapTriggerEffectIntensity(value);
     setTriggerEffectIntensityValue(snappedValue);
@@ -1531,6 +1600,11 @@ export function App() {
     void runAction('duplex-mic-enabled', () => (
       window.bridge.setDuplexMicEnabled(!snapshot.settings.duplexMicEnabled)
     ));
+  }
+
+  function toggleMicMute() {
+    if (!snapshot) return;
+    void runAction('mic-mute', () => window.bridge.setMicMute(!snapshot.settings.micMuted));
   }
 
   function toggleAdaptiveTriggersEnabled() {
@@ -2167,64 +2241,152 @@ export function App() {
               <div className="feature-card-grid">
                 <section className="feature-card">
                   <div className="feature-card-title">
-                    <span className="feature-icon"><Volume2 size={20} /></span>
+                    <span className="feature-icon">
+                      {showMicrophoneControl ? <Mic size={20} /> : <Volume2 size={20} />}
+                    </span>
                     <div className="title-copy">
-                      <h3>Speaker</h3>
-                      <p>Controls the DualSense speaker output level.</p>
+                      <h3>{showMicrophoneControl ? 'Microphone' : 'Speaker'}</h3>
+                      <p>
+                        {showMicrophoneControl
+                          ? 'Controls the DualSense microphone input level.'
+                          : 'Controls the DualSense speaker output level.'}
+                      </p>
                     </div>
+                    <button
+                      type="button"
+                      className="card-flip-button audio-flip-button"
+                      onClick={() => setShowMicrophoneControl((value) => !value)}
+                    >
+                      {showMicrophoneControl ? <Volume2 size={17} /> : <Mic size={17} />}
+                      {showMicrophoneControl ? 'Speaker' : 'Mic'}
+                    </button>
                   </div>
                   <div className="framed-slider">
                     <label className="slider-row">
                       <span>0%</span>
                       <div className="range-control">
-                        <input
-                          type="range"
-                          min="0"
-                          max="100"
-                          step={SPEAKER_VOLUME_STEP}
-                          value={speakerVolumeValue}
-                          disabled={!connected || !speakerVolumeSupported || !snapshot.settings.speakerEnabled}
-                          style={{ '--range-fill': `${speakerVolumeValue}%` } as CSSProperties}
-                          onPointerDown={() => {
-                            speakerVolumeEditingRef.current = true;
-                          }}
-                          onChange={(event) => setSpeakerVolumeValue(snapSpeakerVolume(Number(event.currentTarget.value)))}
-                          onPointerUp={() => void commitSpeakerVolume()}
-                          onKeyDown={(event) => {
-                            if (event.key === 'ArrowLeft' || event.key === 'ArrowRight' || event.key === 'Home' || event.key === 'End') {
+                        {showMicrophoneControl ? (
+                          <input
+                            type="range"
+                            min="0"
+                            max="100"
+                            step={MIC_VOLUME_STEP}
+                            value={micVolumeValue}
+                            disabled={!connected || !hostAudioEnabled || micVolumeCommitPending}
+                            style={{ '--range-fill': `${micVolumeValue}%` } as CSSProperties}
+                            aria-label="Microphone level"
+                            onPointerDown={() => {
+                              micVolumeEditingRef.current = true;
+                            }}
+                            onChange={(event) => setMicVolumeValue(snapMicVolume(Number(event.currentTarget.value)))}
+                            onPointerUp={() => void commitMicVolume()}
+                            onKeyDown={(event) => {
+                              if (event.key === 'ArrowLeft' || event.key === 'ArrowRight' || event.key === 'Home' || event.key === 'End') {
+                                micVolumeEditingRef.current = true;
+                              }
+                            }}
+                            onKeyUp={(event) => {
+                              if (event.key === 'ArrowLeft' || event.key === 'ArrowRight' || event.key === 'Home' || event.key === 'End') {
+                                void commitMicVolume();
+                              }
+                            }}
+                            onBlur={() => void commitMicVolume()}
+                          />
+                        ) : (
+                          <input
+                            type="range"
+                            min="0"
+                            max="100"
+                            step={SPEAKER_VOLUME_STEP}
+                            value={speakerVolumeValue}
+                            disabled={!connected || !speakerVolumeSupported || !snapshot.settings.speakerEnabled}
+                            style={{ '--range-fill': `${speakerVolumeValue}%` } as CSSProperties}
+                            onPointerDown={() => {
                               speakerVolumeEditingRef.current = true;
-                            }
-                          }}
-                          onKeyUp={(event) => {
-                            if (event.key === 'ArrowLeft' || event.key === 'ArrowRight' || event.key === 'Home' || event.key === 'End') {
-                              void commitSpeakerVolume();
-                            }
-                          }}
-                          onBlur={() => void commitSpeakerVolume()}
-                        />
+                            }}
+                            onChange={(event) => setSpeakerVolumeValue(snapSpeakerVolume(Number(event.currentTarget.value)))}
+                            onPointerUp={() => void commitSpeakerVolume()}
+                            onKeyDown={(event) => {
+                              if (event.key === 'ArrowLeft' || event.key === 'ArrowRight' || event.key === 'Home' || event.key === 'End') {
+                                speakerVolumeEditingRef.current = true;
+                              }
+                            }}
+                            onKeyUp={(event) => {
+                              if (event.key === 'ArrowLeft' || event.key === 'ArrowRight' || event.key === 'Home' || event.key === 'End') {
+                                void commitSpeakerVolume();
+                              }
+                            }}
+                            onBlur={() => void commitSpeakerVolume()}
+                          />
+                        )}
                         <div className="range-ticks" aria-hidden="true">
                           {PERCENT_SLIDER_TICKS.map((value) => (
                             <span key={value} className={sliderTickClass(value, 100)} />
                           ))}
                         </div>
                       </div>
-                      <strong>{speakerVolumeValue}%</strong>
+                      <strong>{showMicrophoneControl ? micVolumeValue : speakerVolumeValue}%</strong>
                     </label>
                   </div>
-                  <p>Use presets for quick speaker levels.</p>
-                  <div className="segmented-row">
-                    {SPEAKER_VOLUME_PRESETS.map(([label, value]) => (
-                      <button
-                        key={label}
-                        type="button"
-                        className={speakerVolumeValue === value ? 'active' : ''}
-                        disabled={!connected || !speakerVolumeSupported || !snapshot.settings.speakerEnabled || speakerVolumeCommitPending}
-                        onClick={() => setSpeakerPreset(Number(value))}
-                      >
-                        {label}
-                      </button>
-                    ))}
-                  </div>
+                  {showMicrophoneControl ? (
+                    <>
+                      <div className="mic-control-status">
+                        <span className={`status-badge ${micStatusTone}`} title={micStatusLabel}>
+                          <span className={`dot ${micStatusTone}`} />
+                          <strong>{micStatusLabel}</strong>
+                        </span>
+                        <span className="mic-meter" title={`Mic peak ${micPeakPercent}%`}>
+                          <span style={{ '--mic-peak': `${micPeakPercent}%` } as CSSProperties} />
+                        </span>
+                        <span className="mic-drop-count" title={`${micPacketDrops} mic packet drops`}>
+                          Drops {micPacketDrops}
+                        </span>
+                      </div>
+                      <p>Companion-owned mic controls staged for firmware wiring.</p>
+                      <div className="segmented-row">
+                        {MIC_VOLUME_PRESETS.map(([label, value]) => (
+                          <button
+                            key={label}
+                            type="button"
+                            className={micVolumeValue === value ? 'active' : ''}
+                            disabled={!connected || !hostAudioEnabled || micVolumeCommitPending}
+                            onClick={() => setMicPreset(Number(value))}
+                          >
+                            {label}
+                          </button>
+                        ))}
+                      </div>
+                      <div className="mic-option-grid">
+                        <button
+                          type="button"
+                          className={snapshot.settings.micMuted ? 'active danger' : ''}
+                          aria-pressed={snapshot.settings.micMuted}
+                          disabled={!connected || pendingAction !== null}
+                          onClick={toggleMicMute}
+                        >
+                          <VolumeX size={15} />
+                          Mute
+                        </button>
+                      </div>
+                    </>
+                  ) : (
+                    <>
+                      <p>Use presets for quick speaker levels.</p>
+                      <div className="segmented-row">
+                        {SPEAKER_VOLUME_PRESETS.map(([label, value]) => (
+                          <button
+                            key={label}
+                            type="button"
+                            className={speakerVolumeValue === value ? 'active' : ''}
+                            disabled={!connected || !speakerVolumeSupported || !snapshot.settings.speakerEnabled || speakerVolumeCommitPending}
+                            onClick={() => setSpeakerPreset(Number(value))}
+                          >
+                            {label}
+                          </button>
+                        ))}
+                      </div>
+                    </>
+                  )}
                 </section>
                 <section className="feature-card test-card">
                   <div className="feature-card-title">

@@ -27,12 +27,15 @@ export class HostAudioEngine extends EventEmitter {
   private stdoutBuffer = Buffer.alloc(0);
   private sequence = 0;
   private activeHidPath: string | null = null;
+  private activeSpeakerVolumePercent = 100;
 
-  async start(hidPath: string | null): Promise<void> {
+  async start(hidPath: string | null, speakerVolumePercent = 100): Promise<void> {
+    const nextSpeakerVolumePercent = normalizeSpeakerVolumePercent(speakerVolumePercent);
     if (this.process) {
       if (this.activeHidPath !== hidPath) {
         await this.stop();
       } else {
+        this.setSpeakerVolumePercent(nextSpeakerVolumePercent);
         return;
       }
     }
@@ -40,19 +43,39 @@ export class HostAudioEngine extends EventEmitter {
       return;
     }
     if (this.starting) {
-      return this.starting;
+      await this.starting;
+      if (this.process && this.activeHidPath === hidPath) {
+        this.setSpeakerVolumePercent(nextSpeakerVolumePercent);
+        return;
+      }
+      return this.start(hidPath, nextSpeakerVolumePercent);
     }
 
-    this.starting = this.startInternal(hidPath).finally(() => {
+    this.starting = this.startInternal(hidPath, nextSpeakerVolumePercent).finally(() => {
       this.starting = null;
     });
     return this.starting;
+  }
+
+  setSpeakerVolumePercent(percent: number): void {
+    const nextSpeakerVolumePercent = normalizeSpeakerVolumePercent(percent);
+    this.activeSpeakerVolumePercent = nextSpeakerVolumePercent;
+    const helper = this.process;
+    if (!helper || helper.stdin.destroyed || !helper.stdin.writable) {
+      return;
+    }
+    helper.stdin.write(`speaker-volume ${nextSpeakerVolumePercent}\n`, (error) => {
+      if (error) {
+        this.emit('error', error);
+      }
+    });
   }
 
   async stop(): Promise<void> {
     const helper = this.process;
     this.process = null;
     this.activeHidPath = null;
+    this.activeSpeakerVolumePercent = 100;
     this.stdoutBuffer = Buffer.alloc(0);
     this.sequence = 0;
     if (!helper) {
@@ -81,9 +104,9 @@ export class HostAudioEngine extends EventEmitter {
     return this.process !== null;
   }
 
-  private async startInternal(hidPath: string | null): Promise<void> {
+  private async startInternal(hidPath: string | null, speakerVolumePercent: number): Promise<void> {
     const helperPath = resolveHelperPath();
-    const args = ['--device-name', 'DS5 Bridge'];
+    const args = ['--device-name', 'DS5 Bridge', '--speaker-volume', `${speakerVolumePercent}`];
     if (hidPath) {
       args.push('--hid-path', hidPath);
     }
@@ -94,6 +117,7 @@ export class HostAudioEngine extends EventEmitter {
 
     this.process = helper;
     this.activeHidPath = hidPath;
+    this.activeSpeakerVolumePercent = speakerVolumePercent;
     helper.stdout.on('data', (chunk: Buffer) => this.processStdout(chunk));
     helper.stderr.on('data', (chunk: Buffer) => {
       this.emit('status', chunk.toString('utf8').trim());
@@ -103,6 +127,7 @@ export class HostAudioEngine extends EventEmitter {
       if (this.process === helper) {
         this.process = null;
         this.activeHidPath = null;
+        this.activeSpeakerVolumePercent = 100;
         this.stdoutBuffer = Buffer.alloc(0);
         this.emit('status', `host audio helper exited (${signal ?? code ?? 'unknown'})`);
       }
@@ -133,6 +158,10 @@ export class HostAudioEngine extends EventEmitter {
       this.sequence = (this.sequence + 1) & 0xffff;
     }
   }
+}
+
+function normalizeSpeakerVolumePercent(percent: number): number {
+  return Math.max(0, Math.min(100, Math.round(percent)));
 }
 
 export class MicKeepaliveEngine extends EventEmitter {

@@ -3,6 +3,7 @@
 // Modified for DS5 Bridge companion firmware and app integration.
 //
 
+#include <algorithm>
 #include <cstdio>
 #include "bsp/board_api.h"
 #include "bt.h"
@@ -22,6 +23,15 @@
 #include "pico/critical_section.h"
 
 int reportSeqCounter = 0;
+
+static uint8_t companion_haptics_gain_percent() {
+#ifdef ENABLE_COMPANION
+    const float gain = std::clamp(volume[1], 0.0f, 2.0f);
+    return static_cast<uint8_t>(gain * 100.0f + 0.5f);
+#else
+    return 100;
+#endif
+}
 
 uint8_t interrupt_in_data[63] = {
     0x7f, 0x7d, 0x7f, 0x7e, 0x00, 0x00, 0xa7,
@@ -186,6 +196,8 @@ void tud_hid_set_report_cb(uint8_t itf, uint8_t report_id, hid_report_type_t rep
                 );
                 sanitizedHostOutput = bt_sanitize_host_speaker_amp_ownership(companionOutput, sizeof(companionOutput))
                     || sanitizedHostOutput;
+                sanitizedHostOutput = bt_sanitize_host_mic_ownership(companionOutput, sizeof(companionOutput))
+                    || sanitizedHostOutput;
                 sanitizedHostOutput = companion_apply_trigger_effect_intensity(companionOutput + 3, payloadLen)
                     || sanitizedHostOutput;
                 if (sanitizedHostOutput) {
@@ -210,6 +222,8 @@ void tud_hid_set_report_cb(uint8_t itf, uint8_t report_id, hid_report_type_t rep
                     payloadLen,
                     companion_lightbar_override_enabled()
                 );
+                bt_sanitize_host_mic_ownership_payload(audioStateData, payloadLen);
+                bt_apply_haptics_gain_payload(audioStateData, payloadLen, companion_haptics_gain_percent());
                 audio_set_state_data(audioStateData, static_cast<uint8_t>(payloadLen));
 #else
                 uint8_t audioStateData[sizeof(outputData) - 3]{};
@@ -217,8 +231,12 @@ void tud_hid_set_report_cb(uint8_t itf, uint8_t report_id, hid_report_type_t rep
                     memcpy(audioStateData, outputData + 3, payloadLen);
                 }
                 sanitize_dualsense_host_output_payload(audioStateData, payloadLen);
+                bt_sanitize_host_mic_ownership_payload(audioStateData, payloadLen);
+                bt_apply_haptics_gain_payload(audioStateData, payloadLen, companion_haptics_gain_percent());
                 audio_set_state_data(audioStateData, static_cast<uint8_t>(payloadLen));
 #endif
+                bt_sanitize_host_mic_ownership(outputData, sizeof(outputData));
+                bt_apply_haptics_gain(outputData, sizeof(outputData), companion_haptics_gain_percent());
                 bt_write(outputData, sizeof(outputData));
                 if (hostClearsLeds) {
                     bt_schedule_lightbar_restore(750);

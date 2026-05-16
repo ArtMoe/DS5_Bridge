@@ -24,6 +24,10 @@ bool bt_disconnect();
 void bt_write(uint8_t* data,uint16_t len);
 bool bt_write_classified_output(uint8_t* data,uint16_t len);
 bool bt_sanitize_host_speaker_amp_ownership(uint8_t* data,uint16_t len);
+bool bt_sanitize_host_mic_ownership(uint8_t* data,uint16_t len);
+bool bt_sanitize_host_mic_ownership_payload(uint8_t* payload,uint16_t len);
+bool bt_apply_haptics_gain(uint8_t* data,uint16_t len,uint8_t gain_percent);
+bool bt_apply_haptics_gain_payload(uint8_t* payload,uint16_t len,uint8_t gain_percent);
 bool bt_write_audio_stream(uint8_t* data,uint16_t len);
 void bt_drain_audio_stream();
 struct bt_output_debug_stats {
@@ -40,6 +44,7 @@ struct bt_output_debug_stats {
 void bt_get_output_debug_stats(bt_output_debug_stats *stats);
 void bt_set_lightbar_color(uint8_t red, uint8_t green, uint8_t blue, uint8_t brightness_percent);
 void bt_set_mute_led(bool enabled);
+void bt_set_microphone_state(uint8_t volume_percent, bool muted);
 void bt_set_speaker_output_enabled(bool enabled);
 void bt_refresh_speaker_output();
 void bt_set_classic_rumble_gain(uint8_t gain_percent);

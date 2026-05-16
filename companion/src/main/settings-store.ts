@@ -16,6 +16,8 @@ export const DEFAULT_SETTINGS: CompanionSettings = {
   triggerTestMode: 'feedback',
   speakerEnabled: true,
   speakerVolumePercent: 30,
+  micVolumePercent: 100,
+  micMuted: false,
   lightbarEnabled: true,
   lightbarColor: '#ffd700',
   lightbarBrightnessPercent: 100,
@@ -96,6 +98,12 @@ function normalizeSettings(value: Partial<CompanionSettings> | null | undefined)
     speakerVolumePercent: Number.isFinite(value?.speakerVolumePercent)
       ? Math.max(0, Math.min(100, Math.round(value!.speakerVolumePercent!)))
       : DEFAULT_SETTINGS.speakerVolumePercent,
+    micVolumePercent: Number.isFinite(value?.micVolumePercent)
+      ? Math.max(0, Math.min(100, Math.round(value!.micVolumePercent!)))
+      : DEFAULT_SETTINGS.micVolumePercent,
+    micMuted: typeof value?.micMuted === 'boolean'
+      ? value.micMuted
+      : DEFAULT_SETTINGS.micMuted,
     lightbarEnabled: typeof value?.lightbarEnabled === 'boolean'
       ? value.lightbarEnabled
       : DEFAULT_SETTINGS.lightbarEnabled,

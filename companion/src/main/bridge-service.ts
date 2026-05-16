@@ -570,6 +570,7 @@ export class BridgeService extends EventEmitter {
     this.snapshot.settings = this.settingsStore.update(customSettingUpdate({
       speakerVolumePercent: value
     }));
+    await this.updateHostAudioEngine();
     this.emitSnapshot();
     return this.getSnapshot();
   }
@@ -580,15 +581,41 @@ export class BridgeService extends EventEmitter {
     this.snapshot.settings = this.settingsStore.update(customSettingUpdate({
       speakerEnabled: enabled
     }));
+    await this.updateHostAudioEngine();
+    this.emitSnapshot();
+    return this.getSnapshot();
+  }
+
+  async setMicVolume(percent: number): Promise<BridgeSnapshot> {
+    const value = Math.max(0, Math.min(100, Math.round(percent)));
+    await this.sendCommand(COMMAND_ID.SET_MIC_VOLUME, value, {
+      expectSettingsRevisionChange: true
+    });
+    this.snapshot.settings = this.settingsStore.update(customSettingUpdate({
+      micVolumePercent: value
+    }));
+    this.emitSnapshot();
+    return this.getSnapshot();
+  }
+
+  async setMicMute(enabled: boolean): Promise<BridgeSnapshot> {
+    await this.sendCommand(COMMAND_ID.SET_MIC_MUTE, enabled ? 1 : 0, {
+      expectSettingsRevisionChange: true
+    });
+    this.snapshot.settings = this.settingsStore.update(customSettingUpdate({
+      micMuted: enabled
+    }));
     this.emitSnapshot();
     return this.getSnapshot();
   }
 
   async setHostEncodedAudioEnabled(enabled: boolean): Promise<BridgeSnapshot> {
+    const settings = this.settingsStore.get();
     if (enabled) {
       await this.sendCommand(COMMAND_ID.SET_HOST_AUDIO_ENABLED, 1, { expectSettingsRevisionChange: true });
       await this.sendCommand(COMMAND_ID.START_HOST_AUDIO, 0, { throwOnCommandError: false });
       await this.sendCommand(COMMAND_ID.SET_DUPLEX_ENABLED, 1, { throwOnCommandError: false });
+      await this.applyMicSettings(settings, false);
       this.hostAudioCommandActive = true;
       this.sendHostAudioStreamReport(HOST_AUDIO_PACKET_TYPE.HELLO);
       this.sendHostAudioStreamReport(HOST_AUDIO_PACKET_TYPE.SET_DUPLEX_ENABLED);
@@ -963,7 +990,7 @@ export class BridgeService extends EventEmitter {
       await this.hostAudioEngine.stop();
       return;
     }
-    await this.hostAudioEngine.start(this.devicePath);
+    await this.hostAudioEngine.start(this.devicePath, settings.speakerEnabled ? settings.speakerVolumePercent : 0);
   }
 
   private async updateMicKeepaliveEngine(controllerConnected: boolean): Promise<void> {
@@ -1271,6 +1298,7 @@ export class BridgeService extends EventEmitter {
       await this.sendCommand(COMMAND_ID.RESET_ADAPTIVE_TRIGGERS, 0, { throwOnCommandError: false });
     }
     await this.applySpeakerSettings(settings, expectSettingsRevisionChange);
+    await this.applyMicSettings(settings, expectSettingsRevisionChange);
     await this.sendCommand(
       COMMAND_ID.SET_HOST_AUDIO_ENABLED,
       settings.hostEncodedAudioEnabled ? 1 : 0,
@@ -1332,6 +1360,15 @@ export class BridgeService extends EventEmitter {
 
   private async applySpeakerSettings(settings: CompanionSettings, expectSettingsRevisionChange: boolean): Promise<void> {
     await this.setFirmwareSpeakerVolume(settings.speakerEnabled ? settings.speakerVolumePercent : 0, expectSettingsRevisionChange);
+  }
+
+  private async applyMicSettings(settings: CompanionSettings, expectSettingsRevisionChange: boolean): Promise<void> {
+    await this.sendCommand(COMMAND_ID.SET_MIC_VOLUME, settings.micVolumePercent, {
+      expectSettingsRevisionChange
+    });
+    await this.sendCommand(COMMAND_ID.SET_MIC_MUTE, settings.micMuted ? 1 : 0, {
+      expectSettingsRevisionChange
+    });
   }
 
   private async setFirmwareSpeakerVolume(percent: number, expectSettingsRevisionChange: boolean): Promise<void> {
