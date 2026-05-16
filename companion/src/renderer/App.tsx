@@ -5,6 +5,7 @@ import {
   Bell,
   Check,
   ChevronDown,
+  Headphones,
   Keyboard,
   Mic,
   Minus,
@@ -1070,6 +1071,11 @@ export function App() {
   const gameStreamActive = Boolean(snapshot?.status?.hostOutputRecent);
   const audioStreamActive = Boolean(snapshot?.status?.audioRecent && pendingAction !== 'speaker' && !speakerTestLocked);
   const hostAudioStatus = snapshot?.diagnostics.hostAudioStatus;
+  const headsetOutputDetected = Boolean(hostAudioStatus?.headsetPlugged);
+  const OutputIcon = headsetOutputDetected ? Headphones : Volume2;
+  const outputControlLabel = headsetOutputDetected ? 'Headset' : 'Speaker';
+  const outputControlLower = headsetOutputDetected ? 'headset' : 'speaker';
+  const outputPresetLower = headsetOutputDetected ? 'headset' : 'speaker';
   const hostAudioEnabled = Boolean(snapshot?.settings.hostEncodedAudioEnabled);
   const duplexMicEnabled = Boolean(snapshot?.settings.duplexMicEnabled);
   const audioEnabled = speakerEnabled || duplexMicEnabled;
@@ -2419,7 +2425,7 @@ export function App() {
               <div className="feature-heading">
                 <div>
                   <h2>Audio</h2>
-                  <p>Adjust controller speaker and microphone levels.</p>
+                  <p>Adjust controller {outputControlLower} and microphone levels.</p>
                 </div>
                 <div className="audio-heading-controls">
                   <div className="inline-switch">
@@ -2467,8 +2473,8 @@ export function App() {
                             : ''
                       }`}
                       aria-pressed={showMicrophoneControl ? duplexMicEnabled : snapshot.settings.speakerEnabled}
-                      aria-label={showMicrophoneControl ? duplexMicLabel : 'Enable controller speaker'}
-                      title={showMicrophoneControl ? duplexMicLabel : 'Enable controller speaker'}
+                      aria-label={showMicrophoneControl ? duplexMicLabel : `Enable controller ${outputControlLower}`}
+                      title={showMicrophoneControl ? duplexMicLabel : `Enable controller ${outputControlLower}`}
                       disabled={
                         showMicrophoneControl
                           ? !connected || !hostAudioEnabled || pendingAction !== null
@@ -2476,14 +2482,14 @@ export function App() {
                       }
                       onClick={showMicrophoneControl ? toggleDuplexMicEnabled : toggleSpeakerEnabled}
                     >
-                      {showMicrophoneControl ? <Mic size={20} /> : <Volume2 size={20} />}
+                      {showMicrophoneControl ? <Mic size={20} /> : <OutputIcon size={20} />}
                     </button>
                     <div className="title-copy">
-                      <h3>{showMicrophoneControl ? 'Microphone' : 'Speaker'}</h3>
+                      <h3>{showMicrophoneControl ? 'Microphone' : outputControlLabel}</h3>
                       <p>
                         {showMicrophoneControl
                           ? 'Microphone input level.'
-                          : 'Speaker output level.'}
+                          : `${outputControlLabel} output level.`}
                       </p>
                     </div>
                     <div className="dual-selector audio-mode-selector" role="tablist" aria-label="Audio control mode">
@@ -2494,8 +2500,8 @@ export function App() {
                         className={!showMicrophoneControl ? 'active' : ''}
                         onClick={() => setShowMicrophoneControl(false)}
                       >
-                        <Volume2 size={17} />
-                        Speaker
+                        <OutputIcon size={17} />
+                        {outputControlLabel}
                       </button>
                       <button
                         type="button"
@@ -2607,7 +2613,7 @@ export function App() {
                     </>
                   ) : (
                     <>
-                      <p>Use presets for quick speaker levels.</p>
+                      <p>Use presets for quick {outputPresetLower} levels.</p>
                       <div className="segmented-row">
                         {SPEAKER_VOLUME_PRESETS.map(([label, value]) => (
                           <button
@@ -2629,7 +2635,7 @@ export function App() {
                     <span className="feature-icon"><Activity size={20} /></span>
                     <div className="title-copy">
                       <h3>Testing</h3>
-                      <p>{showMicrophoneControl ? 'Listen to the controller microphone for five seconds.' : 'Play a short sample through the controller speaker.'}</p>
+                      <p>{showMicrophoneControl ? 'Listen to the controller microphone for five seconds.' : `Play a short sample through the controller ${outputControlLower}.`}</p>
                     </div>
                   </div>
                   <button
@@ -2649,9 +2655,9 @@ export function App() {
                         ? 'Playing Tone'
                         : connected && gameStreamActive
                           ? 'Game Active'
-                          : connected && speakerOutputMissing
-                            ? 'Retry Speaker'
-                          : 'Test Speaker'}
+                        : connected && speakerOutputMissing
+                            ? `Retry ${outputControlLabel}`
+                          : `Test ${outputControlLabel}`}
                   </button>
                   <button
                     className="secondary-action"
