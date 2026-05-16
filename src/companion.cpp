@@ -598,7 +598,10 @@ uint16_t build_host_audio_status(uint8_t *buffer, uint16_t reqlen) {
     buffer[10] = status.stream_active ? 1 : 0;
     buffer[11] = status.stream_healthy ? 1 : 0;
     buffer[12] = status.duplex_requested ? 1 : 0;
-    buffer[13] = status.duplex_active ? 1 : 0;
+    buffer[13] = (status.duplex_active ? 0x01 : 0x00)
+        | (status.headset_plugged ? 0x02 : 0x00)
+        | (status.headset_audio_route ? 0x04 : 0x00)
+        | (status.controller_state_ready ? 0x08 : 0x00);
     write_u16(buffer + 14, status.stream_generation);
     write_u32(buffer + 16, status.heartbeat_age_ms);
     write_u32(buffer + 20, status.frame_age_ms);

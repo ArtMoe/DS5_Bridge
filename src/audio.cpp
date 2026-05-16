@@ -37,15 +37,26 @@
 #define STATE_FLAG1_LIGHTBAR_CONTROL_ENABLE 0x04
 #define STATE_FLAG1_RELEASE_LEDS 0x08
 #define STATE_FLAG1_PLAYER_INDICATOR_CONTROL_ENABLE 0x10
+#define STATE_FLAG0_SPEAKER_VOLUME_ENABLE 0x20
+#define STATE_FLAG0_AUDIO_CONTROL_ENABLE 0x80
+#define STATE_FLAG1_AUDIO_CONTROL2_ENABLE 0x80
+#define STATE_PAYLOAD_VALID_FLAG0_OFFSET 0
 #define STATE_PAYLOAD_VALID_FLAG1_OFFSET 1
+#define STATE_PAYLOAD_HEADPHONE_VOLUME_OFFSET 4
 #define STATE_PAYLOAD_SPEAKER_VOLUME_OFFSET 5
+#define STATE_PAYLOAD_AUDIO_CONTROL_OFFSET 7
+#define STATE_PAYLOAD_AUDIO_CONTROL2_OFFSET 37
 #define STATE_PAYLOAD_VALID_FLAG2_OFFSET 38
 #define STATE_PAYLOAD_LED_BRIGHTNESS_OFFSET 42
 #define STATE_PAYLOAD_PLAYER_LEDS_OFFSET 43
 #define STATE_PAYLOAD_LIGHTBAR_RED_OFFSET 44
 #define STATE_PAYLOAD_LIGHTBAR_GREEN_OFFSET 45
 #define STATE_PAYLOAD_LIGHTBAR_BLUE_OFFSET 46
+#define STATE_PAYLOAD_HEADPHONE_VOLUME_MAX 0x7f
 #define STATE_PAYLOAD_SPEAKER_VOLUME_SAFE_MAX 0x64
+#define STATE_AUDIO_FLAGS_OUTPUT_PATH_HEADPHONES 0x00
+#define STATE_AUDIO_FLAGS_OUTPUT_PATH_SPEAKER 0x30
+#define STATE_AUDIO_FLAGS2_SPEAKER_PREAMP_GAIN 0x02
 #define STATE_LIGHTBAR_SETUP_CONTROL_MASK 0x03
 #define STATE_PLAYER_LED_1_INSTANT 0x24
 #define AUDIO_DEBUG_RING_SIZE 96
@@ -75,6 +86,7 @@
 #define HOST_MIC_PLAYOUT_START_DEPTH 3
 #define HOST_MIC_OPUS_FRAME_INTERVAL_US 10000
 #define HOST_MIC_PLC_TARGET_DEPTH 2
+#define HOST_AUDIO_ROUTE_PRIMER_FRAMES 12
 using std::clamp;
 using std::max;
 
@@ -161,9 +173,12 @@ static WDL_Resampler resampler;
 static uint8_t reportSeqCounter = 0;
 static uint8_t packetCounter = 0;
 static bool plug_headset = false;
+static bool controller_state_ready = false;
 static bool audio_initialized = false;
 static uint32_t last_audio_us = 0;
 static bool speaker_route_active = false;
+static bool host_route_primer_toggle_pending = false;
+static uint8_t host_route_primer_frames_remaining = 0;
 static bool test_haptics_active = false;
 static uint8_t test_haptics_packets_remaining = 0;
 static uint8_t test_haptics_neutral_packets_remaining = 0;
@@ -260,11 +275,60 @@ static void clear_mic_queues();
 static void audio_host_poll();
 static void process_mic_usb_output();
 static void clear_partial_audio_state();
+static void reset_controller_audio_report_counters();
+static void schedule_host_route_primer();
+static bool host_route_primer_active();
+static bool prime_host_audio_route_if_needed();
+static uint8_t clamp_debug_u8(uint32_t value);
+static void audio_debug_log(
+    AudioDebugEventCode code,
+    uint8_t a = 0,
+    uint8_t b = 0,
+    uint8_t c = 0,
+    uint8_t d = 0,
+    uint8_t e = 0
+);
+static void copy_routed_state_data(uint8_t *destination);
 
 static bool host_mic_path_active() {
     return host_duplex_requested
         && audio_runtime_mode == AudioRuntimeHostEncodedActive
         && bt_is_controller_connected();
+}
+
+static void reset_controller_audio_report_counters() {
+    reportSeqCounter = 0;
+    packetCounter = 0;
+}
+
+static void schedule_host_route_primer() {
+    host_route_primer_toggle_pending = true;
+    host_route_primer_frames_remaining = HOST_AUDIO_ROUTE_PRIMER_FRAMES;
+    speaker_route_active = false;
+    audio_debug_packet_log_budget = max<uint8_t>(audio_debug_packet_log_budget, 6);
+}
+
+static bool host_route_primer_active() {
+    return host_route_primer_toggle_pending || host_route_primer_frames_remaining != 0;
+}
+
+static bool prime_host_audio_route_if_needed() {
+    if (!host_route_primer_toggle_pending || !controller_state_ready) {
+        return false;
+    }
+
+    bt_rearm_speaker_output_route(plug_headset);
+    speaker_route_active = true;
+    host_route_primer_toggle_pending = false;
+    audio_debug_log(
+        AudioDebugSpeakerRoute,
+        1,
+        clamp_debug_u8(static_cast<uint32_t>(volume[0] * 100.0f)),
+        quiet_mode_enabled ? 1 : 0,
+        plug_headset ? 1 : 0,
+        2
+    );
+    return true;
 }
 
 static void clamp_state_speaker_volume() {
@@ -311,7 +375,31 @@ void audio_set_lightbar_state(uint8_t red, uint8_t green, uint8_t blue, uint8_t 
 }
 
 void set_headset(bool state) {
+    const bool first_report_after_connect = !controller_state_ready;
+    controller_state_ready = true;
+    if (first_report_after_connect && host_audio_requested) {
+        schedule_host_route_primer();
+    }
+    if (plug_headset == state) {
+        return;
+    }
+
     plug_headset = state;
+    if (speaker_route_active) {
+        bt_set_speaker_output_enabled(true, plug_headset);
+        audio_debug_log(
+            AudioDebugSpeakerRoute,
+            1,
+            clamp_debug_u8(static_cast<uint32_t>(volume[0] * 100.0f)),
+            quiet_mode_enabled ? 1 : 0,
+            plug_headset ? 1 : 0,
+            1
+        );
+    }
+}
+
+bool audio_controller_state_ready() {
+    return controller_state_ready;
 }
 
 static bool time_reached(uint32_t now, uint32_t target) {
@@ -320,6 +408,38 @@ static bool time_reached(uint32_t now, uint32_t target) {
 
 static uint8_t clamp_debug_u8(uint32_t value) {
     return value > 255 ? 255 : static_cast<uint8_t>(value);
+}
+
+static void copy_routed_state_data(uint8_t *destination) {
+    if (destination == nullptr) {
+        return;
+    }
+
+    memcpy(destination, state_data, sizeof(state_data));
+    if (plug_headset) {
+        destination[STATE_PAYLOAD_VALID_FLAG0_OFFSET] = static_cast<uint8_t>(
+            (destination[STATE_PAYLOAD_VALID_FLAG0_OFFSET] | STATE_FLAG0_AUDIO_CONTROL_ENABLE)
+            & static_cast<uint8_t>(~STATE_FLAG0_SPEAKER_VOLUME_ENABLE)
+        );
+        destination[STATE_PAYLOAD_VALID_FLAG1_OFFSET] = static_cast<uint8_t>(
+            destination[STATE_PAYLOAD_VALID_FLAG1_OFFSET]
+            & static_cast<uint8_t>(~STATE_FLAG1_AUDIO_CONTROL2_ENABLE)
+        );
+        destination[STATE_PAYLOAD_HEADPHONE_VOLUME_OFFSET] = STATE_PAYLOAD_HEADPHONE_VOLUME_MAX;
+        destination[STATE_PAYLOAD_SPEAKER_VOLUME_OFFSET] = 0x00;
+        destination[STATE_PAYLOAD_AUDIO_CONTROL_OFFSET] = STATE_AUDIO_FLAGS_OUTPUT_PATH_HEADPHONES;
+        destination[STATE_PAYLOAD_AUDIO_CONTROL2_OFFSET] = 0x00;
+        return;
+    }
+
+    destination[STATE_PAYLOAD_VALID_FLAG0_OFFSET] |= static_cast<uint8_t>(
+        STATE_FLAG0_AUDIO_CONTROL_ENABLE | STATE_FLAG0_SPEAKER_VOLUME_ENABLE
+    );
+    destination[STATE_PAYLOAD_HEADPHONE_VOLUME_OFFSET] = STATE_PAYLOAD_HEADPHONE_VOLUME_MAX;
+    destination[STATE_PAYLOAD_VALID_FLAG1_OFFSET] |= STATE_FLAG1_AUDIO_CONTROL2_ENABLE;
+    destination[STATE_PAYLOAD_SPEAKER_VOLUME_OFFSET] = STATE_PAYLOAD_SPEAKER_VOLUME_SAFE_MAX;
+    destination[STATE_PAYLOAD_AUDIO_CONTROL_OFFSET] = STATE_AUDIO_FLAGS_OUTPUT_PATH_SPEAKER;
+    destination[STATE_PAYLOAD_AUDIO_CONTROL2_OFFSET] = STATE_AUDIO_FLAGS2_SPEAKER_PREAMP_GAIN;
 }
 
 static void write_debug_u16(uint8_t *data, uint16_t value) {
@@ -407,12 +527,12 @@ static void audio_stats_note_generation_drop() {
 }
 
 static void audio_debug_log(
-    uint8_t code,
-    uint8_t arg0 = 0,
-    uint8_t arg1 = 0,
-    uint8_t arg2 = 0,
-    uint8_t arg3 = 0,
-    uint8_t arg4 = 0
+    AudioDebugEventCode code,
+    uint8_t arg0,
+    uint8_t arg1,
+    uint8_t arg2,
+    uint8_t arg3,
+    uint8_t arg4
 ) {
 #ifdef DS5_ENABLE_AUDIO_DEBUG_REPORTS
     if (!audio_debug_cs_ready) {
@@ -424,7 +544,7 @@ static void audio_debug_log(
     audio_debug_ring[audio_debug_head] = {
         sequence,
         time_us_32(),
-        code,
+        static_cast<uint8_t>(code),
         arg0,
         arg1,
         arg2,
@@ -621,6 +741,7 @@ static void audio_host_poll() {
         audio_fallback_reason = AudioFallbackNone;
         drain_audio_queues();
         clear_partial_audio_state();
+        schedule_host_route_primer();
         audio_debug_log(
             AudioDebugHostMode,
             static_cast<uint8_t>(AudioRuntimeHostEncodedActive),
@@ -650,6 +771,11 @@ void audio_handle_controller_disconnect() {
     test_haptics_active = false;
     test_haptics_packets_remaining = 0;
     test_haptics_neutral_packets_remaining = 0;
+    plug_headset = false;
+    controller_state_ready = false;
+    host_route_primer_toggle_pending = false;
+    host_route_primer_frames_remaining = 0;
+    reset_controller_audio_report_counters();
     drain_audio_queues();
     clear_partial_audio_state();
     speaker_silence_preroll_packets_remaining = 0;
@@ -668,7 +794,7 @@ static void update_persistent_speaker_route() {
 
     if (should_keep_speaker_route_open()) {
         if (!speaker_route_active) {
-            bt_set_speaker_output_enabled(true);
+            bt_set_speaker_output_enabled(true, plug_headset, true);
             speaker_route_active = true;
             schedule_speaker_silence_preroll();
             audio_debug_log(
@@ -676,7 +802,7 @@ static void update_persistent_speaker_route() {
                 1,
                 clamp_debug_u8(static_cast<uint32_t>(volume[0] * 100.0f)),
                 quiet_mode_enabled ? 1 : 0,
-                0,
+                plug_headset ? 1 : 0,
                 0
             );
         }
@@ -714,7 +840,7 @@ static bool send_audio_haptics_packet(const int8_t *haptic_buf, bool include_spe
     pkt[10] = packetCounter++;
     pkt[11] = 0x10 | (1 << 7);
     pkt[12] = sizeof(state_data);
-    memcpy(pkt + 13, state_data, sizeof(state_data));
+    copy_routed_state_data(pkt + 13);
     pkt[76] = 0x12 | (1 << 7);
     pkt[77] = SAMPLE_SIZE;
     memcpy(pkt + 78, haptic_buf, SAMPLE_SIZE);
@@ -730,7 +856,8 @@ static bool send_audio_haptics_packet(const int8_t *haptic_buf, bool include_spe
         critical_section_exit(&opus_cs);
 
         if (have_opus_packet) {
-            bt_set_speaker_output_enabled(true);
+            const bool force_route = !speaker_route_active;
+            bt_set_speaker_output_enabled(true, plug_headset, force_route);
             speaker_route_active = true;
             pkt[142] = (plug_headset ? 0x16 : 0x13) | 0 << 6 | 1 << 7;
             pkt[143] = sizeof(speaker_data);
@@ -914,6 +1041,8 @@ void audio_host_start_stream() {
     host_request_started_us = host_stream_started_us;
     host_last_heartbeat_us = host_stream_started_us;
     host_last_frame_us = 0;
+    reset_controller_audio_report_counters();
+    schedule_host_route_primer();
     host_stream_generation++;
     if (host_stream_generation == 0) {
         host_stream_generation = 1;
@@ -924,6 +1053,7 @@ void audio_host_start_stream() {
         audio_fallback_reason = AudioFallbackNone;
         drain_audio_queues();
         clear_partial_audio_state();
+        schedule_host_route_primer();
     }
 }
 
@@ -953,6 +1083,11 @@ void audio_set_mic_output_state(uint8_t volume_percent, bool muted) {
 }
 
 static bool submit_host_audio_report(uint8_t const *report, uint16_t len) {
+    if (!controller_state_ready) {
+        host_frames_dropped++;
+        return false;
+    }
+
     if (report == nullptr) {
         host_frames_dropped++;
         enter_fallback(AudioFallbackInvalidPacket);
@@ -974,7 +1109,7 @@ static bool submit_host_audio_report(uint8_t const *report, uint16_t len) {
         packet[9] = buffer_length;
         packet[11] = 0x10 | (1 << 7);
         packet[12] = sizeof(state_data);
-        memcpy(packet + 13, state_data, sizeof(state_data));
+        copy_routed_state_data(packet + 13);
         packet[76] = 0x12 | (1 << 7);
         packet[77] = SAMPLE_SIZE;
         memcpy(packet + 78, report, SAMPLE_SIZE);
@@ -984,6 +1119,8 @@ static bool submit_host_audio_report(uint8_t const *report, uint16_t len) {
         memcpy(packet + 144, report + SAMPLE_SIZE, 200);
     } else if (len == HOST_AUDIO_REPORT_SIZE && report[0] == REPORT_ID) {
         memcpy(packet, report, sizeof(packet));
+        copy_routed_state_data(packet + 13);
+        packet[142] = (plug_headset ? 0x16 : 0x13) | (1 << 7);
         apply_haptics_gain_to_packet(packet + 78);
     } else {
         host_frames_dropped++;
@@ -995,11 +1132,18 @@ static bool submit_host_audio_report(uint8_t const *report, uint16_t len) {
     packet[1] = reportSeqCounter << 4;
     reportSeqCounter = (reportSeqCounter + 1) & 0x0F;
     packet[10] = packetCounter++;
-    bt_set_speaker_output_enabled(true);
+    if (prime_host_audio_route_if_needed()) {
+        return false;
+    }
+    const bool force_route = !speaker_route_active || host_route_primer_active();
+    bt_set_speaker_output_enabled(true, plug_headset, force_route);
     speaker_route_active = true;
     if (!bt_write_audio_stream(packet, sizeof(packet))) {
         host_frames_dropped++;
         return false;
+    }
+    if (host_route_primer_frames_remaining != 0) {
+        host_route_primer_frames_remaining--;
     }
 
     host_frames_received++;
@@ -1188,6 +1332,9 @@ void audio_get_host_status(audio_host_status *status) {
     status->stream_healthy = host_stream_healthy(now);
     status->duplex_requested = host_duplex_requested;
     status->duplex_active = audio_duplex_active();
+    status->controller_state_ready = controller_state_ready;
+    status->headset_plugged = plug_headset;
+    status->headset_audio_route = speaker_route_active && plug_headset;
     status->stream_generation = host_stream_generation;
     status->heartbeat_age_ms = host_last_heartbeat_us == 0 ? 0xffffffffu : static_cast<uint32_t>(now - host_last_heartbeat_us) / 1000u;
     status->frame_age_ms = host_last_frame_us == 0 ? 0xffffffffu : static_cast<uint32_t>(now - host_last_frame_us) / 1000u;

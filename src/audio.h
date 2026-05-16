@@ -32,6 +32,9 @@ struct audio_host_status {
     bool stream_healthy;
     bool duplex_requested;
     bool duplex_active;
+    bool controller_state_ready;
+    bool headset_plugged;
+    bool headset_audio_route;
     uint16_t stream_generation;
     uint32_t heartbeat_age_ms;
     uint32_t frame_age_ms;
@@ -74,6 +77,7 @@ void audio_set_state_data(uint8_t const *data, uint8_t len);
 void audio_set_lightbar_state(uint8_t red, uint8_t green, uint8_t blue, uint8_t brightness_percent);
 void audio_handle_controller_disconnect();
 void set_headset(bool state);
+bool audio_controller_state_ready();
 void audio_host_set_requested(bool enabled);
 void audio_host_note_heartbeat();
 void audio_host_start_stream();

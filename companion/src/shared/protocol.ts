@@ -244,6 +244,9 @@ export interface HostAudioStatusPayload {
   streamHealthy: boolean;
   duplexRequested: boolean;
   duplexActive: boolean;
+  controllerStateReady: boolean;
+  headsetPlugged: boolean;
+  headsetAudioRoute: boolean;
   streamGeneration: number;
   heartbeatAgeMs: number | null;
   frameAgeMs: number | null;
@@ -499,7 +502,10 @@ export function parseHostAudioStatusReport(report: ArrayLike<number>): HostAudio
     streamActive: report[11] === 1,
     streamHealthy: report[12] === 1,
     duplexRequested: report[13] === 1,
-    duplexActive: report[14] === 1,
+    duplexActive: (report[14] & 0x01) !== 0,
+    headsetPlugged: (report[14] & 0x02) !== 0,
+    headsetAudioRoute: (report[14] & 0x04) !== 0,
+    controllerStateReady: (report[14] & 0x08) !== 0,
     streamGeneration: readU16(report, 15),
     heartbeatAgeMs: nullableAge(readU32(report, 17)),
     frameAgeMs: nullableAge(readU32(report, 21)),

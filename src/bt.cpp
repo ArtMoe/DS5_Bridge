@@ -15,12 +15,14 @@
 
 #include "audio.h"
 #include "btstack_event.h"
+#include "controller_report.h"
 #include "l2cap.h"
 #include "pico/cyw43_arch.h"
 #include "pico/stdio.h"
 #include "usb.h"
 #include "utils.h"
 #include "bsp/board_api.h"
+#include "hardware/watchdog.h"
 #include "pico/sync.h"
 #include "pico/time.h"
 #include "classic/sdp_server.h"
@@ -47,7 +49,10 @@
 #define DS_OUTPUT_VALID_FLAG1_AUDIO_CONTROL2_ENABLE 0x80
 #define DS_OUTPUT_VALID_FLAG2_LIGHTBAR_SETUP_CONTROL_ENABLE 0x02
 #define DS_OUTPUT_VALID_FLAG2_COMPATIBLE_VIBRATION2 0x04
+#define DS_OUTPUT_AUDIO_FLAGS_OUTPUT_PATH_HEADPHONES 0x00
 #define DS_OUTPUT_AUDIO_FLAGS_OUTPUT_PATH_SPEAKER 0x30
+#define DS_OUTPUT_HEADPHONE_VOLUME_MAX 0x7f
+#define DS_OUTPUT_SPEAKER_VOLUME_MAX 0x64
 #define DS_OUTPUT_AUDIO_FLAGS2_SPEAKER_PREAMP_GAIN 0x02
 #define DS_OUTPUT_LIGHTBAR_SETUP_LIGHT_OUT 0x02
 #define DS_PLAYER_LED_1_INSTANT 0x24
@@ -66,6 +71,8 @@
 #define CRITICAL_QUEUE_TARGET_DEPTH 16
 #define OUTPUT_AUDIO_MAX_AGE_US 3000
 #define OUTPUT_MAX_CONSECUTIVE_NON_AUDIO_SENDS 1
+#define CYW43_POWER_CYCLE_HOLD_MS 750
+#define CONTROLLER_DISCONNECT_REBOOT_DELAY_MS 25
 #define IDLE_DISCONNECT_TIMEOUT_US (30ULL * 60ULL * 1000ULL * 1000ULL)
 #define OUTPUT_PAYLOAD_VALID_FLAG0_OFFSET 0
 #define OUTPUT_PAYLOAD_VALID_FLAG1_OFFSET 1
@@ -184,6 +191,7 @@ static bool lightbar_restore_pending = false;
 static uint32_t lightbar_restore_at_us = 0;
 static uint8_t state_report_seq = 0;
 static bool speaker_output_enabled = false;
+static bool speaker_output_headset_route = false;
 static uint8_t companion_mic_volume_percent = 100;
 static uint8_t classic_rumble_gain_percent = 100;
 
@@ -203,18 +211,42 @@ static void clear_output_queues_locked() {
     clear_packet_queue(critical_queue);
     clear_packet_queue(audio_queue);
     state_pending = false;
+    memset(state_pending_report, 0, sizeof(state_pending_report));
     consecutive_non_audio_sends = 0;
     non_audio_reports_since_audio = 0;
+    last_bt_send_us = 0;
     last_audio_0x36_send_us = 0;
     output_counters.critical_queue_depth = 0;
     output_counters.audio_queue_depth = 0;
     output_counters.consecutive_state_sends = 0;
     output_counters.consecutive_critical_sends = 0;
     last_classified_critical_report_valid = false;
+    memset(last_classified_critical_report, 0, sizeof(last_classified_critical_report));
+}
+
+static void reset_controller_output_session_locked() {
+    clear_output_queues_locked();
+    state_report_seq = 0;
+    speaker_output_enabled = false;
+    speaker_output_headset_route = false;
+    lightbar_restore_pending = false;
+    lightbar_restore_at_us = 0;
 }
 
 static bool output_pending_locked() {
     return !critical_queue.empty() || !audio_queue.empty() || state_pending;
+}
+
+static void power_down_cyw43_for_reboot() {
+#ifdef CYW43_PIN_RFSW_VDD
+    cyw43_hal_pin_config(CYW43_PIN_RFSW_VDD, CYW43_HAL_PIN_MODE_OUTPUT, CYW43_HAL_PIN_PULL_NONE, 0);
+    cyw43_hal_pin_low(CYW43_PIN_RFSW_VDD);
+#endif
+#ifdef CYW43_PIN_WL_REG_ON
+    cyw43_hal_pin_config(CYW43_PIN_WL_REG_ON, CYW43_HAL_PIN_MODE_OUTPUT, CYW43_HAL_PIN_PULL_NONE, 0);
+    cyw43_hal_pin_low(CYW43_PIN_WL_REG_ON);
+#endif
+    sleep_ms(CYW43_POWER_CYCLE_HOLD_MS);
 }
 
 static void update_queue_depth_counters_locked() {
@@ -540,43 +572,68 @@ void bt_set_microphone_state(uint8_t volume_percent, bool muted) {
     bt_write(report, sizeof(report));
 }
 
-static void send_speaker_output_state(bool enabled) {
+static void send_speaker_output_state(bool enabled, bool headset_plugged) {
     uint8_t report[DS_OUTPUT_REPORT_BT_SIZE];
     init_state_report(report);
     report[3] = DS_OUTPUT_VALID_FLAG0_AUDIO_CONTROL_ENABLE;
-    report[3 + 1] = DS_OUTPUT_VALID_FLAG1_AUDIO_CONTROL2_ENABLE;
-    report[3 + OUTPUT_PAYLOAD_HEADPHONE_VOLUME_OFFSET] = 0x7f;
-    report[3 + OUTPUT_PAYLOAD_SPEAKER_VOLUME_OFFSET] = 0xff;
-    report[3 + OUTPUT_PAYLOAD_AUDIO_CONTROL_OFFSET] = enabled ? DS_OUTPUT_AUDIO_FLAGS_OUTPUT_PATH_SPEAKER : 0x00;
-    report[3 + OUTPUT_PAYLOAD_AUDIO_CONTROL2_OFFSET] = enabled ? DS_OUTPUT_AUDIO_FLAGS2_SPEAKER_PREAMP_GAIN : 0x00;
+
     if (enabled) {
-        report[3] |= DS_OUTPUT_VALID_FLAG0_SPEAKER_VOLUME_ENABLE;
+        if (headset_plugged) {
+            report[3 + OUTPUT_PAYLOAD_HEADPHONE_VOLUME_OFFSET] = DS_OUTPUT_HEADPHONE_VOLUME_MAX;
+            report[3 + OUTPUT_PAYLOAD_AUDIO_CONTROL_OFFSET] = DS_OUTPUT_AUDIO_FLAGS_OUTPUT_PATH_HEADPHONES;
+        } else {
+            report[3] |= DS_OUTPUT_VALID_FLAG0_SPEAKER_VOLUME_ENABLE;
+            report[3 + 1] = DS_OUTPUT_VALID_FLAG1_AUDIO_CONTROL2_ENABLE;
+            report[3 + OUTPUT_PAYLOAD_SPEAKER_VOLUME_OFFSET] = DS_OUTPUT_SPEAKER_VOLUME_MAX;
+            report[3 + OUTPUT_PAYLOAD_AUDIO_CONTROL_OFFSET] = DS_OUTPUT_AUDIO_FLAGS_OUTPUT_PATH_SPEAKER;
+            report[3 + OUTPUT_PAYLOAD_AUDIO_CONTROL2_OFFSET] = DS_OUTPUT_AUDIO_FLAGS2_SPEAKER_PREAMP_GAIN;
+        }
+    } else {
+        report[3 + OUTPUT_PAYLOAD_AUDIO_CONTROL_OFFSET] = DS_OUTPUT_AUDIO_FLAGS_OUTPUT_PATH_HEADPHONES;
     }
     bt_write(report, sizeof(report));
 }
 
-void bt_set_speaker_output_enabled(bool enabled) {
+void bt_set_speaker_output_enabled(bool enabled, bool headset_plugged, bool force) {
     if (hid_interrupt_cid == 0) {
         speaker_output_enabled = false;
+        speaker_output_headset_route = false;
         return;
     }
 
-    if (speaker_output_enabled == enabled) {
+    if (!force && speaker_output_enabled == enabled && (!enabled || speaker_output_headset_route == headset_plugged)) {
         return;
     }
 
     speaker_output_enabled = enabled;
-    send_speaker_output_state(enabled);
+    speaker_output_headset_route = enabled && headset_plugged;
+    send_speaker_output_state(enabled, headset_plugged);
+}
+
+void bt_rearm_speaker_output_route(bool headset_plugged) {
+    if (hid_interrupt_cid == 0) {
+        speaker_output_enabled = false;
+        speaker_output_headset_route = false;
+        return;
+    }
+
+    if (headset_plugged) {
+        send_speaker_output_state(true, false);
+    }
+    speaker_output_enabled = true;
+    speaker_output_headset_route = headset_plugged;
+    send_speaker_output_state(true, headset_plugged);
 }
 
 void bt_refresh_speaker_output() {
     if (hid_interrupt_cid == 0) {
         speaker_output_enabled = false;
+        speaker_output_headset_route = false;
         return;
     }
 
     if (speaker_output_enabled) {
-        send_speaker_output_state(true);
+        send_speaker_output_state(true, speaker_output_headset_route);
     }
 }
 
@@ -825,7 +882,8 @@ static void hci_packet_handler(uint8_t packet_type, uint16_t channel, uint8_t *p
         }
 
         case HCI_EVENT_DISCONNECTION_COMPLETE: {
-            tud_disconnect();
+            usb_handle_controller_transport_disconnect();
+            reset_controller_input_report_cache();
             gap_connectable_control(1);
             gap_discoverable_control(1);
             const uint8_t reason = hci_event_disconnection_complete_get_reason(packet);
@@ -834,21 +892,17 @@ static void hci_packet_handler(uint8_t packet_type, uint16_t channel, uint8_t *p
             acl_handle = HCI_CON_HANDLE_INVALID;
             hid_control_cid = 0;
             hid_interrupt_cid = 0;
-            speaker_output_enabled = false;
             audio_handle_controller_disconnect();
             feature_data.clear();
             controller_type = ControllerTypeUnknown;
             controller_type_check_pending = false;
             critical_section_enter_blocking(&queue_lock);
-            clear_output_queues_locked();
+            reset_controller_output_session_locked();
             critical_section_exit(&queue_lock);
             cyw43_arch_gpio_put(CYW43_WL_GPIO_LED_PIN, false);
-            DS5_LOG("[HCI] Disconnected reason=0x%02X, start inquiry\n", reason);
-            if (!usb_pm_should_pause_inquiry()) {
-                gap_inquiry_start(30);
-            } else {
-                DS5_LOG("[HCI] USB suspended, skip inquiry\n");
-            }
+            DS5_LOG("[HCI] Disconnected reason=0x%02X, power-cycle CYW43 then reboot Pico\n", reason);
+            power_down_cyw43_for_reboot();
+            watchdog_reboot(0, 0, CONTROLLER_DISCONNECT_REBOOT_DELAY_MS);
             break;
         }
     }
@@ -1013,6 +1067,9 @@ static void l2cap_packet_handler(uint8_t packet_type, uint16_t channel, uint8_t 
                 } else if (psm == PSM_HID_INTERRUPT) {
                     DS5_LOG("[L2CAP] HID Interrupt opened cid=0x%04X\n", local_cid);
                     hid_interrupt_cid = local_cid;
+                    critical_section_enter_blocking(&queue_lock);
+                    reset_controller_output_session_locked();
+                    critical_section_exit(&queue_lock);
 
                     if (!mute[0]) {
                         cyw43_arch_gpio_put(CYW43_WL_GPIO_LED_PIN, true);
@@ -1026,7 +1083,7 @@ static void l2cap_packet_handler(uint8_t packet_type, uint16_t channel, uint8_t 
                     bt_set_lightbar_color(0xff, 0xd7, 0x00, 100);
                     bt_schedule_lightbar_restore(250);
 
-                    tud_connect();
+                    usb_handle_controller_transport_ready();
                 } else {
                     DS5_LOG("[L2CAP] Unknown Channel psm: 0x%02X", psm);
                 }

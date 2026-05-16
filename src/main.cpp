@@ -11,6 +11,7 @@
 #include "resample.h"
 #include "audio.h"
 #include "usb.h"
+#include "controller_report.h"
 #include "hardware/clocks.h"
 #include "hardware/vreg.h"
 #include "hardware/watchdog.h"
@@ -46,6 +47,24 @@ uint8_t interrupt_in_data[63] = {
 
 critical_section_t report_cs;
 volatile bool report_dirty = false;
+
+void reset_controller_input_report_cache() {
+    static constexpr uint8_t default_interrupt_in_data[63] = {
+        0x7f, 0x7d, 0x7f, 0x7e, 0x00, 0x00, 0xa7,
+        0x08, 0x00, 0x00, 0x00, 0x52, 0x43, 0x30, 0x41,
+        0x01, 0x00, 0x0e, 0x00, 0xef, 0xff, 0x03, 0x03,
+        0x7b, 0x1b, 0x18, 0xf0, 0xcc, 0x9c, 0x60, 0x00,
+        0xfc, 0x80, 0x00, 0x00, 0x00, 0x80, 0x00, 0x00,
+        0x00, 0x00, 0x09, 0x09, 0x00, 0x00, 0x00, 0x00,
+        0x00, 0xa7, 0xad, 0x60, 0x00, 0x29, 0x18, 0x00,
+        0x53, 0x9f, 0x28, 0x35, 0xa5, 0xa8, 0x0c, 0x8b
+    };
+
+    critical_section_enter_blocking(&report_cs);
+    memcpy(interrupt_in_data, default_interrupt_in_data, sizeof(interrupt_in_data));
+    report_dirty = false;
+    critical_section_exit(&report_cs);
+}
 
 void interrupt_loop() {
     if (!tud_hid_ready()) return;
@@ -92,12 +111,9 @@ void on_bt_data(CHANNEL_TYPE channel, uint8_t *data, uint16_t len) {
         return;
     }
 
-    if ((data[56] & 1) != (interrupt_in_data[53] & 1)) {
-        set_headset(data[56] & 1);
-    }
-
     uint8_t controller_report[63];
     memcpy(controller_report, data + 3, sizeof(controller_report));
+    set_headset((controller_report[53] & 1) != 0);
 #ifdef ENABLE_COMPANION
     companion_process_controller_report(controller_report, sizeof(controller_report));
 #endif
@@ -262,12 +278,7 @@ int main() {
     set_sys_clock_khz(320000, true);
 
     board_init();
-    tusb_rhport_init_t dev_init = {
-        .role = TUSB_ROLE_DEVICE,
-        .speed = TUSB_SPEED_FULL
-    };
-    tusb_init(BOARD_TUD_RHPORT, &dev_init);
-    tud_disconnect();
+    usb_device_stack_init_disconnected();
     board_init_after_tusb();
 
     if (cyw43_arch_init()) {
