@@ -25,6 +25,7 @@
 #include "pico/critical_section.h"
 
 int reportSeqCounter = 0;
+static constexpr uint32_t HOST_LIGHTBAR_RESTORE_DELAY_MS = 3000;
 
 enum HidDebugKind : uint8_t {
     HidDebugGetReport = 1,
@@ -319,7 +320,7 @@ void tud_hid_set_report_cb(uint8_t itf, uint8_t report_id, hid_report_type_t rep
                 bt_apply_haptics_gain(outputData, sizeof(outputData), companion_haptics_gain_percent());
                 bt_write_classified_output(outputData, sizeof(outputData));
                 if (hostClearsLeds && !lightbarOverride) {
-                    bt_schedule_lightbar_restore(750);
+                    bt_schedule_lightbar_restore(HOST_LIGHTBAR_RESTORE_DELAY_MS);
                 }
                 break;
             }
