@@ -9,6 +9,12 @@ using NAudio.CoreAudioApi;
 using NAudio.Wave;
 
 var options = HelperOptions.Parse(args);
+if (options.PlayTestTone)
+{
+    HostAudioTestTone.Play(options);
+    return;
+}
+
 using var helper = new HostAudioHelper(options);
 await helper.RunAsync();
 
@@ -36,6 +42,41 @@ static class AudioConstants
     public const int MicKeepaliveBufferMilliseconds = 10;
     public const float SpeakerGainRampStepPermille = 1000f / (TargetSampleRate * 0.02f);
     public static readonly long FrameIntervalTicks = Stopwatch.Frequency * PicoInputBlockFrames / TargetSampleRate;
+}
+
+static class HostAudioTestTone
+{
+    public static void Play(HelperOptions options)
+    {
+        using var enumerator = new MMDeviceEnumerator();
+        var device = HostAudioHelper.SelectRenderEndpoint(enumerator, options.DeviceName);
+        using var output = new WasapiOut(device, AudioClientShareMode.Shared, false, 120);
+        using var fileReader = OpenTestAudioFile(options.TestAudioPath);
+        using var playbackStopped = new ManualResetEventSlim(false);
+        fileReader.Volume = Math.Clamp(options.SpeakerVolumePercent, 0, 100) / 100.0f;
+        output.PlaybackStopped += (_, _) => playbackStopped.Set();
+        output.Init(fileReader);
+        output.Play();
+        if (!playbackStopped.Wait(TimeSpan.FromSeconds(8)))
+        {
+            output.Stop();
+            playbackStopped.Wait(TimeSpan.FromMilliseconds(500));
+        }
+        Console.Error.WriteLine($"status: test-tone-played '{device.FriendlyName}'");
+    }
+
+    private static AudioFileReader OpenTestAudioFile(string? path)
+    {
+        if (string.IsNullOrWhiteSpace(path))
+        {
+            throw new InvalidOperationException("Test audio path was not provided.");
+        }
+        if (!File.Exists(path))
+        {
+            throw new FileNotFoundException("Test audio file was not found.", path);
+        }
+        return new AudioFileReader(path);
+    }
 }
 
 sealed class HostAudioHelper : IDisposable
@@ -279,7 +320,7 @@ sealed class HostAudioHelper : IDisposable
         }
     }
 
-    private static MMDevice SelectRenderEndpoint(MMDeviceEnumerator enumerator, string? deviceName)
+    public static MMDevice SelectRenderEndpoint(MMDeviceEnumerator enumerator, string? deviceName)
     {
         var devices = enumerator
             .EnumerateAudioEndPoints(DataFlow.Render, DeviceState.Active)
@@ -958,7 +999,15 @@ sealed class HostAudioHelper : IDisposable
     }
 }
 
-sealed record HelperOptions(string? DeviceName, string? HidPath, bool ListDevices, bool MicKeepaliveOnly, string? MicDeviceName, int SpeakerVolumePercent)
+sealed record HelperOptions(
+    string? DeviceName,
+    string? HidPath,
+    bool ListDevices,
+    bool MicKeepaliveOnly,
+    string? MicDeviceName,
+    int SpeakerVolumePercent,
+    string? TestAudioPath,
+    bool PlayTestTone)
 {
     public static HelperOptions Parse(string[] args)
     {
@@ -966,8 +1015,10 @@ sealed record HelperOptions(string? DeviceName, string? HidPath, bool ListDevice
         string? hidPath = null;
         string? micDeviceName = null;
         var speakerVolumePercent = 100;
+        string? testAudioPath = null;
         var listDevices = false;
         var micKeepaliveOnly = false;
+        var playTestTone = false;
 
         for (var index = 0; index < args.Length; index++)
         {
@@ -988,15 +1039,29 @@ sealed record HelperOptions(string? DeviceName, string? HidPath, bool ListDevice
                         speakerVolumePercent = parsedSpeakerVolumePercent;
                     }
                     break;
+                case "--test-audio-path" when index + 1 < args.Length:
+                    testAudioPath = args[++index];
+                    break;
                 case "--list-devices":
                     listDevices = true;
                     break;
                 case "--mic-keepalive-only":
                     micKeepaliveOnly = true;
                     break;
+                case "--play-test-tone":
+                    playTestTone = true;
+                    break;
             }
         }
 
-        return new HelperOptions(deviceName, hidPath, listDevices, micKeepaliveOnly, micDeviceName, speakerVolumePercent);
+        return new HelperOptions(
+            deviceName,
+            hidPath,
+            listDevices,
+            micKeepaliveOnly,
+            micDeviceName,
+            speakerVolumePercent,
+            testAudioPath,
+            playTestTone);
     }
 }

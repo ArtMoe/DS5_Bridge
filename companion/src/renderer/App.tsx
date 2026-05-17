@@ -344,22 +344,36 @@ function hexByte(value: number): string {
   return value.toString(16).padStart(2, '0').toUpperCase();
 }
 
+function normalizeAudioDeviceLabel(label: string): string {
+  return label
+    .toLowerCase()
+    .replace(/^\s*\d+\s*-\s*/, '')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
+function isBridgeAudioLabel(label: string): boolean {
+  return BRIDGE_AUDIO_OUTPUT_RE.test(normalizeAudioDeviceLabel(label));
+}
+
 function bridgeAudioOutputScore(device: MediaDeviceInfo): number {
-  const label = device.label.toLowerCase();
+  const label = normalizeAudioDeviceLabel(device.label);
   let score = 1;
   if (label.includes('dualsense') || label.includes('dual sense')) score += 4;
   if (label.includes('wireless controller')) score += 3;
-  if (label.includes('speaker')) score += 2;
+  if (label.includes('speaker') || label.includes('headphone') || label.includes('headset')) score += 2;
+  if (label.includes('microphone') || label.includes('mic')) score -= 4;
   if (label.includes('ds5') || label.includes('bridge')) score += 1;
   return score;
 }
 
 function bridgeAudioInputScore(device: MediaDeviceInfo): number {
-  const label = device.label.toLowerCase();
+  const label = normalizeAudioDeviceLabel(device.label);
   let score = 1;
   if (label.includes('dualsense') || label.includes('dual sense')) score += 4;
   if (label.includes('wireless controller')) score += 3;
   if (label.includes('microphone') || label.includes('mic')) score += 2;
+  if (label.includes('speaker') || label.includes('headphone')) score -= 4;
   if (label.includes('ds5') || label.includes('bridge')) score += 1;
   return score;
 }
@@ -373,7 +387,7 @@ async function findBridgeAudioOutputIdOnce(): Promise<string | null> {
     const devices = await navigator.mediaDevices.enumerateDevices();
     const outputs = devices.filter((device) => (
       device.kind === 'audiooutput'
-      && BRIDGE_AUDIO_OUTPUT_RE.test(device.label)
+      && isBridgeAudioLabel(device.label)
       && device.deviceId
       && device.deviceId !== 'default'
       && device.deviceId !== 'communications'
@@ -395,7 +409,7 @@ async function findBridgeAudioInputIdOnce(): Promise<string | null> {
     const devices = await navigator.mediaDevices.enumerateDevices();
     const inputs = devices.filter((device) => (
       device.kind === 'audioinput'
-      && BRIDGE_AUDIO_INPUT_RE.test(device.label)
+      && BRIDGE_AUDIO_INPUT_RE.test(normalizeAudioDeviceLabel(device.label))
       && device.deviceId
       && device.deviceId !== 'default'
       && device.deviceId !== 'communications'
@@ -408,19 +422,30 @@ async function findBridgeAudioInputIdOnce(): Promise<string | null> {
   }
 }
 
+async function unlockMediaDeviceLabels(): Promise<boolean> {
+  if (!navigator.mediaDevices?.getUserMedia) {
+    return false;
+  }
+
+  let permissionStream: MediaStream | null = null;
+  try {
+    permissionStream = await navigator.mediaDevices.getUserMedia({ audio: true, video: false });
+    return true;
+  } catch {
+    return false;
+  } finally {
+    permissionStream?.getTracks().forEach((track) => track.stop());
+  }
+}
+
 async function findBridgeAudioInputId(): Promise<string | null> {
   let inputId = await findBridgeAudioInputIdOnce();
   if (inputId || !navigator.mediaDevices?.getUserMedia) {
     return inputId;
   }
 
-  let permissionStream: MediaStream | null = null;
-  try {
-    permissionStream = await navigator.mediaDevices.getUserMedia({ audio: true, video: false });
-  } catch {
+  if (!await unlockMediaDeviceLabels()) {
     return null;
-  } finally {
-    permissionStream?.getTracks().forEach((track) => track.stop());
   }
 
   inputId = await findBridgeAudioInputIdOnce();
@@ -480,6 +505,17 @@ async function findBridgeAudioOutputId(attempts = 1): Promise<string | null> {
     }
     if (attempt + 1 < attempts) {
       await delay(TEST_SPEAKER_ENDPOINT_RETRY_MS);
+    }
+  }
+  if (await unlockMediaDeviceLabels()) {
+    for (let attempt = 0; attempt < attempts; attempt += 1) {
+      const sinkId = await findBridgeAudioOutputIdOnce();
+      if (sinkId) {
+        return sinkId;
+      }
+      if (attempt + 1 < attempts) {
+        await delay(TEST_SPEAKER_ENDPOINT_RETRY_MS);
+      }
     }
   }
   return null;
@@ -971,37 +1007,12 @@ export function App() {
   }, [showBridgeSettings, showNotificationsMenu]);
 
   useEffect(() => {
-    let cancelled = false;
-    const mediaDevices = navigator.mediaDevices;
-
-    async function refreshSpeakerOutput() {
-      const available = Boolean(await findBridgeAudioOutputId(2));
-      if (cancelled) {
-        return;
-      }
-      setSpeakerOutputAvailable(available);
-      if (available) {
-        setSpeakerTestError(null);
-      }
-    }
-
-    function handleDeviceChange() {
-      resetSpeakerToneAudio();
-      void refreshSpeakerOutput();
-    }
-
-    void refreshSpeakerOutput();
-    mediaDevices?.addEventListener?.('devicechange', handleDeviceChange);
-
-    return () => {
-      cancelled = true;
-      mediaDevices?.removeEventListener?.('devicechange', handleDeviceChange);
-    };
+    setSpeakerOutputAvailable(true);
   }, []);
 
   useEffect(() => {
     if (!connected) {
-      resetSpeakerToneAudio();
+      setSpeakerTestError(null);
     }
   }, [connected]);
 
@@ -1108,7 +1119,7 @@ export function App() {
     : duplexMicEnabled
       ? 'Disabled in Fallback'
       : 'Off';
-  const speakerOutputMissing = speakerOutputAvailable === false;
+  const speakerOutputMissing = false;
   const testHapticsUnavailable = !connected
     || !hapticsEnabled
     || pendingAction !== null
@@ -1686,12 +1697,6 @@ export function App() {
     setSpeakerTestError(null);
     void (async () => {
       try {
-        const speakerEndpointAvailable = Boolean(await findBridgeAudioOutputId());
-        setSpeakerOutputAvailable(speakerEndpointAvailable);
-        if (!speakerEndpointAvailable) {
-          throw new Error(BRIDGE_AUDIO_ENDPOINT_UNAVAILABLE);
-        }
-
         let volumeChanged = false;
         if (snapshot && speakerVolumeSupported && speakerVolumeValue !== snapshot.settings.speakerVolumePercent) {
           speakerVolumeEditingRef.current = true;
@@ -1704,14 +1709,14 @@ export function App() {
         if (volumeChanged) {
           await delay(TEST_SPEAKER_VOLUME_SETTLE_MS);
         }
-        await playSpeakerToneFile();
+        const next = await window.bridge.testSpeaker();
+        setSnapshot(next);
+        setSpeakerVolumeValue(snapSpeakerVolume(next.settings.speakerVolumePercent));
         setSpeakerOutputAvailable(true);
       } catch (error) {
         const message = error instanceof Error ? error.message : BRIDGE_AUDIO_ENDPOINT_UNAVAILABLE;
         setSpeakerTestError(message);
-        if (message === BRIDGE_AUDIO_ENDPOINT_UNAVAILABLE) {
-          setSpeakerOutputAvailable(false);
-        }
+        setSpeakerOutputAvailable(true);
         const next = await window.bridge.getStatus();
         setSnapshot(next);
         setSpeakerVolumeValue(snapSpeakerVolume(next.settings.speakerVolumePercent));

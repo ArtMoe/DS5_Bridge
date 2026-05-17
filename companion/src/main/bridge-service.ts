@@ -42,7 +42,12 @@ import type {
   CompanionSettings,
   HidDeviceSummary
 } from '../shared/types';
-import { HostAudioEngine, MicKeepaliveEngine, type HostAudioFramePayload } from './host-audio-engine';
+import {
+  HostAudioEngine,
+  MicKeepaliveEngine,
+  playHostAudioTestTone,
+  type HostAudioFramePayload
+} from './host-audio-engine';
 import { SettingsStore } from './settings-store';
 
 const POLL_INTERVAL_MS = 500;
@@ -937,6 +942,11 @@ export class BridgeService extends EventEmitter {
     return this.getSnapshot();
   }
 
+  async testSpeaker(): Promise<BridgeSnapshot> {
+    await playHostAudioTestTone(this.settingsStore.get().speakerVolumePercent);
+    return this.getSnapshot();
+  }
+
   async testClassicRumble(): Promise<BridgeSnapshot> {
     await this.sendCommand(COMMAND_ID.TEST_CLASSIC_RUMBLE, 0, { throwOnCommandError: false });
     return this.getSnapshot();
@@ -1216,7 +1226,10 @@ export class BridgeService extends EventEmitter {
         await this.updateHostAudioEngine();
       }
       const helperIsActive = this.hostAudioEngine.isActive();
-      if (!helperIsActive && !this.sendHostAudioStreamReport(HOST_AUDIO_PACKET_TYPE.HEARTBEAT)) {
+      if (!helperIsActive) {
+        this.sendHostAudioStreamReport(HOST_AUDIO_PACKET_TYPE.HEARTBEAT);
+      }
+      if (this.hostAudioCommandActive) {
         await this.sendCommand(COMMAND_ID.HOST_AUDIO_HEARTBEAT, 0, { throwOnCommandError: false });
       }
       this.readHostAudioStatusThrottled(

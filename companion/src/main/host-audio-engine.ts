@@ -13,7 +13,9 @@ const FRAME_RECORD_PREFIX_BYTES = 2;
 const HOST_AUDIO_FRAME_BYTES = 264;
 const HELPER_RECORDING_STARTED_MESSAGE = 'status: recording-started';
 const HELPER_START_TIMEOUT_MS = 2000;
+const HELPER_TEST_TONE_TIMEOUT_MS = 10000;
 const HELPER_RELATIVE_PATH = path.join('native', 'HostAudioHelper', 'HostAudioHelper.exe');
+const HELPER_TEST_AUDIO_FILE = 'test-speaker-tone-silence-tail.mp3';
 const DEV_HELPER_RELATIVE_PATH = path.join(
   'native',
   'HostAudioHelper',
@@ -189,6 +191,59 @@ function normalizeSpeakerVolumePercent(percent: number): number {
   return Math.max(0, Math.min(100, Math.round(percent)));
 }
 
+export async function playHostAudioTestTone(speakerVolumePercent = 100): Promise<void> {
+  const helperPath = resolveHelperPath();
+  const testAudioPath = resolveHelperTestAudioPath(helperPath);
+  const helper = spawn(helperPath, [
+    '--play-test-tone',
+    '--device-name',
+    'DS5 Bridge',
+    '--test-audio-path',
+    testAudioPath,
+    '--speaker-volume',
+    `${normalizeSpeakerVolumePercent(speakerVolumePercent)}`
+  ], {
+    windowsHide: true,
+    stdio: ['ignore', 'ignore', 'pipe']
+  });
+
+  await new Promise<void>((resolve, reject) => {
+    let settled = false;
+    let stderr = '';
+    const finish = (error?: Error) => {
+      if (settled) {
+        return;
+      }
+      settled = true;
+      clearTimeout(timeout);
+      if (error) {
+        reject(error);
+      } else {
+        resolve();
+      }
+    };
+    const timeout = setTimeout(() => {
+      if (!helper.killed) {
+        helper.kill('SIGKILL');
+      }
+      finish(new Error('Speaker test helper timed out.'));
+    }, HELPER_TEST_TONE_TIMEOUT_MS);
+
+    helper.stderr.on('data', (chunk: Buffer) => {
+      stderr += chunk.toString('utf8');
+    });
+    helper.on('error', (error) => finish(error));
+    helper.on('exit', (code, signal) => {
+      if (code === 0) {
+        finish();
+        return;
+      }
+      const detail = stderr.trim() || `helper exited (${signal ?? code ?? 'unknown'})`;
+      finish(new Error(detail));
+    });
+  });
+}
+
 export class MicKeepaliveEngine extends EventEmitter {
   private process: ChildProcess | null = null;
   private starting: Promise<void> | null = null;
@@ -269,4 +324,18 @@ function resolveHelperPath(): string {
     throw new Error(`Host audio helper is missing. Run npm run build:host-audio from companion/.`);
   }
   return helperPath;
+}
+
+function resolveHelperTestAudioPath(helperPath: string): string {
+  const candidates = [
+    path.join(path.dirname(helperPath), HELPER_TEST_AUDIO_FILE),
+    path.resolve(process.cwd(), 'src', 'renderer', 'assets', HELPER_TEST_AUDIO_FILE),
+    path.resolve(__dirname, '..', '..', '..', 'src', 'renderer', 'assets', HELPER_TEST_AUDIO_FILE)
+  ];
+
+  const audioPath = candidates.find((candidate) => existsSync(candidate));
+  if (!audioPath) {
+    throw new Error(`Speaker test audio is missing: ${HELPER_TEST_AUDIO_FILE}`);
+  }
+  return audioPath;
 }

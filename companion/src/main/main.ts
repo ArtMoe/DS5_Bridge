@@ -80,7 +80,10 @@ function createWindow(): BrowserWindow {
   });
 
   window.webContents.session.setPermissionRequestHandler((webContents, permission, callback) => {
-    callback(webContents === window.webContents && permission === 'media');
+    callback(
+      webContents === window.webContents
+      && (permission === 'media' || permission === 'speaker-selection')
+    );
   });
 
   window.on('close', (event) => {
@@ -432,6 +435,7 @@ function registerIpc(service: BridgeService): void {
   ));
   ipcMain.handle('bridge:testNotification', () => service.testNotification());
   ipcMain.handle('bridge:testHaptics', () => service.testHaptics());
+  ipcMain.handle('bridge:testSpeaker', () => service.testSpeaker());
   ipcMain.handle('bridge:testClassicRumble', () => service.testClassicRumble());
   ipcMain.handle('bridge:testAdaptiveTriggers', (_event, value?: TriggerTestMode, target?: TriggerTestTarget) => (
     service.testAdaptiveTriggers(value, target)

@@ -71,6 +71,7 @@ const api = {
   ),
   testNotification: (): Promise<BridgeSnapshot> => ipcRenderer.invoke('bridge:testNotification'),
   testHaptics: (): Promise<BridgeSnapshot> => ipcRenderer.invoke('bridge:testHaptics'),
+  testSpeaker: (): Promise<BridgeSnapshot> => ipcRenderer.invoke('bridge:testSpeaker'),
   testClassicRumble: (): Promise<BridgeSnapshot> => ipcRenderer.invoke('bridge:testClassicRumble'),
   testAdaptiveTriggers: (mode?: TriggerTestMode, target?: TriggerTestTarget): Promise<BridgeSnapshot> => (
     ipcRenderer.invoke('bridge:testAdaptiveTriggers', mode, target)
