@@ -16,6 +16,7 @@
 #include "hardware/vreg.h"
 #include "hardware/watchdog.h"
 #include "pico/cyw43_arch.h"
+#include "pico/time.h"
 #ifdef ENABLE_COMPANION
 #include "companion.h"
 #endif
@@ -25,12 +26,48 @@
 
 int reportSeqCounter = 0;
 
+enum HidDebugKind : uint8_t {
+    HidDebugGetReport = 1,
+    HidDebugSetReport = 2,
+    HidDebugInputReport = 3,
+};
+
+static uint32_t last_input_debug_us = 0;
+static uint8_t input_debug_burst_remaining = 0;
+
+static void note_usb_input_report(uint8_t const *report, uint16_t len) {
+    const uint32_t now = time_us_32();
+    if (last_input_debug_us == 0 || static_cast<uint32_t>(now - last_input_debug_us) > 250000) {
+        input_debug_burst_remaining = 8;
+    }
+    last_input_debug_us = now;
+    if (input_debug_burst_remaining == 0) {
+        return;
+    }
+    input_debug_burst_remaining--;
+    audio_debug_note_hid_event(
+        HidDebugInputReport,
+        0x01,
+        0,
+        len,
+        len > 7 && report != nullptr ? report[7] : 0
+    );
+}
+
 static uint8_t companion_haptics_gain_percent() {
 #ifdef ENABLE_COMPANION
     const float gain = std::clamp(volume[1], 0.0f, 2.0f);
     return static_cast<uint8_t>(gain * 100.0f + 0.5f);
 #else
     return 100;
+#endif
+}
+
+static bool companion_lightbar_override_active() {
+#ifdef ENABLE_COMPANION
+    return companion_lightbar_override_enabled();
+#else
+    return false;
 #endif
 }
 
@@ -84,6 +121,7 @@ void interrupt_loop() {
 
     // Only send to TinyUSB if we actually grabbed fresh data
     if (should_send) {
+        note_usb_input_report(safe_report, sizeof(safe_report));
         if (!tud_hid_report(0x01, safe_report, 63)) {
             DS5_LOG("[USBHID] tud_hid_report error\n");
             
@@ -153,6 +191,13 @@ uint16_t tud_hid_get_report_cb(uint8_t itf, uint8_t report_id, hid_report_type_t
     }
 #endif
 
+    audio_debug_note_hid_event(
+        HidDebugGetReport,
+        report_id,
+        static_cast<uint8_t>(report_type),
+        reqlen,
+        0
+    );
     std::vector<uint8_t> feature_data = get_feature_data(report_id, reqlen);
     if (!feature_data.empty()) {
         memcpy(buffer, feature_data.data() + 1, feature_data.size() - 1);
@@ -181,6 +226,14 @@ void tud_hid_set_report_cb(uint8_t itf, uint8_t report_id, hid_report_type_t rep
     }
 #endif
 
+    audio_debug_note_hid_event(
+        HidDebugSetReport,
+        report_id,
+        static_cast<uint8_t>(report_type),
+        bufsize,
+        bufsize > 0 && buffer != nullptr ? buffer[0] : 0
+    );
+
     // INTERRUPT OUT
     if (report_id == 0) {
         switch (buffer[0]) {
@@ -201,6 +254,7 @@ void tud_hid_set_report_cb(uint8_t itf, uint8_t report_id, hid_report_type_t rep
                     }
                     memcpy(outputData + 3, buffer + 1, payloadLen);
                 }
+                const bool lightbarOverride = companion_lightbar_override_active();
                 const bool hostClearsLeds = dualsense_host_output_clears_leds(outputData + 3, payloadLen);
 #ifdef ENABLE_COMPANION
                 uint8_t companionOutput[sizeof(outputData)]{};
@@ -208,7 +262,7 @@ void tud_hid_set_report_cb(uint8_t itf, uint8_t report_id, hid_report_type_t rep
                 bool sanitizedHostOutput = sanitize_dualsense_host_output_payload(
                     companionOutput + 3,
                     payloadLen,
-                    companion_lightbar_override_enabled()
+                    lightbarOverride
                 );
                 sanitizedHostOutput = bt_sanitize_host_speaker_amp_ownership(companionOutput, sizeof(companionOutput))
                     || sanitizedHostOutput;
@@ -236,8 +290,9 @@ void tud_hid_set_report_cb(uint8_t itf, uint8_t report_id, hid_report_type_t rep
                 sanitize_dualsense_host_output_payload(
                     audioStateData,
                     payloadLen,
-                    companion_lightbar_override_enabled()
+                    lightbarOverride
                 );
+                bt_sanitize_host_speaker_amp_ownership_payload(audioStateData, payloadLen);
                 bt_sanitize_host_mic_ownership_payload(audioStateData, payloadLen);
                 bt_apply_haptics_gain_payload(audioStateData, payloadLen, companion_haptics_gain_percent());
                 audio_set_state_data(audioStateData, static_cast<uint8_t>(payloadLen));
@@ -247,14 +302,17 @@ void tud_hid_set_report_cb(uint8_t itf, uint8_t report_id, hid_report_type_t rep
                     memcpy(audioStateData, outputData + 3, payloadLen);
                 }
                 sanitize_dualsense_host_output_payload(audioStateData, payloadLen);
+                bt_sanitize_host_speaker_amp_ownership_payload(audioStateData, payloadLen);
                 bt_sanitize_host_mic_ownership_payload(audioStateData, payloadLen);
                 bt_apply_haptics_gain_payload(audioStateData, payloadLen, companion_haptics_gain_percent());
                 audio_set_state_data(audioStateData, static_cast<uint8_t>(payloadLen));
 #endif
+                // Keep app-controlled lighting authoritative when override is active.
+                sanitize_dualsense_host_output_payload(outputData + 3, payloadLen, lightbarOverride);
                 bt_sanitize_host_mic_ownership(outputData, sizeof(outputData));
                 bt_apply_haptics_gain(outputData, sizeof(outputData), companion_haptics_gain_percent());
                 bt_write_classified_output(outputData, sizeof(outputData));
-                if (hostClearsLeds) {
+                if (hostClearsLeds && !lightbarOverride) {
                     bt_schedule_lightbar_restore(750);
                 }
                 break;

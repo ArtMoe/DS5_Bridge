@@ -86,7 +86,7 @@
 #define HOST_MIC_PLAYOUT_START_DEPTH 3
 #define HOST_MIC_OPUS_FRAME_INTERVAL_US 10000
 #define HOST_MIC_PLC_TARGET_DEPTH 2
-#define HOST_AUDIO_ROUTE_PRIMER_FRAMES 12
+#define HOST_AUDIO_ROUTE_PRIMER_FRAMES 0
 using std::clamp;
 using std::max;
 
@@ -110,6 +110,9 @@ enum AudioDebugEventCode : uint8_t {
     AudioDebugHostMode = 17,
     AudioDebugHostFrame = 18,
     AudioDebugMicPacket = 19,
+    AudioDebugUsbEvent = 20,
+    AudioDebugHidEvent = 21,
+    AudioDebugBtEvent = 22,
 };
 
 enum HostAudioPacketType : uint8_t {
@@ -177,6 +180,7 @@ static bool controller_state_ready = false;
 static bool audio_initialized = false;
 static uint32_t last_audio_us = 0;
 static bool speaker_route_active = false;
+static bool speaker_route_headset = false;
 static bool host_route_primer_toggle_pending = false;
 static uint8_t host_route_primer_frames_remaining = 0;
 static bool test_haptics_active = false;
@@ -198,6 +202,9 @@ static uint8_t audio_debug_head = 0;
 static uint8_t audio_debug_packet_log_budget = 0;
 static audio_debug_stats audio_stats{};
 static uint32_t last_usb_audio_read_us = 0;
+static uint32_t last_usb_discard_debug_us = 0;
+static uint32_t last_hid_output_debug_us = 0;
+static uint8_t hid_output_debug_burst_remaining = 0;
 static bool audio_silence_tail_logged = false;
 static uint8_t speaker_silence_preroll_packets_remaining = 0;
 static float fallback_speaker_gain = 1.0f;
@@ -302,9 +309,16 @@ static void reset_controller_audio_report_counters() {
 }
 
 static void schedule_host_route_primer() {
+    if (speaker_route_active && speaker_route_headset == plug_headset) {
+        host_route_primer_toggle_pending = false;
+        host_route_primer_frames_remaining = 0;
+        return;
+    }
+
     host_route_primer_toggle_pending = true;
     host_route_primer_frames_remaining = HOST_AUDIO_ROUTE_PRIMER_FRAMES;
     speaker_route_active = false;
+    speaker_route_headset = false;
     audio_debug_packet_log_budget = max<uint8_t>(audio_debug_packet_log_budget, 6);
 }
 
@@ -319,6 +333,7 @@ static bool prime_host_audio_route_if_needed() {
 
     bt_rearm_speaker_output_route(plug_headset);
     speaker_route_active = true;
+    speaker_route_headset = plug_headset;
     host_route_primer_toggle_pending = false;
     audio_debug_log(
         AudioDebugSpeakerRoute,
@@ -385,8 +400,9 @@ void set_headset(bool state) {
     }
 
     plug_headset = state;
-    if (speaker_route_active) {
+    if (speaker_route_active && speaker_route_headset != plug_headset) {
         bt_set_speaker_output_enabled(true, plug_headset);
+        speaker_route_headset = plug_headset;
         audio_debug_log(
             AudioDebugSpeakerRoute,
             1,
@@ -572,6 +588,82 @@ static void audio_debug_log(
     (void)arg3;
     (void)arg4;
 #endif
+}
+
+static void audio_debug_reset_stats() {
+#ifdef DS5_ENABLE_AUDIO_DEBUG_REPORTS
+    if (audio_debug_cs_ready) {
+        critical_section_enter_blocking(&audio_debug_cs);
+        memset(&audio_stats, 0, sizeof(audio_stats));
+        critical_section_exit(&audio_debug_cs);
+    } else {
+        memset(&audio_stats, 0, sizeof(audio_stats));
+    }
+    last_usb_audio_read_us = 0;
+#endif
+}
+
+void audio_debug_note_usb_event(
+    uint8_t kind,
+    uint32_t arg1,
+    uint32_t arg2,
+    uint32_t arg3,
+    uint32_t arg4
+) {
+    audio_debug_log(
+        AudioDebugUsbEvent,
+        kind,
+        clamp_debug_u8(arg1),
+        clamp_debug_u8(arg2),
+        clamp_debug_u8(arg3),
+        clamp_debug_u8(arg4)
+    );
+}
+
+void audio_debug_note_hid_event(
+    uint8_t kind,
+    uint32_t report_id,
+    uint32_t report_type,
+    uint32_t len,
+    uint32_t first_byte
+) {
+    if (kind == 2 && report_id == 0 && first_byte == 0x02) {
+        const uint32_t now = time_us_32();
+        if (last_hid_output_debug_us == 0 || static_cast<uint32_t>(now - last_hid_output_debug_us) > 250000) {
+            hid_output_debug_burst_remaining = 8;
+        }
+        last_hid_output_debug_us = now;
+        if (hid_output_debug_burst_remaining == 0) {
+            return;
+        }
+        hid_output_debug_burst_remaining--;
+    }
+
+    audio_debug_log(
+        AudioDebugHidEvent,
+        kind,
+        clamp_debug_u8(report_id),
+        clamp_debug_u8(report_type),
+        clamp_debug_u8(len),
+        clamp_debug_u8(first_byte)
+    );
+}
+
+void audio_debug_note_bt_event(
+    uint8_t kind,
+    uint32_t arg1,
+    uint32_t arg2,
+    uint32_t arg3,
+    uint32_t arg4
+) {
+    audio_debug_log(
+        AudioDebugBtEvent,
+        kind,
+        clamp_debug_u8(arg1),
+        clamp_debug_u8(arg2),
+        clamp_debug_u8(arg3),
+        clamp_debug_u8(arg4)
+    );
 }
 
 static bool usb_audio_has_signal(int16_t const *raw, int frames) {
@@ -780,11 +872,12 @@ void audio_handle_controller_disconnect() {
     clear_partial_audio_state();
     speaker_silence_preroll_packets_remaining = 0;
     speaker_route_active = false;
+    speaker_route_headset = false;
     last_audio_us = 0;
 }
 
 static bool should_keep_speaker_route_open() {
-    return bt_is_controller_connected() && volume[0] > 0.0f;
+    return bt_is_controller_connected() && controller_state_ready && volume[0] > 0.0f;
 }
 
 static void update_persistent_speaker_route() {
@@ -796,6 +889,7 @@ static void update_persistent_speaker_route() {
         if (!speaker_route_active) {
             bt_set_speaker_output_enabled(true, plug_headset, true);
             speaker_route_active = true;
+            speaker_route_headset = plug_headset;
             schedule_speaker_silence_preroll();
             audio_debug_log(
                 AudioDebugSpeakerRoute,
@@ -812,6 +906,7 @@ static void update_persistent_speaker_route() {
     if (speaker_route_active) {
         bt_set_speaker_output_enabled(false);
         speaker_route_active = false;
+        speaker_route_headset = false;
         audio_debug_log(
             AudioDebugSpeakerRoute,
             0,
@@ -856,9 +951,10 @@ static bool send_audio_haptics_packet(const int8_t *haptic_buf, bool include_spe
         critical_section_exit(&opus_cs);
 
         if (have_opus_packet) {
-            const bool force_route = !speaker_route_active;
+            const bool force_route = !speaker_route_active || speaker_route_headset != plug_headset;
             bt_set_speaker_output_enabled(true, plug_headset, force_route);
             speaker_route_active = true;
+            speaker_route_headset = plug_headset;
             pkt[142] = (plug_headset ? 0x16 : 0x13) | 0 << 6 | 1 << 7;
             pkt[143] = sizeof(speaker_data);
             memcpy(pkt + 144, speaker_data, sizeof(speaker_data));
@@ -928,6 +1024,7 @@ bool audio_schedule_test_haptics() {
     clear_partial_audio_state();
     bt_set_speaker_output_enabled(false);
     speaker_route_active = false;
+    speaker_route_headset = false;
     last_audio_us = 0;
     test_haptics_active = true;
     test_haptics_packets_remaining = TEST_HAPTICS_PACKET_COUNT;
@@ -976,6 +1073,10 @@ bool audio_recent() {
         && static_cast<uint32_t>(now - host_last_frame_us) < SPEAKER_USB_SILENCE_TAIL_US;
 }
 
+bool audio_host_encoded_active() {
+    return audio_runtime_mode == AudioRuntimeHostEncodedActive && host_stream_active;
+}
+
 bool audio_haptics_ready() {
     return audio_initialized;
 }
@@ -997,6 +1098,7 @@ void audio_set_quiet_mode(bool enabled) {
     clear_partial_audio_state();
     bt_set_speaker_output_enabled(false);
     speaker_route_active = false;
+    speaker_route_headset = false;
     last_audio_us = 0;
     audio_debug_log(
         AudioDebugQuietMode,
@@ -1023,6 +1125,11 @@ void audio_host_set_requested(bool enabled) {
         host_request_started_us = now;
         host_last_heartbeat_us = now;
         set_fallback_speaker_target_gain(0.0f);
+        if (audio_initialized) {
+            drain_audio_queues();
+            clear_partial_audio_state();
+            speaker_silence_preroll_packets_remaining = 0;
+        }
         if (audio_fallback_reason == AudioFallbackHostDisabled) {
             audio_fallback_reason = AudioFallbackNone;
         }
@@ -1042,6 +1149,10 @@ void audio_host_start_stream() {
     host_last_heartbeat_us = host_stream_started_us;
     host_last_frame_us = 0;
     reset_controller_audio_report_counters();
+    host_frames_received = 0;
+    host_frames_dropped = 0;
+    audio_debug_reset_stats();
+    bt_reset_output_debug_stats();
     schedule_host_route_primer();
     host_stream_generation++;
     if (host_stream_generation == 0) {
@@ -1135,9 +1246,10 @@ static bool submit_host_audio_report(uint8_t const *report, uint16_t len) {
     if (prime_host_audio_route_if_needed()) {
         return false;
     }
-    const bool force_route = !speaker_route_active || host_route_primer_active();
+    const bool force_route = !speaker_route_active || speaker_route_headset != plug_headset || host_route_primer_active();
     bt_set_speaker_output_enabled(true, plug_headset, force_route);
     speaker_route_active = true;
+    speaker_route_headset = plug_headset;
     if (!bt_write_audio_stream(packet, sizeof(packet))) {
         host_frames_dropped++;
         return false;
@@ -1334,7 +1446,7 @@ void audio_get_host_status(audio_host_status *status) {
     status->duplex_active = audio_duplex_active();
     status->controller_state_ready = controller_state_ready;
     status->headset_plugged = plug_headset;
-    status->headset_audio_route = speaker_route_active && plug_headset;
+    status->headset_audio_route = speaker_route_active && speaker_route_headset;
     status->stream_generation = host_stream_generation;
     status->heartbeat_age_ms = host_last_heartbeat_us == 0 ? 0xffffffffu : static_cast<uint32_t>(now - host_last_heartbeat_us) / 1000u;
     status->frame_age_ms = host_last_frame_us == 0 ? 0xffffffffu : static_cast<uint32_t>(now - host_last_frame_us) / 1000u;
@@ -1634,6 +1746,30 @@ static bool process_usb_audio_packet() {
     return true;
 }
 
+static void discard_usb_audio_packets(uint8_t max_reads) {
+    int16_t discard[192];
+    uint8_t reads = 0;
+    for (uint8_t i = 0; i < max_reads && tud_audio_available(); i++) {
+        tud_audio_read(discard, sizeof(discard));
+        reads++;
+    }
+    if (reads == 0) {
+        return;
+    }
+
+    const uint32_t now = time_us_32();
+    if (last_usb_discard_debug_us == 0 || static_cast<uint32_t>(now - last_usb_discard_debug_us) > 100000) {
+        last_usb_discard_debug_us = now;
+        audio_debug_note_usb_event(
+            4,
+            reads,
+            max_reads,
+            static_cast<uint8_t>(audio_runtime_mode),
+            tud_audio_available() ? 1 : 0
+        );
+    }
+}
+
 static void process_mic_usb_output() {
     if (!host_mic_path_active() || !usb_mic_streaming_active()) {
         if (mic_usb_playout_started || mic_usb_pending_len != 0) {
@@ -1781,10 +1917,7 @@ void audio_loop() {
     audio_host_poll();
 
     if (!bt_is_controller_connected()) {
-        int16_t discard[192];
-        while (tud_audio_available()) {
-            tud_audio_read(discard, sizeof(discard));
-        }
+        discard_usb_audio_packets(AUDIO_LOOP_MAX_USB_READS);
         if (speaker_route_active || last_audio_us != 0) {
             audio_handle_controller_disconnect();
         }
@@ -1795,22 +1928,22 @@ void audio_loop() {
     }
 
     if (quiet_mode_enabled) {
-        int16_t discard[192];
-        while (tud_audio_available()) {
-            tud_audio_read(discard, sizeof(discard));
-        }
+        discard_usb_audio_packets(AUDIO_LOOP_MAX_USB_READS);
         if (speaker_route_active) {
             bt_set_speaker_output_enabled(false);
             speaker_route_active = false;
+            speaker_route_headset = false;
         }
         return;
     }
 
+    if (host_audio_requested && host_start_grace_active(time_us_32())) {
+        discard_usb_audio_packets(AUDIO_LOOP_MAX_USB_READS);
+        return;
+    }
+
     if (audio_runtime_mode == AudioRuntimeHostEncodedActive) {
-        int16_t discard[192];
-        while (tud_audio_available()) {
-            tud_audio_read(discard, sizeof(discard));
-        }
+        discard_usb_audio_packets(AUDIO_LOOP_MAX_USB_READS);
         return;
     }
 

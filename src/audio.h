@@ -59,6 +59,7 @@ bool audio_schedule_test_haptics();
 bool audio_test_haptics_busy();
 bool audio_test_haptics_cooldown();
 bool audio_recent();
+bool audio_host_encoded_active();
 bool audio_haptics_ready();
 void audio_set_quiet_mode(bool enabled);
 bool audio_quiet_mode_enabled();
@@ -71,6 +72,27 @@ struct audio_debug_stats {
     uint32_t audio_generation_drop_count;
 };
 void audio_debug_get_stats(audio_debug_stats *stats);
+void audio_debug_note_usb_event(
+    uint8_t kind,
+    uint32_t arg1 = 0,
+    uint32_t arg2 = 0,
+    uint32_t arg3 = 0,
+    uint32_t arg4 = 0
+);
+void audio_debug_note_hid_event(
+    uint8_t kind,
+    uint32_t report_id = 0,
+    uint32_t report_type = 0,
+    uint32_t len = 0,
+    uint32_t first_byte = 0
+);
+void audio_debug_note_bt_event(
+    uint8_t kind,
+    uint32_t arg1 = 0,
+    uint32_t arg2 = 0,
+    uint32_t arg3 = 0,
+    uint32_t arg4 = 0
+);
 void audio_set_haptics_buffer_length(uint8_t length);
 uint8_t audio_haptics_buffer_length();
 void audio_set_state_data(uint8_t const *data, uint8_t len);

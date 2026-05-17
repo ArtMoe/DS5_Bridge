@@ -49,6 +49,8 @@ const POLL_INTERVAL_MS = 500;
 const HOST_AUDIO_HEARTBEAT_MS = 250;
 const HOST_AUDIO_ACTIVE_POLL_INTERVAL_MS = 5000;
 const HOST_AUDIO_STATUS_READ_INTERVAL_MS = 500;
+const HOST_AUDIO_HELPER_STATUS_READ_INTERVAL_MS = 5000;
+const AUDIO_DEBUG_READ_INTERVAL_MS = 500;
 const HOST_AUDIO_MAX_QUEUED_FRAMES = 2;
 const HOST_AUDIO_START_FADE_MS = 40;
 const HOST_AUDIO_STOP_FADE_MS = 40;
@@ -214,6 +216,14 @@ function limitedByte(value: number, suffix = '+'): string {
   return value === 255 ? `${value}${suffix}` : String(value);
 }
 
+function hexByte(value: number): string {
+  return `0x${value.toString(16).padStart(2, '0')}`;
+}
+
+function scaled100Us(value: number): string {
+  return value === 255 ? '25500+us' : `${value * 100}us`;
+}
+
 function formatMicDebugEvent(prefix: string, args: number[]): string {
   const [type, arg1, arg2, arg3, arg4] = args;
   switch (type) {
@@ -241,6 +251,65 @@ function formatMicDebugEvent(prefix: string, args: number[]): string {
       return `${prefix} [HostPico] MIC plc decoded_fifo=${arg1} samples=${arg2}`;
     default:
       return `${prefix} [HostPico] MIC type=${type} arg1=${arg1} arg2=${arg2} arg3=${arg3} arg4=${arg4}`;
+  }
+}
+
+function formatUsbDebugEvent(prefix: string, args: number[]): string {
+  const [type, arg1, arg2, arg3, arg4] = args;
+  switch (type) {
+    case 1:
+      return `${prefix} [USB] AUDIO_SET_INTERFACE itf=${arg1} alt=${arg2} speakerStreaming=${arg3 === 1 ? 'true' : 'false'} micStreaming=${arg4 === 1 ? 'true' : 'false'}`;
+    case 2:
+      return `${prefix} [USB] AUDIO_GET entity=${hexByte(arg1)} control=${hexByte(arg2)} request=${hexByte(arg3)} len=${arg4}`;
+    case 3:
+      return `${prefix} [USB] AUDIO_SET entity=${hexByte(arg1)} control=${hexByte(arg2)} request=${hexByte(arg3)} len=${arg4}`;
+    case 4:
+      return `${prefix} [USB] AUDIO_DISCARD reads=${arg1} maxReads=${arg2} runtime=${arg3} stillAvailable=${arg4 === 1 ? 'true' : 'false'}`;
+    default:
+      return `${prefix} [USB] type=${type} arg1=${arg1} arg2=${arg2} arg3=${arg3} arg4=${arg4}`;
+  }
+}
+
+function formatHidDebugEvent(prefix: string, args: number[]): string {
+  const [type, reportId, reportType, len, firstByte] = args;
+  switch (type) {
+    case 1:
+      return `${prefix} [HID] GET_REPORT report=${hexByte(reportId)} type=${reportType} len=${limitedByte(len)}`;
+    case 2:
+      return `${prefix} [HID] SET_REPORT report=${hexByte(reportId)} type=${reportType} len=${limitedByte(len)} first=${hexByte(firstByte)}`;
+    case 3:
+      return `${prefix} [HID] IN_REPORT report=${hexByte(reportId)} len=${limitedByte(len)} buttonByte=${hexByte(firstByte)}`;
+    default:
+      return `${prefix} [HID] type=${type} report=${hexByte(reportId)} reportType=${reportType} len=${limitedByte(len)} first=${hexByte(firstByte)}`;
+  }
+}
+
+function formatBtDebugEvent(prefix: string, args: number[]): string {
+  const [type, arg1, arg2, arg3, arg4] = args;
+  switch (type) {
+    case 1:
+      return `${prefix} [BT] AUDIO_LATE age=${scaled100Us(arg1)} gap=${scaled100Us(arg2)} nonAudioBefore=${arg3} audioQueueAfter=${arg4}`;
+    case 2:
+      return `${prefix} [BT] NON_AUDIO_WITH_AUDIO_QUEUED reason=${arg1} queuedAudioAge=${scaled100Us(arg2)} criticalQ=${arg3} statePending=${arg4 === 1 ? 'true' : 'false'}`;
+    case 3:
+      return `${prefix} [BT] CONTROL_SEND op=${hexByte(arg1)} report=${hexByte(arg2)} age=${scaled100Us(arg3)} controlQ=${arg4}`;
+    case 4:
+      return `${prefix} [BT] CONTROL_SUPPRESSED op=${hexByte(arg1)} report=${hexByte(arg2)} cached=${arg3 === 1 ? 'true' : 'false'}`;
+    default:
+      return `${prefix} [BT] type=${type} arg1=${arg1} arg2=${arg2} arg3=${arg3} arg4=${arg4}`;
+  }
+}
+
+function routeSourceLabel(source: number): string {
+  switch (source) {
+    case 0:
+      return 'persistent';
+    case 1:
+      return 'headset-change';
+    case 2:
+      return 'host-primer';
+    default:
+      return String(source);
   }
 }
 
@@ -273,7 +342,7 @@ function formatAudioDebugEvent(event: AudioDebugEventPayload): string {
     case AUDIO_DEBUG_EVENT.TEST_HAPTICS_STOP:
       return `${prefix} [Audio] TEST HAPTICS: stop reason=${arg0 === 1 ? 'complete' : 'disconnected'} audio_fifo=${arg1} opus_ready=${arg2}`;
     case AUDIO_DEBUG_EVENT.SPEAKER_ROUTE:
-      return `${prefix} [Audio] ROUTE: speaker ${arg0 === 1 ? 'enabled' : 'disabled'} volume=${arg1}% quiet=${arg2 === 1 ? 'true' : 'false'}`;
+      return `${prefix} [Audio] ROUTE: speaker ${arg0 === 1 ? 'enabled' : 'disabled'} volume=${arg1}% quiet=${arg2 === 1 ? 'true' : 'false'} headset=${arg3 === 1 ? 'true' : 'false'} source=${routeSourceLabel(arg4)}`;
     case AUDIO_DEBUG_EVENT.QUIET_MODE:
       return `${prefix} [Audio] QUIET: ${arg0 === 1 ? 'enabled' : 'disabled'} audio_fifo=${arg1} opus_fifo=${arg2}`;
     case AUDIO_DEBUG_EVENT.SILENCE_PREROLL:
@@ -286,6 +355,12 @@ function formatAudioDebugEvent(event: AudioDebugEventPayload): string {
       return `${prefix} [HostPico] FRAME submitted audio_fifo=${arg0} received=${arg1} generation=${arg2} packet=${arg3} reportSeq=${arg4}`;
     case AUDIO_DEBUG_EVENT.MIC_PACKET:
       return formatMicDebugEvent(prefix, event.args);
+    case AUDIO_DEBUG_EVENT.USB_EVENT:
+      return formatUsbDebugEvent(prefix, event.args);
+    case AUDIO_DEBUG_EVENT.HID_EVENT:
+      return formatHidDebugEvent(prefix, event.args);
+    case AUDIO_DEBUG_EVENT.BT_EVENT:
+      return formatBtDebugEvent(prefix, event.args);
     default:
       return `${prefix} [Audio] UNKNOWN code=${event.eventCode} args=${event.args.join(',')}`;
   }
@@ -352,6 +427,7 @@ export class BridgeService extends EventEmitter {
   private hostAudioFrameDropCount = 0;
   private lastHostAudioStageLogAt = 0;
   private lastHostAudioStatusReadAt = 0;
+  private lastAudioDebugReadAt = 0;
   private lastHostAudioActivePollAt = 0;
   private previousControllerConnected: boolean | null = null;
   private lowBatteryToastActive = false;
@@ -441,7 +517,10 @@ export class BridgeService extends EventEmitter {
     if (this.audioDebugLogLines.length > AUDIO_DEBUG_LOG_LINE_LIMIT) {
       this.audioDebugLogLines = this.audioDebugLogLines.slice(-AUDIO_DEBUG_LOG_LINE_LIMIT);
     }
-
+    this.snapshot = {
+      ...this.snapshot,
+      diagnostics: this.withAudioDebugDiagnostics(this.snapshot.diagnostics)
+    };
   }
 
   private readAudioDebugEvents(): void {
@@ -476,6 +555,16 @@ export class BridgeService extends EventEmitter {
     }
   }
 
+  private readAudioDebugThrottled(force = false): void {
+    const now = Date.now();
+    if (!force && now - this.lastAudioDebugReadAt < AUDIO_DEBUG_READ_INTERVAL_MS) {
+      return;
+    }
+    this.lastAudioDebugReadAt = now;
+    this.readAudioDebugEvents();
+    this.readAudioDebugStats();
+  }
+
   private readHostAudioStatus(): void {
     if (!this.device) {
       this.hostAudioStatus = null;
@@ -492,8 +581,8 @@ export class BridgeService extends EventEmitter {
     }
   }
 
-  private readHostAudioStatusThrottled(force = false): void {
-    if (!force && Date.now() - this.lastHostAudioStatusReadAt < HOST_AUDIO_STATUS_READ_INTERVAL_MS) {
+  private readHostAudioStatusThrottled(force = false, intervalMs = HOST_AUDIO_STATUS_READ_INTERVAL_MS): void {
+    if (!force && Date.now() - this.lastHostAudioStatusReadAt < intervalMs) {
       return;
     }
     this.readHostAudioStatus();
@@ -1012,12 +1101,12 @@ export class BridgeService extends EventEmitter {
     const speakerVolumePercent = settings.speakerEnabled ? settings.speakerVolumePercent : 0;
     const duplexEnabled = settings.duplexMicEnabled;
     this.clearHostAudioReportQueue();
+    await this.sendCommand(COMMAND_ID.SET_HOST_AUDIO_ENABLED, 1, { expectSettingsRevisionChange });
     this.hostAudioCommandActive = true;
     await this.hostAudioEngine.start(this.devicePath, 0);
     if (duplexEnabled) {
       this.hostAudioEngine.warmSpeakerRoute();
     }
-    await this.sendCommand(COMMAND_ID.SET_HOST_AUDIO_ENABLED, 1, { expectSettingsRevisionChange });
     await delay(HOST_AUDIO_START_FADE_MS);
     await this.sendCommand(COMMAND_ID.START_HOST_AUDIO, 0, { throwOnCommandError: false });
     await this.sendCommand(COMMAND_ID.SET_DUPLEX_ENABLED, duplexEnabled ? 1 : 0, { throwOnCommandError: false });
@@ -1077,7 +1166,7 @@ export class BridgeService extends EventEmitter {
 
   private async pulseHostAudio(): Promise<void> {
     const settings = this.settingsStore.get();
-    if (!settings.hostEncodedAudioEnabled || this.hostAudioHeartbeatBusy) {
+    if (!settings.hostEncodedAudioEnabled || this.hostAudioHeartbeatBusy || this.reapplyActive) {
       return;
     }
     this.hostAudioHeartbeatBusy = true;
@@ -1093,22 +1182,25 @@ export class BridgeService extends EventEmitter {
       }
       if (!this.hostAudioCommandActive || (!helperWasActive && this.hostAudioStatus?.streamActive === false)) {
         await this.sendCommand(COMMAND_ID.SET_HOST_AUDIO_ENABLED, 1, { throwOnCommandError: false });
+        this.hostAudioCommandActive = true;
+        await this.updateHostAudioEngine();
         await this.sendCommand(COMMAND_ID.START_HOST_AUDIO, 0, { throwOnCommandError: false });
         await this.sendCommand(COMMAND_ID.SET_DUPLEX_ENABLED, settings.duplexMicEnabled ? 1 : 0, { throwOnCommandError: false });
-        this.hostAudioCommandActive = true;
         this.readHostAudioStatus();
+      } else {
+        await this.updateHostAudioEngine();
       }
-      await this.updateHostAudioEngine();
       if (settings.duplexMicEnabled && !helperWasActive && this.hostAudioEngine.isActive()) {
         this.hostAudioEngine.warmSpeakerRoute();
       }
       const helperIsActive = this.hostAudioEngine.isActive();
-      if (helperIsActive) {
-        await this.sendCommand(COMMAND_ID.HOST_AUDIO_HEARTBEAT, 0, { throwOnCommandError: false });
-      } else if (!this.sendHostAudioStreamReport(HOST_AUDIO_PACKET_TYPE.HEARTBEAT)) {
+      if (!helperIsActive && !this.sendHostAudioStreamReport(HOST_AUDIO_PACKET_TYPE.HEARTBEAT)) {
         await this.sendCommand(COMMAND_ID.HOST_AUDIO_HEARTBEAT, 0, { throwOnCommandError: false });
       }
-      this.readHostAudioStatusThrottled();
+      this.readHostAudioStatusThrottled(
+        false,
+        helperIsActive ? HOST_AUDIO_HELPER_STATUS_READ_INTERVAL_MS : HOST_AUDIO_STATUS_READ_INTERVAL_MS
+      );
     } finally {
       this.hostAudioHeartbeatBusy = false;
     }
@@ -1174,11 +1266,13 @@ export class BridgeService extends EventEmitter {
       return;
     }
 
+    if (hostAudioActive) {
+      this.readAudioDebugThrottled();
+    }
     if (hostAudioActive && !this.hostAudioEngine.isActive()) {
       this.readHostAudioStatusThrottled();
     } else if (!hostAudioActive) {
-      this.readAudioDebugEvents();
-      this.readAudioDebugStats();
+      this.readAudioDebugThrottled(true);
       this.readHostAudioStatus();
     }
     this.maybeEmitStatusToasts(status);
@@ -1341,9 +1435,9 @@ export class BridgeService extends EventEmitter {
 
   private async applyCurrentSettings(settings: CompanionSettings, expectSettingsRevisionChange: boolean): Promise<void> {
     if (settings.hostEncodedAudioEnabled) {
+      await this.startHostAudioSession(expectSettingsRevisionChange);
       await this.applySpeakerSettings(settings, expectSettingsRevisionChange);
       await this.applyMicSettings(settings, expectSettingsRevisionChange);
-      await this.startHostAudioSession(expectSettingsRevisionChange);
     }
     await this.applyLightbarSettings(settings, expectSettingsRevisionChange);
     await this.sendCommand(COMMAND_ID.SET_MUTE_BUTTON_ACTION, muteButtonModeValue(settings.muteButtonMode), {

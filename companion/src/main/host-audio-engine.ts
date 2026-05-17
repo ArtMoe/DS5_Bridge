@@ -11,6 +11,8 @@ export type HostAudioFramePayload = {
 
 const FRAME_RECORD_PREFIX_BYTES = 2;
 const HOST_AUDIO_FRAME_BYTES = 264;
+const HELPER_RECORDING_STARTED_MESSAGE = 'status: recording-started';
+const HELPER_START_TIMEOUT_MS = 2000;
 const HELPER_RELATIVE_PATH = path.join('native', 'HostAudioHelper', 'HostAudioHelper.exe');
 const DEV_HELPER_RELATIVE_PATH = path.join(
   'native',
@@ -127,9 +129,6 @@ export class HostAudioEngine extends EventEmitter {
     this.activeHidPath = hidPath;
     this.activeSpeakerVolumePercent = speakerVolumePercent;
     helper.stdout.on('data', (chunk: Buffer) => this.processStdout(chunk));
-    helper.stderr.on('data', (chunk: Buffer) => {
-      this.emit('status', chunk.toString('utf8').trim());
-    });
     helper.on('error', (error) => this.emit('error', error));
     helper.on('exit', (code, signal) => {
       if (this.process === helper) {
@@ -139,6 +138,28 @@ export class HostAudioEngine extends EventEmitter {
         this.stdoutBuffer = Buffer.alloc(0);
         this.emit('status', `host audio helper exited (${signal ?? code ?? 'unknown'})`);
       }
+    });
+
+    await new Promise<void>((resolve) => {
+      let settled = false;
+      const finish = () => {
+        if (settled) {
+          return;
+        }
+        settled = true;
+        clearTimeout(timeout);
+        resolve();
+      };
+      const timeout = setTimeout(finish, HELPER_START_TIMEOUT_MS);
+
+      helper.stderr.on('data', (chunk: Buffer) => {
+        const text = chunk.toString('utf8').trim();
+        this.emit('status', text);
+        if (text.includes(HELPER_RECORDING_STARTED_MESSAGE)) {
+          finish();
+        }
+      });
+      helper.once('exit', finish);
     });
   }
 

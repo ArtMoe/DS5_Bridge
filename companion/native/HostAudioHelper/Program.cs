@@ -28,6 +28,9 @@ static class AudioConstants
     public const int FastPayloadBytes = 57;
     public const int HidReportBytes = 64;
     public const int HidWriteTimeoutMilliseconds = 4;
+    public const int CaptureCallbackGapWarningUs = 20000;
+    public const int WriterScheduleLateWarningUs = 8000;
+    public const int HidWriteLateWarningUs = 8000;
     public const int DiagnosticsIntervalMilliseconds = 2000;
     public const int MicKeepaliveBufferMilliseconds = 10;
     public const int SpeakerWarmupMilliseconds = 300;
@@ -69,6 +72,13 @@ sealed class HostAudioHelper : IDisposable
     private long droppedReports;
     private long writeLateEvents;
     private long maxWriteLateUs;
+    private long lastCaptureCallbackTicks;
+    private long captureCallbackGapEvents;
+    private long captureCallbackGapMaxUs;
+    private long writerScheduleLateEvents;
+    private long writerScheduleLateMaxUs;
+    private long hidWriteLateEvents;
+    private long hidWriteLateMaxUs;
     private ushort frameSequence;
     private int peakSamplePermille;
     private long capturedCallbacks;
@@ -182,7 +192,6 @@ sealed class HostAudioHelper : IDisposable
         Console.Error.WriteLine(
             $"status: capturing '{device.FriendlyName}' {capture.WaveFormat.SampleRate}Hz {capture.WaveFormat.Channels}ch {capture.WaveFormat.BitsPerSample}bit {capture.WaveFormat.Encoding}");
         capture.StartRecording();
-        StartSpeakerWarmup();
         Console.Error.WriteLine("status: recording-started");
     }
 
@@ -463,6 +472,7 @@ sealed class HostAudioHelper : IDisposable
             return;
         }
 
+        NoteCaptureCallback(eventArgs.BytesRecorded);
         lock (sync)
         {
             ProcessPcm(eventArgs.Buffer, eventArgs.BytesRecorded, format);
@@ -530,6 +540,26 @@ sealed class HostAudioHelper : IDisposable
                 resampleCredit -= 1;
             }
         }
+    }
+
+    private void NoteCaptureCallback(int bytesRecorded)
+    {
+        var nowTicks = Stopwatch.GetTimestamp();
+        var previousTicks = Interlocked.Exchange(ref lastCaptureCallbackTicks, nowTicks);
+        if (previousTicks == 0)
+        {
+            return;
+        }
+
+        var gapUs = (nowTicks - previousTicks) * 1000000 / Stopwatch.Frequency;
+        UpdateMax(ref captureCallbackGapMaxUs, gapUs);
+        if (gapUs <= AudioConstants.CaptureCallbackGapWarningUs)
+        {
+            return;
+        }
+
+        Interlocked.Increment(ref captureCallbackGapEvents);
+        LogHelperEvent("capture-gap", $"gapUs={gapUs} bytes={bytesRecorded}");
     }
 
     private static float ReadSample(byte[] buffer, int byteCount, int offset, WaveFormat format)
@@ -730,6 +760,12 @@ sealed class HostAudioHelper : IDisposable
                             maxWriteLateUs = lateUs;
                         }
                     }
+                    if (lateUs > AudioConstants.WriterScheduleLateWarningUs)
+                    {
+                        Interlocked.Increment(ref writerScheduleLateEvents);
+                        UpdateMax(ref writerScheduleLateMaxUs, lateUs);
+                        LogHelperEvent("writer-schedule-late", $"lateUs={lateUs}");
+                    }
                 }
 
                 if (hidStream is not null)
@@ -831,6 +867,12 @@ sealed class HostAudioHelper : IDisposable
                     maxWriteLateUs = elapsedUs;
                 }
             }
+            if (elapsedUs > AudioConstants.HidWriteLateWarningUs)
+            {
+                Interlocked.Increment(ref hidWriteLateEvents);
+                UpdateMax(ref hidWriteLateMaxUs, elapsedUs);
+                LogHelperEvent("hid-write-late", $"elapsedUs={elapsedUs}");
+            }
             return true;
         }
         catch (Exception error)
@@ -876,6 +918,29 @@ sealed class HostAudioHelper : IDisposable
         }
     }
 
+    private static void UpdateMax(ref long target, long value)
+    {
+        while (true)
+        {
+            var current = Interlocked.Read(ref target);
+            if (value <= current)
+            {
+                return;
+            }
+
+            if (Interlocked.CompareExchange(ref target, value, current) == current)
+            {
+                return;
+            }
+        }
+    }
+
+    private void LogHelperEvent(string eventName, string details)
+    {
+        Console.Error.WriteLine(
+            $"stage=helper-event {eventName} {details} queuedReports={reportQueue.Count} callbacks={Interlocked.Read(ref capturedCallbacks)} capturedFrames={Interlocked.Read(ref capturedFrames)} encodedReports={Interlocked.Read(ref encodedReports)} writtenReports={Interlocked.Read(ref writtenReports)} writtenFragments={Interlocked.Read(ref writtenFragments)}");
+    }
+
     private void WriteDiagnostics()
     {
         while (!stopped.Wait(AudioConstants.DiagnosticsIntervalMilliseconds))
@@ -884,7 +949,7 @@ sealed class HostAudioHelper : IDisposable
             var micPeak = Interlocked.Exchange(ref micPeakPermille, 0);
             var writerState = writerTask.IsFaulted ? "faulted" : writerTask.IsCompleted ? "stopped" : "running";
             Console.Error.WriteLine(
-                $"stage=helper transport={(hidStream is null ? "stdout" : "hid")} writer={writerState} callbacks={Interlocked.Read(ref capturedCallbacks)} capturedFrames={Interlocked.Read(ref capturedFrames)} encodedReports={Interlocked.Read(ref encodedReports)} queuedReports={reportQueue.Count} droppedReports={Interlocked.Read(ref droppedReports)} writtenReports={Interlocked.Read(ref writtenReports)} writtenFragments={Interlocked.Read(ref writtenFragments)} writeLateEvents={Interlocked.Read(ref writeLateEvents)} maxWriteLateUs={Interlocked.Read(ref maxWriteLateUs)} peakPermille={peak} micCallbacks={Interlocked.Read(ref micCallbacks)} micCapturedFrames={Interlocked.Read(ref micCapturedFrames)} micPeakPermille={micPeak}");
+                $"stage=helper transport={(hidStream is null ? "stdout" : "hid")} writer={writerState} callbacks={Interlocked.Read(ref capturedCallbacks)} capturedFrames={Interlocked.Read(ref capturedFrames)} encodedReports={Interlocked.Read(ref encodedReports)} queuedReports={reportQueue.Count} droppedReports={Interlocked.Read(ref droppedReports)} writtenReports={Interlocked.Read(ref writtenReports)} writtenFragments={Interlocked.Read(ref writtenFragments)} writeLateEvents={Interlocked.Read(ref writeLateEvents)} maxWriteLateUs={Interlocked.Read(ref maxWriteLateUs)} captureGapMaxUs={Interlocked.Read(ref captureCallbackGapMaxUs)} captureGapOver20ms={Interlocked.Read(ref captureCallbackGapEvents)} writerScheduleLateOver8ms={Interlocked.Read(ref writerScheduleLateEvents)} writerScheduleLateMaxUs={Interlocked.Read(ref writerScheduleLateMaxUs)} hidWriteOver8ms={Interlocked.Read(ref hidWriteLateEvents)} hidWriteMaxUs={Interlocked.Read(ref hidWriteLateMaxUs)} peakPermille={peak} micCallbacks={Interlocked.Read(ref micCallbacks)} micCapturedFrames={Interlocked.Read(ref micCapturedFrames)} micPeakPermille={micPeak}");
         }
     }
 

@@ -24,12 +24,14 @@ bool bt_disconnect();
 void bt_write(uint8_t* data,uint16_t len);
 bool bt_write_classified_output(uint8_t* data,uint16_t len);
 bool bt_sanitize_host_speaker_amp_ownership(uint8_t* data,uint16_t len);
+bool bt_sanitize_host_speaker_amp_ownership_payload(uint8_t* payload,uint16_t len);
 bool bt_sanitize_host_mic_ownership(uint8_t* data,uint16_t len);
 bool bt_sanitize_host_mic_ownership_payload(uint8_t* payload,uint16_t len);
 bool bt_apply_haptics_gain(uint8_t* data,uint16_t len,uint8_t gain_percent);
 bool bt_apply_haptics_gain_payload(uint8_t* payload,uint16_t len,uint8_t gain_percent);
 bool bt_write_audio_stream(uint8_t* data,uint16_t len);
 void bt_drain_audio_stream();
+void bt_reset_output_debug_stats();
 struct bt_output_debug_stats {
     uint32_t audio_0x36_enqueue_to_send_max_us;
     uint32_t audio_0x36_send_gap_max_us;

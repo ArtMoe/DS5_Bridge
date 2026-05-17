@@ -71,6 +71,9 @@
 #define CRITICAL_QUEUE_TARGET_DEPTH 16
 #define OUTPUT_AUDIO_MAX_AGE_US 3000
 #define OUTPUT_MAX_CONSECUTIVE_NON_AUDIO_SENDS 1
+#define CONTROL_SEND_QUEUE_MAX_DEPTH 8
+#define CONTROL_SEND_HEADSET_AUDIO_SAFE_WINDOW_US 6000
+#define CONTROL_SEND_HEADSET_AUDIO_IDLE_US 20000
 #define CYW43_POWER_CYCLE_HOLD_MS 750
 #define CONTROLLER_DISCONNECT_REBOOT_DELAY_MS 25
 #define IDLE_DISCONNECT_TIMEOUT_US (30ULL * 60ULL * 1000ULL * 1000ULL)
@@ -118,12 +121,26 @@ enum ControllerType : uint8_t {
     ControllerTypeDualSenseEdge = 2,
 };
 
+enum BtAudioDebugKind : uint8_t {
+    BtAudioDebugLateAudio = 1,
+    BtAudioDebugNonAudioAheadOfQueuedAudio = 2,
+    BtAudioDebugControlSend = 3,
+    BtAudioDebugControlSuppressed = 4,
+};
+
 struct output_packet {
     vector<uint8_t> data;
     uint32_t enqueue_time_us;
     uint8_t packet_class;
     uint8_t report_id;
     uint8_t reason;
+};
+
+struct control_packet {
+    vector<uint8_t> data;
+    uint32_t enqueue_time_us;
+    uint8_t report_id;
+    bool coalescible;
 };
 
 struct output_scheduler_counters {
@@ -154,6 +171,12 @@ static void hci_packet_handler(uint8_t packet_type, uint16_t channel, uint8_t *p
 static void l2cap_packet_handler(uint8_t packet_type, uint16_t channel, uint8_t *packet, uint16_t size);
 static bool build_interrupt_output_packet(uint8_t *data, uint16_t len, vector<uint8_t> &packet);
 static bool enqueue_state_output(uint8_t *data, uint16_t len, uint8_t reason);
+static bool enqueue_control_packet(uint8_t const *data, uint16_t len, bool coalescible);
+static bool select_next_control_packet_locked(control_packet &packet, uint32_t now);
+static void request_can_send_if_needed(bool should_request_send);
+static void request_control_can_send_if_needed(bool should_request_send);
+static bool headset_audio_send_window_closed_locked(uint32_t now);
+static void request_control_if_audio_window_open_locked(uint32_t now, bool &should_request_control);
 static void init_state_report(uint8_t *report);
 static bool select_next_output_packet_locked(output_packet &packet, uint32_t now);
 
@@ -168,8 +191,10 @@ static bt_data_callback_t bt_data_callback = nullptr;
 static uint8_t controller_type = ControllerTypeUnknown;
 static bool controller_type_check_pending = false;
 unordered_map<uint8_t, vector<uint8_t> > feature_data;
+static bool feature_prefetch_active = false;
 static queue<output_packet> critical_queue;
 static queue<output_packet> audio_queue;
+static vector<control_packet> control_queue;
 static uint8_t state_pending_report[DS_OUTPUT_REPORT_BT_SIZE];
 static bool state_pending = false;
 static uint32_t state_pending_since_us = 0;
@@ -207,9 +232,14 @@ static void clear_packet_queue(queue<output_packet> &packets) {
     }
 }
 
+static bool control_pending_locked() {
+    return !control_queue.empty();
+}
+
 static void clear_output_queues_locked() {
     clear_packet_queue(critical_queue);
     clear_packet_queue(audio_queue);
+    control_queue.clear();
     state_pending = false;
     memset(state_pending_report, 0, sizeof(state_pending_report));
     consecutive_non_audio_sends = 0;
@@ -917,12 +947,23 @@ static void note_output_packet_sent(const output_packet &packet, uint32_t now) {
 
     if (packet.packet_class == OutputPacketAudio) {
         update_max_u32(output_counters.audio_0x36_max_age_us, age_us);
+        uint32_t audio_gap_us = 0;
         if (last_audio_0x36_send_us != 0) {
-            update_max_u32(output_counters.audio_0x36_send_gap_max_us, packet_age_us(now, last_audio_0x36_send_us));
+            audio_gap_us = packet_age_us(now, last_audio_0x36_send_us);
+            update_max_u32(output_counters.audio_0x36_send_gap_max_us, audio_gap_us);
         }
         last_audio_0x36_send_us = now;
         if (age_us > 12000) {
             output_counters.audio_0x36_late_count_over_12000_us++;
+        }
+        if (age_us > 12000 || audio_gap_us > 12000) {
+            audio_debug_note_bt_event(
+                BtAudioDebugLateAudio,
+                age_us / 100,
+                audio_gap_us / 100,
+                non_audio_reports_since_audio,
+                audio_queue.size()
+            );
         }
         update_max_u32(output_counters.non_audio_reports_between_audio_max, non_audio_reports_since_audio);
         non_audio_reports_since_audio = 0;
@@ -934,6 +975,15 @@ static void note_output_packet_sent(const output_packet &packet, uint32_t now) {
     }
 
     output_counters.normal_0x31_sent_count++;
+    if (speaker_output_headset_route && !audio_queue.empty()) {
+        audio_debug_note_bt_event(
+            BtAudioDebugNonAudioAheadOfQueuedAudio,
+            packet.reason,
+            packet_age_us(now, audio_queue.front().enqueue_time_us) / 100,
+            critical_queue.size(),
+            state_pending ? 1 : 0
+        );
+    }
     if (non_audio_reports_since_audio != 0xffffffffu) {
         non_audio_reports_since_audio++;
     }
@@ -1008,6 +1058,26 @@ static bool select_next_output_packet_locked(output_packet &packet, uint32_t now
 
     note_output_packet_sent(packet, now);
     update_queue_depth_counters_locked();
+    return true;
+}
+
+static bool select_next_control_packet_locked(control_packet &packet, uint32_t now) {
+    if (!control_pending_locked()) {
+        return false;
+    }
+    if (headset_audio_send_window_closed_locked(now)) {
+        return false;
+    }
+
+    packet = std::move(control_queue.front());
+    control_queue.erase(control_queue.begin());
+    audio_debug_note_bt_event(
+        BtAudioDebugControlSend,
+        packet.data.empty() ? 0 : packet.data[0],
+        packet.report_id,
+        packet_age_us(now, packet.enqueue_time_us) / 100,
+        control_queue.size()
+    );
     return true;
 }
 
@@ -1134,6 +1204,33 @@ static void l2cap_packet_handler(uint8_t packet_type, uint16_t channel, uint8_t 
 
         case L2CAP_EVENT_CAN_SEND_NOW: {
             // DS5_LOG("[L2CAP] L2CAP_EVENT_CAN_SEND_NOW\n");
+            const uint16_t local_cid = l2cap_event_can_send_now_get_local_cid(packet);
+            if (local_cid == hid_control_cid) {
+                control_packet next_packet{};
+                bool should_request_interrupt = false;
+                const uint32_t now = time_us_32();
+                critical_section_enter_blocking(&queue_lock);
+                if (!select_next_control_packet_locked(next_packet, now)) {
+                    should_request_interrupt = !audio_queue.empty();
+                    critical_section_exit(&queue_lock);
+                    request_can_send_if_needed(should_request_interrupt);
+                    break;
+                }
+                const bool has_more_control = control_pending_locked();
+                bool should_request_control = false;
+                request_control_if_audio_window_open_locked(now, should_request_control);
+                critical_section_exit(&queue_lock);
+
+                uint8_t status = l2cap_send(hid_control_cid, next_packet.data.data(), next_packet.data.size());
+                if (status != 0) {
+                    DS5_LOG("[L2CAP] Control Error, Status: 0x%02X\n", status);
+                }
+                request_control_can_send_if_needed(has_more_control && should_request_control);
+                break;
+            }
+            if (local_cid != hid_interrupt_cid) {
+                break;
+            }
 
             output_packet next_packet{};
             const uint32_t now = time_us_32();
@@ -1143,6 +1240,8 @@ static void l2cap_packet_handler(uint8_t packet_type, uint16_t channel, uint8_t 
                 break;
             }
             const bool has_more = output_pending_locked();
+            bool should_request_control = false;
+            request_control_if_audio_window_open_locked(now, should_request_control);
             critical_section_exit(&queue_lock);
 
             uint8_t status = l2cap_send(hid_interrupt_cid, next_packet.data.data(), next_packet.data.size());
@@ -1152,6 +1251,7 @@ static void l2cap_packet_handler(uint8_t packet_type, uint16_t channel, uint8_t 
             if (has_more) {
                 l2cap_request_can_send_now_event(hid_interrupt_cid);
             }
+            request_control_can_send_if_needed(should_request_control);
             break;
         }
     }
@@ -1179,6 +1279,37 @@ static void request_can_send_if_needed(bool should_request_send) {
         return;
     }
     l2cap_request_can_send_now_event(hid_interrupt_cid);
+}
+
+static void request_control_can_send_if_needed(bool should_request_send) {
+    if (!should_request_send) {
+        return;
+    }
+    if (hid_control_cid == 0) {
+        DS5_LOG("[L2CAP control] Warning: hid_control_cid 0\n");
+        return;
+    }
+    l2cap_request_can_send_now_event(hid_control_cid);
+}
+
+static bool headset_audio_send_window_closed_locked(uint32_t now) {
+    if (!speaker_output_headset_route) {
+        return false;
+    }
+    if (!audio_queue.empty()) {
+        return true;
+    }
+    if (last_audio_0x36_send_us == 0) {
+        return false;
+    }
+
+    const uint32_t elapsed_us = packet_age_us(now, last_audio_0x36_send_us);
+    return elapsed_us > CONTROL_SEND_HEADSET_AUDIO_SAFE_WINDOW_US
+        && elapsed_us < CONTROL_SEND_HEADSET_AUDIO_IDLE_US;
+}
+
+static void request_control_if_audio_window_open_locked(uint32_t now, bool &should_request_control) {
+    should_request_control = control_pending_locked() && !headset_audio_send_window_closed_locked(now);
 }
 
 static bool make_output_packet(
@@ -1214,6 +1345,58 @@ static bool enqueue_critical_output(uint8_t *data, uint16_t len, uint8_t reason)
     update_queue_depth_counters_locked();
     critical_section_exit(&queue_lock);
     request_can_send_if_needed(should_request_send);
+    return true;
+}
+
+static bool make_control_packet(uint8_t const *data, uint16_t len, bool coalescible, control_packet &packet) {
+    if (hid_control_cid == 0 || data == nullptr || len == 0) {
+        return false;
+    }
+
+    packet.data.assign(data, data + len);
+    packet.enqueue_time_us = time_us_32();
+    packet.report_id = len > 1 ? data[1] : 0;
+    packet.coalescible = coalescible && len > 1;
+    return true;
+}
+
+static bool same_control_report_target(control_packet const &left, control_packet const &right) {
+    return left.coalescible
+        && right.coalescible
+        && !left.data.empty()
+        && !right.data.empty()
+        && left.data[0] == right.data[0]
+        && left.report_id == right.report_id;
+}
+
+static bool enqueue_control_packet(uint8_t const *data, uint16_t len, bool coalescible) {
+    control_packet packet{};
+    if (!make_control_packet(data, len, coalescible, packet)) {
+        return false;
+    }
+
+    bool should_request_send = false;
+    const uint32_t now = time_us_32();
+    critical_section_enter_blocking(&queue_lock);
+    should_request_send = !control_pending_locked();
+    if (packet.coalescible) {
+        for (control_packet &queued : control_queue) {
+            if (same_control_report_target(queued, packet)) {
+                queued = std::move(packet);
+                request_control_if_audio_window_open_locked(now, should_request_send);
+                critical_section_exit(&queue_lock);
+                request_control_can_send_if_needed(should_request_send);
+                return true;
+            }
+        }
+    }
+    while (control_queue.size() >= CONTROL_SEND_QUEUE_MAX_DEPTH) {
+        control_queue.erase(control_queue.begin());
+    }
+    control_queue.push_back(std::move(packet));
+    request_control_if_audio_window_open_locked(now, should_request_send);
+    critical_section_exit(&queue_lock);
+    request_control_can_send_if_needed(should_request_send);
     return true;
 }
 
@@ -1316,15 +1499,11 @@ static bool has_unclassified_state_payload_data(uint8_t const *payload, uint16_t
     return false;
 }
 
-bool bt_sanitize_host_speaker_amp_ownership(uint8_t *data, uint16_t len) {
-    if (data == nullptr || len < 3 + DS_OUTPUT_REPORT_COMMON_SIZE) {
-        return false;
-    }
-    if (data[0] != DS_OUTPUT_REPORT_BT || data[2] != DS_OUTPUT_TAG) {
+bool bt_sanitize_host_speaker_amp_ownership_payload(uint8_t *payload, uint16_t len) {
+    if (payload == nullptr || len < DS_OUTPUT_REPORT_COMMON_SIZE) {
         return false;
     }
 
-    uint8_t *payload = data + 3;
     bool changed = false;
 
     const uint8_t original_flag0 = payload[OUTPUT_PAYLOAD_VALID_FLAG0_OFFSET];
@@ -1344,7 +1523,7 @@ bool bt_sanitize_host_speaker_amp_ownership(uint8_t *data, uint16_t len) {
         changed = true;
     }
 
-    if (original_flag0 & DS_OUTPUT_VALID_FLAG0_SPEAKER_VOLUME_ENABLE) {
+    if (original_flag0 & (DS_OUTPUT_VALID_FLAG0_SPEAKER_VOLUME_ENABLE | DS_OUTPUT_VALID_FLAG0_AUDIO_CONTROL_ENABLE)) {
         if (payload[OUTPUT_PAYLOAD_HEADPHONE_VOLUME_OFFSET] != 0) {
             payload[OUTPUT_PAYLOAD_HEADPHONE_VOLUME_OFFSET] = 0;
             changed = true;
@@ -1368,6 +1547,17 @@ bool bt_sanitize_host_speaker_amp_ownership(uint8_t *data, uint16_t len) {
     }
 
     return changed;
+}
+
+bool bt_sanitize_host_speaker_amp_ownership(uint8_t *data, uint16_t len) {
+    if (data == nullptr || len < 3 + DS_OUTPUT_REPORT_COMMON_SIZE) {
+        return false;
+    }
+    if (data[0] != DS_OUTPUT_REPORT_BT || data[2] != DS_OUTPUT_TAG) {
+        return false;
+    }
+
+    return bt_sanitize_host_speaker_amp_ownership_payload(data + 3, len - 3);
 }
 
 bool bt_sanitize_host_mic_ownership_payload(uint8_t *payload, uint16_t len) {
@@ -1554,6 +1744,9 @@ static bool split_state_from_mixed_output(uint8_t *data, uint16_t len) {
         clear_payload_byte(payload, payload_len, OUTPUT_PAYLOAD_PLAYER_LEDS_OFFSET);
     }
 
+    if (audio_host_encoded_active()) {
+        return true;
+    }
     return enqueue_state_output(state_data, sizeof(state_data), OutputReasonStateOnly);
 }
 
@@ -1725,6 +1918,9 @@ bool bt_write_classified_output(uint8_t *data, uint16_t len) {
         }
         return enqueue_critical_output(data, len, reason);
     }
+    if (audio_host_encoded_active()) {
+        return true;
+    }
     return enqueue_state_output(data, len, reason);
 }
 
@@ -1756,6 +1952,17 @@ void bt_drain_audio_stream() {
     critical_section_exit(&queue_lock);
 }
 
+void bt_reset_output_debug_stats() {
+    critical_section_enter_blocking(&queue_lock);
+    memset(&output_counters, 0, sizeof(output_counters));
+    last_bt_send_us = 0;
+    last_audio_0x36_send_us = 0;
+    non_audio_reports_since_audio = 0;
+    consecutive_non_audio_sends = 0;
+    update_queue_depth_counters_locked();
+    critical_section_exit(&queue_lock);
+}
+
 void bt_get_output_debug_stats(bt_output_debug_stats *stats) {
     if (stats == nullptr) {
         return;
@@ -1775,51 +1982,65 @@ void bt_get_output_debug_stats(bt_output_debug_stats *stats) {
 }
 
 vector<uint8_t> get_feature_data(uint8_t reportId, uint16_t len) {
+    (void)len;
     // These reports must request fresh controller state; other reports can reuse cached data.
     auto ret = vector<uint8_t>{};
-    if (feature_data.contains(reportId)) {
+    const bool cached = feature_data.contains(reportId);
+    if (cached) {
         ret = feature_data[reportId];
     }
-    if (
-        !feature_data.contains(reportId)
-        || reportId == 0x81
+    const bool requires_fresh_state = reportId == 0x81
         || reportId == 0x63
         || reportId == 0x65
-        || reportId == 0x64
-    ) {
-        if (hid_control_cid != 0) {
-            uint8_t get_feature[] = {0x43, reportId};
-            l2cap_send(hid_control_cid, get_feature, sizeof(get_feature));
-            DS5_LOG("[L2CAP] Requesting Get Feature Report 0x%02X\n", reportId);
-        }
+        || reportId == 0x64;
+    const bool should_request = !cached || requires_fresh_state;
+    if (!should_request || hid_control_cid == 0) {
+        return ret;
     }
+
+    if (audio_host_encoded_active() && !feature_prefetch_active && !requires_fresh_state) {
+        audio_debug_note_bt_event(
+            BtAudioDebugControlSuppressed,
+            0x43,
+            reportId,
+            cached ? 1 : 0,
+            0
+        );
+        return ret;
+    }
+
+    uint8_t get_feature[] = {0x43, reportId};
+    enqueue_control_packet(get_feature, sizeof(get_feature), true);
+    DS5_LOG("[L2CAP] Requesting Get Feature Report 0x%02X\n", reportId);
     return ret;
 }
 
 void set_feature_data(uint8_t reportId, uint8_t* data,uint16_t len) {
     if (hid_control_cid != 0) {
-        uint8_t get_feature[len + 2];
-        get_feature[0] = 0x53;
-        get_feature[1] = reportId;
-        memcpy(get_feature + 2,data,len);
-        if (!fill_feature_report_checksum(get_feature + 1, len + 1)) {
+        vector<uint8_t> set_feature(len + 2);
+        set_feature[0] = 0x53;
+        set_feature[1] = reportId;
+        memcpy(set_feature.data() + 2,data,len);
+        if (!fill_feature_report_checksum(set_feature.data() + 1, len + 1)) {
             DS5_LOG("[L2CAP] Refusing Set Feature Report 0x%02X with invalid checksum length %u\n",
                 reportId,
                 static_cast<unsigned>(len + 1));
             return;
         }
-        l2cap_send(hid_control_cid, get_feature, len + 2);
+        enqueue_control_packet(set_feature.data(), static_cast<uint16_t>(set_feature.size()), true);
         DS5_LOG("[L2CAP] Requesting Set Feature Report 0x%02X\n", reportId);
-        DS5_HEXDUMP(get_feature,len + 2);
+        DS5_HEXDUMP(set_feature.data(), set_feature.size());
     }
 }
 
 void init_feature() {
     controller_type = ControllerTypeUnknown;
+    feature_prefetch_active = true;
     get_feature_data(0x09, 20);
     get_feature_data(0x20, 64);
     get_feature_data(0x22, 64);
     get_feature_data(0x05, 41);
     controller_type_check_pending = true;
     get_feature_data(0x70, 64);
+    feature_prefetch_active = false;
 }

@@ -9,6 +9,7 @@
 #include <algorithm>
 #include <cmath>
 
+#include "audio.h"
 #include "bt.h"
 #include "usb.h"
 
@@ -41,6 +42,12 @@ uint8_t usb_hid_polling_interval_ms_value = 1;
 #define USB_RECONNECT_DELAY_US          250000
 #define USB_RECONNECT_HOLD_US           150000
 #define USB_CONTROLLER_REATTACH_HOLD_US 3000000
+
+enum UsbAudioDebugKind : uint8_t {
+    UsbAudioDebugSetInterface = 1,
+    UsbAudioDebugGetEntity = 2,
+    UsbAudioDebugSetEntity = 3,
+};
 
 struct UsbAudioVolumeRange {
     int16_t min;
@@ -193,6 +200,13 @@ extern "C" bool tud_audio_set_itf_cb(uint8_t rhport, tusb_control_request_t cons
     } else if (itf == 2) {
         usb_mic_streaming = alt != 0;
     }
+    audio_debug_note_usb_event(
+        UsbAudioDebugSetInterface,
+        itf,
+        alt,
+        usb_speaker_streaming ? 1 : 0,
+        usb_mic_streaming ? 1 : 0
+    );
 
     return true;
 }
@@ -296,6 +310,13 @@ static bool audio10_set_req_entity(tusb_control_request_t const *p_request, uint
     uint8_t ctrlSel = TU_U16_HIGH(p_request->wValue);
     uint8_t entityID = TU_U16_HIGH(p_request->wIndex);
     uint8_t index = entityID == UAC1_ENTITY_SPK_FEATURE_UNIT ? 0 : 1;
+    audio_debug_note_usb_event(
+        UsbAudioDebugSetEntity,
+        entityID,
+        ctrlSel,
+        p_request->bRequest,
+        p_request->wLength
+    );
 
     // If request is for our speaker feature unit
     if (entityID == UAC1_ENTITY_SPK_FEATURE_UNIT || entityID == UAC1_ENTITY_MIC_FEATURE_UNIT) {
@@ -350,6 +371,13 @@ static bool audio10_get_req_entity(uint8_t rhport, tusb_control_request_t const 
     uint8_t ctrlSel = TU_U16_HIGH(p_request->wValue);
     uint8_t entityID = TU_U16_HIGH(p_request->wIndex);
     uint8_t index = entityID == UAC1_ENTITY_SPK_FEATURE_UNIT ? 0 : 1;
+    audio_debug_note_usb_event(
+        UsbAudioDebugGetEntity,
+        entityID,
+        ctrlSel,
+        p_request->bRequest,
+        p_request->wLength
+    );
 
     // If request is for our speaker feature unit
     if (entityID == UAC1_ENTITY_SPK_FEATURE_UNIT || entityID == UAC1_ENTITY_MIC_FEATURE_UNIT) {
