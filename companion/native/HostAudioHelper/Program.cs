@@ -32,8 +32,8 @@ static class AudioConstants
     public const int WriterScheduleLateWarningUs = 8000;
     public const int HidWriteLateWarningUs = 8000;
     public const int DiagnosticsIntervalMilliseconds = 2000;
+    public static readonly bool DiagnosticsEnabled = false;
     public const int MicKeepaliveBufferMilliseconds = 10;
-    public const int SpeakerWarmupMilliseconds = 300;
     public const float SpeakerGainRampStepPermille = 1000f / (TargetSampleRate * 0.02f);
     public static readonly long FrameIntervalTicks = Stopwatch.Frequency * PicoInputBlockFrames / TargetSampleRate;
 }
@@ -48,19 +48,17 @@ sealed class HostAudioHelper : IDisposable
     private readonly float[] speakerBlock = new float[AudioConstants.PicoInputBlockFrames * 2];
     private readonly float[] hapticLeftBlock = new float[AudioConstants.PicoInputBlockFrames];
     private readonly float[] hapticRightBlock = new float[AudioConstants.PicoInputBlockFrames];
-    private readonly object speakerWarmupSync = new();
     private readonly byte[] writePrefix = new byte[2];
     private readonly byte[] hidReport = new byte[AudioConstants.HidReportBytes];
     private readonly byte[] report = new byte[AudioConstants.CompactFrameBytes];
     private readonly BlockingCollection<byte[]> reportQueue = new(AudioConstants.MaxQueuedReports);
     private readonly ManualResetEventSlim stopped = new(false);
     private readonly Task writerTask;
-    private readonly Task diagnosticsTask;
+    private readonly Task? diagnosticsTask;
     private MMDeviceEnumerator? enumerator;
     private MMDevice? renderDevice;
     private WasapiLoopbackCapture? capture;
     private WasapiCapture? micCapture;
-    private WasapiOut? speakerWarmupOutput;
     private HidStream? hidStream;
     private int picoBlockFrameIndex;
     private bool picoBlockHasHaptics;
@@ -102,7 +100,7 @@ sealed class HostAudioHelper : IDisposable
             UseVBR = false
         };
         writerTask = Task.Run(WriteReports);
-        diagnosticsTask = Task.Run(WriteDiagnostics);
+        diagnosticsTask = AudioConstants.DiagnosticsEnabled ? Task.Run(WriteDiagnostics) : null;
     }
 
     public async Task RunAsync()
@@ -149,14 +147,13 @@ sealed class HostAudioHelper : IDisposable
         Stop();
         capture?.Dispose();
         micCapture?.Dispose();
-        StopSpeakerWarmup();
         hidStream?.Dispose();
         enumerator?.Dispose();
         reportQueue.CompleteAdding();
         try
         {
             writerTask.Wait(TimeSpan.FromSeconds(1));
-            diagnosticsTask.Wait(TimeSpan.FromSeconds(1));
+            diagnosticsTask?.Wait(TimeSpan.FromSeconds(1));
         }
         catch (AggregateException)
         {
@@ -189,15 +186,17 @@ sealed class HostAudioHelper : IDisposable
             stopped.Set();
         };
 
-        Console.Error.WriteLine(
-            $"status: capturing '{device.FriendlyName}' {capture.WaveFormat.SampleRate}Hz {capture.WaveFormat.Channels}ch {capture.WaveFormat.BitsPerSample}bit {capture.WaveFormat.Encoding}");
+        if (AudioConstants.DiagnosticsEnabled)
+        {
+            Console.Error.WriteLine(
+                $"status: capturing '{device.FriendlyName}' {capture.WaveFormat.SampleRate}Hz {capture.WaveFormat.Channels}ch {capture.WaveFormat.BitsPerSample}bit {capture.WaveFormat.Encoding}");
+        }
         capture.StartRecording();
         Console.Error.WriteLine("status: recording-started");
     }
 
     private void Stop()
     {
-        StopSpeakerWarmup();
         try
         {
             micCapture?.StopRecording();
@@ -231,79 +230,16 @@ sealed class HostAudioHelper : IDisposable
             stopped.Set();
         };
 
-        Console.Error.WriteLine(
-            $"status: mic keepalive opening '{device.FriendlyName}' {micCapture.WaveFormat.SampleRate}Hz {micCapture.WaveFormat.Channels}ch {micCapture.WaveFormat.BitsPerSample}bit {micCapture.WaveFormat.Encoding}");
+        if (AudioConstants.DiagnosticsEnabled)
+        {
+            Console.Error.WriteLine(
+                $"status: mic keepalive opening '{device.FriendlyName}' {micCapture.WaveFormat.SampleRate}Hz {micCapture.WaveFormat.Channels}ch {micCapture.WaveFormat.BitsPerSample}bit {micCapture.WaveFormat.Encoding}");
+        }
         micCapture.StartRecording();
-        Console.Error.WriteLine("status: mic keepalive started");
-    }
-
-    private void StartSpeakerWarmup()
-    {
-        var device = renderDevice;
-        if (disposed || device is null)
+        if (AudioConstants.DiagnosticsEnabled)
         {
-            return;
+            Console.Error.WriteLine("status: mic keepalive started");
         }
-
-        try
-        {
-            lock (speakerWarmupSync)
-            {
-                StopSpeakerWarmupLocked();
-                var output = new WasapiOut(device, AudioClientShareMode.Shared, false, AudioConstants.WasapiBufferMilliseconds);
-                var provider = new TimedSilenceWaveProvider(
-                    new WaveFormat(AudioConstants.TargetSampleRate, 16, 2),
-                    AudioConstants.SpeakerWarmupMilliseconds
-                );
-                speakerWarmupOutput = output;
-                output.PlaybackStopped += (_, _) =>
-                {
-                    lock (speakerWarmupSync)
-                    {
-                        if (speakerWarmupOutput == output)
-                        {
-                            speakerWarmupOutput = null;
-                        }
-                    }
-                    output.Dispose();
-                };
-                output.Init(provider);
-                output.Play();
-            }
-            Console.Error.WriteLine("status: speaker warmup silence started");
-        }
-        catch (Exception error)
-        {
-            Console.Error.WriteLine($"error: speaker warmup failed: {error.Message}");
-        }
-    }
-
-    private void StopSpeakerWarmup()
-    {
-        lock (speakerWarmupSync)
-        {
-            StopSpeakerWarmupLocked();
-        }
-    }
-
-    private void StopSpeakerWarmupLocked()
-    {
-        var output = speakerWarmupOutput;
-        speakerWarmupOutput = null;
-        if (output is null)
-        {
-            return;
-        }
-
-        try
-        {
-            output.Stop();
-        }
-        catch (Exception error)
-        {
-            Console.Error.WriteLine($"error: speaker warmup stop failed: {error.Message}");
-        }
-        output.Dispose();
     }
 
     private void TryOpenCompanionHid()
@@ -317,7 +253,10 @@ sealed class HostAudioHelper : IDisposable
             .FirstOrDefault(candidate => string.Equals(candidate.DevicePath, options.HidPath, StringComparison.OrdinalIgnoreCase));
         if (device is null)
         {
-            Console.Error.WriteLine("status: companion HID path not found; using stdout frame transport");
+            if (AudioConstants.DiagnosticsEnabled)
+            {
+                Console.Error.WriteLine("status: companion HID path not found; using stdout frame transport");
+            }
             return;
         }
 
@@ -325,12 +264,18 @@ sealed class HostAudioHelper : IDisposable
         {
             hidStream = device.Open();
             hidStream.WriteTimeout = AudioConstants.HidWriteTimeoutMilliseconds;
-            Console.Error.WriteLine($"status: companion HID direct output active maxOutput={device.GetMaxOutputReportLength()}");
+            if (AudioConstants.DiagnosticsEnabled)
+            {
+                Console.Error.WriteLine($"status: companion HID direct output active maxOutput={device.GetMaxOutputReportLength()}");
+            }
         }
         catch (Exception error)
         {
             hidStream = null;
-            Console.Error.WriteLine($"status: companion HID direct output unavailable: {error.Message}; using stdout frame transport");
+            if (AudioConstants.DiagnosticsEnabled)
+            {
+                Console.Error.WriteLine($"status: companion HID direct output unavailable: {error.Message}; using stdout frame transport");
+            }
         }
     }
 
@@ -361,7 +306,10 @@ sealed class HostAudioHelper : IDisposable
                 var alias = FindKnownBridgeEndpoint(devices);
                 if (alias is not null)
                 {
-                    Console.Error.WriteLine($"status: endpoint alias '{alias.FriendlyName}' matched for '{deviceName}'");
+                    if (AudioConstants.DiagnosticsEnabled)
+                    {
+                        Console.Error.WriteLine($"status: endpoint alias '{alias.FriendlyName}' matched for '{deviceName}'");
+                    }
                     return alias;
                 }
             }
@@ -406,7 +354,10 @@ sealed class HostAudioHelper : IDisposable
                 var alias = FindKnownBridgeEndpoint(devices);
                 if (alias is not null)
                 {
-                    Console.Error.WriteLine($"status: capture endpoint alias '{alias.FriendlyName}' matched for '{deviceName}'");
+                    if (AudioConstants.DiagnosticsEnabled)
+                    {
+                        Console.Error.WriteLine($"status: capture endpoint alias '{alias.FriendlyName}' matched for '{deviceName}'");
+                    }
                     return alias;
                 }
             }
@@ -491,22 +442,25 @@ sealed class HostAudioHelper : IDisposable
         var bytesPerSample = Math.Max(1, format.BitsPerSample / 8);
         var frameBytes = Math.Max(1, channels * bytesPerSample);
         var frameCount = eventArgs.BytesRecorded / frameBytes;
-        Interlocked.Increment(ref micCallbacks);
-        Interlocked.Add(ref micCapturedFrames, frameCount);
+        if (AudioConstants.DiagnosticsEnabled)
+        {
+            Interlocked.Increment(ref micCallbacks);
+            Interlocked.Add(ref micCapturedFrames, frameCount);
 
-        var peak = 0;
-        for (var frame = 0; frame < frameCount; frame++)
-        {
-            var offset = frame * frameBytes;
-            for (var channel = 0; channel < channels; channel++)
+            var peak = 0;
+            for (var frame = 0; frame < frameCount; frame++)
             {
-                var sample = Math.Abs(ReadSample(eventArgs.Buffer, eventArgs.BytesRecorded, offset + channel * bytesPerSample, format));
-                peak = Math.Max(peak, (int)Math.Round(sample * 1000));
+                var offset = frame * frameBytes;
+                for (var channel = 0; channel < channels; channel++)
+                {
+                    var sample = Math.Abs(ReadSample(eventArgs.Buffer, eventArgs.BytesRecorded, offset + channel * bytesPerSample, format));
+                    peak = Math.Max(peak, (int)Math.Round(sample * 1000));
+                }
             }
-        }
-        if (peak > micPeakPermille)
-        {
-            Interlocked.Exchange(ref micPeakPermille, peak);
+            if (peak > micPeakPermille)
+            {
+                Interlocked.Exchange(ref micPeakPermille, peak);
+            }
         }
     }
 
@@ -517,8 +471,11 @@ sealed class HostAudioHelper : IDisposable
         var frameBytes = channels * bytesPerSample;
         var frameCount = byteCount / frameBytes;
         var outputPerInput = AudioConstants.TargetSampleRate / (double)format.SampleRate;
-        capturedCallbacks++;
-        capturedFrames += frameCount;
+        if (AudioConstants.DiagnosticsEnabled)
+        {
+            capturedCallbacks++;
+            capturedFrames += frameCount;
+        }
 
         for (var frame = 0; frame < frameCount; frame++)
         {
@@ -527,10 +484,13 @@ sealed class HostAudioHelper : IDisposable
             var right = channels > 1 ? ReadSample(buffer, byteCount, offset + bytesPerSample, format) : left;
             var hapticLeft = channels > 2 ? ReadSample(buffer, byteCount, offset + bytesPerSample * 2, format) : 0;
             var hapticRight = channels > 3 ? ReadSample(buffer, byteCount, offset + bytesPerSample * 3, format) : hapticLeft;
-            var peak = (int)Math.Round(Math.Max(Math.Abs(left), Math.Abs(right)) * 1000);
-            if (peak > peakSamplePermille)
+            if (AudioConstants.DiagnosticsEnabled)
             {
-                Interlocked.Exchange(ref peakSamplePermille, peak);
+                var peak = (int)Math.Round(Math.Max(Math.Abs(left), Math.Abs(right)) * 1000);
+                if (peak > peakSamplePermille)
+                {
+                    Interlocked.Exchange(ref peakSamplePermille, peak);
+                }
             }
 
             resampleCredit += outputPerInput;
@@ -544,6 +504,11 @@ sealed class HostAudioHelper : IDisposable
 
     private void NoteCaptureCallback(int bytesRecorded)
     {
+        if (!AudioConstants.DiagnosticsEnabled)
+        {
+            return;
+        }
+
         var nowTicks = Stopwatch.GetTimestamp();
         var previousTicks = Interlocked.Exchange(ref lastCaptureCallbackTicks, nowTicks);
         if (previousTicks == 0)
@@ -618,7 +583,10 @@ sealed class HostAudioHelper : IDisposable
     {
         ResampleSpeakerBlock();
         var encodedBytes = encoder.Encode(speakerPcm, 0, AudioConstants.OpusFrameSamples, opusScratch, 0, AudioConstants.OpusPacketBytes);
-        encodedReports++;
+        if (AudioConstants.DiagnosticsEnabled)
+        {
+            encodedReports++;
+        }
         BuildReport(report, opusScratch, encodedBytes, hasHaptics, hapticLeftBlock, hapticRightBlock);
         var frame = new byte[AudioConstants.CompactFrameBytes];
         Buffer.BlockCopy(report, 0, frame, 0, frame.Length);
@@ -628,12 +596,18 @@ sealed class HostAudioHelper : IDisposable
             {
                 break;
             }
-            droppedReports++;
+            if (AudioConstants.DiagnosticsEnabled)
+            {
+                droppedReports++;
+            }
         }
         if (!reportQueue.TryAdd(frame))
         {
             _ = reportQueue.TryTake(out _);
-            droppedReports++;
+            if (AudioConstants.DiagnosticsEnabled)
+            {
+                droppedReports++;
+            }
             _ = reportQueue.TryAdd(frame);
         }
     }
@@ -681,11 +655,6 @@ sealed class HostAudioHelper : IDisposable
         {
             Volatile.Write(ref targetSpeakerGainPermille, VolumePercentToPermille(speakerVolumePercent));
             return;
-        }
-
-        if (parts.Length == 1 && string.Equals(parts[0], "warm-speaker", StringComparison.OrdinalIgnoreCase))
-        {
-            StartSpeakerWarmup();
         }
     }
 
@@ -748,23 +717,26 @@ sealed class HostAudioHelper : IDisposable
                     WaitUntil(stopwatch, nextWriteTicks);
                 }
 
-                var lateTicks = Math.Max(0, stopwatch.ElapsedTicks - nextWriteTicks);
-                if (lateTicks > 0)
+                if (AudioConstants.DiagnosticsEnabled)
                 {
-                    var lateUs = lateTicks * 1000000 / Stopwatch.Frequency;
-                    if (lateUs > 500)
+                    var lateTicks = Math.Max(0, stopwatch.ElapsedTicks - nextWriteTicks);
+                    if (lateTicks > 0)
                     {
-                        writeLateEvents++;
-                        if (lateUs > maxWriteLateUs)
+                        var lateUs = lateTicks * 1000000 / Stopwatch.Frequency;
+                        if (lateUs > 500)
                         {
-                            maxWriteLateUs = lateUs;
+                            writeLateEvents++;
+                            if (lateUs > maxWriteLateUs)
+                            {
+                                maxWriteLateUs = lateUs;
+                            }
                         }
-                    }
-                    if (lateUs > AudioConstants.WriterScheduleLateWarningUs)
-                    {
-                        Interlocked.Increment(ref writerScheduleLateEvents);
-                        UpdateMax(ref writerScheduleLateMaxUs, lateUs);
-                        LogHelperEvent("writer-schedule-late", $"lateUs={lateUs}");
+                        if (lateUs > AudioConstants.WriterScheduleLateWarningUs)
+                        {
+                            Interlocked.Increment(ref writerScheduleLateEvents);
+                            UpdateMax(ref writerScheduleLateMaxUs, lateUs);
+                            LogHelperEvent("writer-schedule-late", $"lateUs={lateUs}");
+                        }
                     }
                 }
 
@@ -779,7 +751,10 @@ sealed class HostAudioHelper : IDisposable
                 {
                     WriteFrameToStdout(stdout, frame);
                 }
-                writtenReports++;
+                if (AudioConstants.DiagnosticsEnabled)
+                {
+                    writtenReports++;
+                }
                 nextWriteTicks += AudioConstants.FrameIntervalTicks;
             }
         }
@@ -840,7 +815,10 @@ sealed class HostAudioHelper : IDisposable
             {
                 return false;
             }
-            writtenFragments++;
+            if (AudioConstants.DiagnosticsEnabled)
+            {
+                writtenFragments++;
+            }
             fragmentIndex++;
         }
         return true;
@@ -856,6 +834,12 @@ sealed class HostAudioHelper : IDisposable
 
         try
         {
+            if (!AudioConstants.DiagnosticsEnabled)
+            {
+                stream.Write(report, 0, report.Length);
+                return true;
+            }
+
             var start = Stopwatch.GetTimestamp();
             stream.Write(report, 0, report.Length);
             var elapsedUs = (Stopwatch.GetTimestamp() - start) * 1000000 / Stopwatch.Frequency;
@@ -937,6 +921,11 @@ sealed class HostAudioHelper : IDisposable
 
     private void LogHelperEvent(string eventName, string details)
     {
+        if (!AudioConstants.DiagnosticsEnabled)
+        {
+            return;
+        }
+
         Console.Error.WriteLine(
             $"stage=helper-event {eventName} {details} queuedReports={reportQueue.Count} callbacks={Interlocked.Read(ref capturedCallbacks)} capturedFrames={Interlocked.Read(ref capturedFrames)} encodedReports={Interlocked.Read(ref encodedReports)} writtenReports={Interlocked.Read(ref writtenReports)} writtenFragments={Interlocked.Read(ref writtenFragments)}");
     }
@@ -966,32 +955,6 @@ sealed class HostAudioHelper : IDisposable
     private static byte FloatToInt8(float sample)
     {
         return unchecked((byte)(sbyte)Math.Round(Math.Clamp(sample, -1, 1) * sbyte.MaxValue));
-    }
-}
-
-sealed class TimedSilenceWaveProvider : IWaveProvider
-{
-    private int remainingBytes;
-
-    public TimedSilenceWaveProvider(WaveFormat waveFormat, int durationMilliseconds)
-    {
-        WaveFormat = waveFormat;
-        remainingBytes = waveFormat.AverageBytesPerSecond * durationMilliseconds / 1000;
-    }
-
-    public WaveFormat WaveFormat { get; }
-
-    public int Read(byte[] buffer, int offset, int count)
-    {
-        if (remainingBytes <= 0)
-        {
-            return 0;
-        }
-
-        var bytesToWrite = Math.Min(count, remainingBytes);
-        Array.Clear(buffer, offset, bytesToWrite);
-        remainingBytes -= bytesToWrite;
-        return bytesToWrite;
     }
 }
 

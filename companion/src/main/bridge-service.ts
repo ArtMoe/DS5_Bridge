@@ -51,8 +51,8 @@ const HOST_AUDIO_ACTIVE_POLL_INTERVAL_MS = 5000;
 const HOST_AUDIO_STATUS_READ_INTERVAL_MS = 500;
 const HOST_AUDIO_HELPER_STATUS_READ_INTERVAL_MS = 5000;
 const AUDIO_DEBUG_READ_INTERVAL_MS = 500;
+const AUDIO_DEBUG_DIAGNOSTICS_ENABLED = false;
 const HOST_AUDIO_MAX_QUEUED_FRAMES = 2;
-const HOST_AUDIO_START_FADE_MS = 40;
 const HOST_AUDIO_STOP_FADE_MS = 40;
 const LOW_BATTERY_PERCENT = 20;
 const AUDIO_DEBUG_LOG_LINE_LIMIT = 300;
@@ -352,6 +352,10 @@ function formatAudioDebugEvent(event: AudioDebugEventPayload): string {
     case AUDIO_DEBUG_EVENT.HOST_MODE:
       return `${prefix} [HostPico] MODE runtime=${arg0} reason=${arg1} generation=${arg2}`;
     case AUDIO_DEBUG_EVENT.HOST_FRAME:
+      if (arg0 === 0xfe || arg0 === 0xfd) {
+        const transport = arg0 === 0xfe ? 'fast' : 'chunked';
+        return `${prefix} [HostPico] FRAME incomplete-${transport} sequence=${arg1} mask=${hexByte(arg2)} chunks=${arg3} expected=${limitedByte(arg4)}`;
+      }
       return `${prefix} [HostPico] FRAME submitted audio_fifo=${arg0} received=${arg1} generation=${arg2} packet=${arg3} reportSeq=${arg4}`;
     case AUDIO_DEBUG_EVENT.MIC_PACKET:
       return formatMicDebugEvent(prefix, event.args);
@@ -509,6 +513,9 @@ export class BridgeService extends EventEmitter {
   }
 
   private appendAudioDebugLines(lines: string[]): void {
+    if (!AUDIO_DEBUG_DIAGNOSTICS_ENABLED) {
+      return;
+    }
     if (lines.length === 0) {
       return;
     }
@@ -524,6 +531,9 @@ export class BridgeService extends EventEmitter {
   }
 
   private readAudioDebugEvents(): void {
+    if (!AUDIO_DEBUG_DIAGNOSTICS_ENABLED) {
+      return;
+    }
     if (!this.device) {
       return;
     }
@@ -538,6 +548,9 @@ export class BridgeService extends EventEmitter {
   }
 
   private readAudioDebugStats(): void {
+    if (!AUDIO_DEBUG_DIAGNOSTICS_ENABLED) {
+      return;
+    }
     if (!this.device) {
       return;
     }
@@ -556,6 +569,9 @@ export class BridgeService extends EventEmitter {
   }
 
   private readAudioDebugThrottled(force = false): void {
+    if (!AUDIO_DEBUG_DIAGNOSTICS_ENABLED) {
+      return;
+    }
     const now = Date.now();
     if (!force && now - this.lastAudioDebugReadAt < AUDIO_DEBUG_READ_INTERVAL_MS) {
       return;
@@ -743,9 +759,6 @@ export class BridgeService extends EventEmitter {
     this.sendHostAudioStreamReport(
       nextEnabled ? HOST_AUDIO_PACKET_TYPE.SET_DUPLEX_ENABLED : HOST_AUDIO_PACKET_TYPE.SET_DUPLEX_DISABLED
     );
-    if (nextEnabled) {
-      this.hostAudioEngine.warmSpeakerRoute();
-    }
     this.snapshot.settings = this.settingsStore.update(customSettingUpdate({
       duplexMicEnabled: nextEnabled,
       micMuted: !nextEnabled
@@ -1074,6 +1087,9 @@ export class BridgeService extends EventEmitter {
   }
 
   private logHostAudioStage(stage: string): void {
+    if (!AUDIO_DEBUG_DIAGNOSTICS_ENABLED) {
+      return;
+    }
     const now = Date.now();
     if (stage !== 'write-failed' && now - this.lastHostAudioStageLogAt < 1000) {
       return;
@@ -1103,11 +1119,6 @@ export class BridgeService extends EventEmitter {
     this.clearHostAudioReportQueue();
     await this.sendCommand(COMMAND_ID.SET_HOST_AUDIO_ENABLED, 1, { expectSettingsRevisionChange });
     this.hostAudioCommandActive = true;
-    await this.hostAudioEngine.start(this.devicePath, 0);
-    if (duplexEnabled) {
-      this.hostAudioEngine.warmSpeakerRoute();
-    }
-    await delay(HOST_AUDIO_START_FADE_MS);
     await this.sendCommand(COMMAND_ID.START_HOST_AUDIO, 0, { throwOnCommandError: false });
     await this.sendCommand(COMMAND_ID.SET_DUPLEX_ENABLED, duplexEnabled ? 1 : 0, { throwOnCommandError: false });
     await this.sendCommand(COMMAND_ID.HOST_AUDIO_HEARTBEAT, 0, { throwOnCommandError: false });
@@ -1116,7 +1127,7 @@ export class BridgeService extends EventEmitter {
       duplexEnabled ? HOST_AUDIO_PACKET_TYPE.SET_DUPLEX_ENABLED : HOST_AUDIO_PACKET_TYPE.SET_DUPLEX_DISABLED
     );
     this.sendHostAudioStreamReport(HOST_AUDIO_PACKET_TYPE.HEARTBEAT);
-    this.hostAudioEngine.setSpeakerVolumePercent(speakerVolumePercent);
+    await this.hostAudioEngine.start(this.devicePath, speakerVolumePercent);
     this.readHostAudioStatus();
   }
 
@@ -1183,15 +1194,12 @@ export class BridgeService extends EventEmitter {
       if (!this.hostAudioCommandActive || (!helperWasActive && this.hostAudioStatus?.streamActive === false)) {
         await this.sendCommand(COMMAND_ID.SET_HOST_AUDIO_ENABLED, 1, { throwOnCommandError: false });
         this.hostAudioCommandActive = true;
-        await this.updateHostAudioEngine();
         await this.sendCommand(COMMAND_ID.START_HOST_AUDIO, 0, { throwOnCommandError: false });
         await this.sendCommand(COMMAND_ID.SET_DUPLEX_ENABLED, settings.duplexMicEnabled ? 1 : 0, { throwOnCommandError: false });
+        await this.updateHostAudioEngine();
         this.readHostAudioStatus();
       } else {
         await this.updateHostAudioEngine();
-      }
-      if (settings.duplexMicEnabled && !helperWasActive && this.hostAudioEngine.isActive()) {
-        this.hostAudioEngine.warmSpeakerRoute();
       }
       const helperIsActive = this.hostAudioEngine.isActive();
       if (!helperIsActive && !this.sendHostAudioStreamReport(HOST_AUDIO_PACKET_TYPE.HEARTBEAT)) {

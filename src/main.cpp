@@ -36,6 +36,11 @@ static uint32_t last_input_debug_us = 0;
 static uint8_t input_debug_burst_remaining = 0;
 
 static void note_usb_input_report(uint8_t const *report, uint16_t len) {
+#if !DS5_AUDIO_DEBUG_ENABLED
+    (void)report;
+    (void)len;
+    return;
+#else
     const uint32_t now = time_us_32();
     if (last_input_debug_us == 0 || static_cast<uint32_t>(now - last_input_debug_us) > 250000) {
         input_debug_burst_remaining = 8;
@@ -52,6 +57,7 @@ static void note_usb_input_report(uint8_t const *report, uint16_t len) {
         len,
         len > 7 && report != nullptr ? report[7] : 0
     );
+#endif
 }
 
 static uint8_t companion_haptics_gain_percent() {

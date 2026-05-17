@@ -8,6 +8,10 @@
 
 #include <cstdint>
 
+#ifndef DS5_AUDIO_DEBUG_ENABLED
+#define DS5_AUDIO_DEBUG_ENABLED 0
+#endif
+
 enum AudioRuntimeMode : uint8_t {
     AudioRuntimeFallbackPicoLocal = 0,
     AudioRuntimeHostEncodedActive = 1,

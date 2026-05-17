@@ -80,6 +80,7 @@ class MockHidDevice {
   audioDebugReports: number[][] = [];
   audioStatsReports: number[][] = [];
   hostAudioStatusReports: number[][] = [];
+  featureReportIds: number[] = [];
   sentReports: number[][] = [];
   outReports: number[][] = [];
   ackResults: number[] = [];
@@ -88,6 +89,7 @@ class MockHidDevice {
 
   getFeatureReport(reportId: number, length: number): number[] {
     expect(length).toBe(REPORT_LENGTH);
+    this.featureReportIds.push(reportId);
     if (reportId === REPORT_ID.STATUS) {
       return [...this.status];
     }
@@ -387,7 +389,7 @@ describe('BridgeService', () => {
     expect(service.getSnapshot().message).toBe('Companion firmware required');
   });
 
-  it('copies audio debug events into diagnostics without writing a host log file', async () => {
+  it('keeps audio debug diagnostics disabled during normal polling', async () => {
     const fixture = createService();
     tempDirs.push(fixture.tempDir);
     const device = new MockHidDevice();
@@ -411,12 +413,12 @@ describe('BridgeService', () => {
     await poll(fixture.service);
 
     const snapshot = fixture.service.getSnapshot();
-    expect(snapshot.diagnostics.audioDebugDroppedCount).toBe(3);
+    expect(snapshot.diagnostics.audioDebugDroppedCount).toBe(0);
     expect(snapshot.diagnostics.audioDebugLogPath).toBeNull();
-    expect(snapshot.diagnostics.audioDebugStats?.usbAudioGapMaxUs).toBe(2100);
-    expect(snapshot.diagnostics.audioDebugStats?.audio0x36SendGapMaxUs).toBe(13000);
-    expect(snapshot.diagnostics.audioDebugLogLines.some((line) => line.includes('[Audio] RESET: gap detected'))).toBe(true);
-    expect(snapshot.diagnostics.audioDebugLogLines.some((line) => line.includes('audio_fifo=1 opus_ready=2'))).toBe(true);
+    expect(snapshot.diagnostics.audioDebugStats).toBeNull();
+    expect(snapshot.diagnostics.audioDebugLogLines).toEqual([]);
+    expect(device.featureReportIds).not.toContain(REPORT_ID.AUDIO_DEBUG);
+    expect(device.featureReportIds).not.toContain(REPORT_ID.AUDIO_STATS);
     expect(existsSync(path.join(fixture.tempDir, 'logs'))).toBe(false);
   });
 

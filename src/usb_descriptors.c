@@ -28,9 +28,13 @@
 
 extern uint8_t usb_hid_polling_interval_ms_value;
 
+#ifndef DS5_AUDIO_DEBUG_ENABLED
+#define DS5_AUDIO_DEBUG_ENABLED 0
+#endif
+
 #define CONFIG_TOTAL_LEN_STANDARD 0x00E3
 #define CONFIG_TOTAL_LEN_COMPANION 0x011C
-#ifdef DS5_ENABLE_AUDIO_DEBUG_REPORTS
+#if DS5_AUDIO_DEBUG_ENABLED
 #define COMPANION_HID_REPORT_DESC_LEN 0x0050
 #else
 #define COMPANION_HID_REPORT_DESC_LEN 0x0040
@@ -611,7 +615,7 @@ uint8_t const desc_hid_report_companion[] = {
     0x09, 0x08, //   Usage (Host Audio Status)
     0x95, 0x3F, //   Report Count (63)
     0xB1, 0x02, //   Feature (Data,Var,Abs)
-#ifdef DS5_ENABLE_AUDIO_DEBUG_REPORTS
+#if DS5_AUDIO_DEBUG_ENABLED
     0x85, 0x05, //   Report ID (5)
     0x09, 0x05, //   Usage (Audio Debug)
     0x95, 0x3F, //   Report Count (63)
