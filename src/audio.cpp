@@ -389,16 +389,16 @@ void audio_set_lightbar_state(uint8_t red, uint8_t green, uint8_t blue, uint8_t 
 void set_headset(bool state) {
     const bool first_report_after_connect = !controller_state_ready;
     controller_state_ready = true;
-    if (first_report_after_connect && host_audio_requested) {
-        schedule_host_route_primer();
-    }
     if (plug_headset == state) {
+        if (first_report_after_connect && host_audio_requested) {
+            schedule_host_route_primer();
+        }
         return;
     }
 
     plug_headset = state;
     if (speaker_route_active && speaker_route_headset != plug_headset) {
-        bt_set_speaker_output_enabled(true, plug_headset);
+        bt_rearm_speaker_output_route(plug_headset);
         speaker_route_headset = plug_headset;
         audio_debug_log(
             AudioDebugSpeakerRoute,
@@ -408,6 +408,9 @@ void set_headset(bool state) {
             plug_headset ? 1 : 0,
             1
         );
+    }
+    if (host_audio_requested) {
+        schedule_host_route_primer();
     }
 }
 
