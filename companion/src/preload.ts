@@ -53,6 +53,9 @@ const api = {
   ),
   setLedEnabled: (value: boolean): Promise<BridgeSnapshot> => ipcRenderer.invoke('bridge:setLedEnabled', value),
   setIdleDisconnectEnabled: (value: boolean): Promise<BridgeSnapshot> => ipcRenderer.invoke('bridge:setIdleDisconnectEnabled', value),
+  setIdleDisconnectTimeoutMinutes: (value: number): Promise<BridgeSnapshot> => (
+    ipcRenderer.invoke('bridge:setIdleDisconnectTimeoutMinutes', value)
+  ),
   setUsbSuspendDisconnectEnabled: (value: boolean): Promise<BridgeSnapshot> => (
     ipcRenderer.invoke('bridge:setUsbSuspendDisconnectEnabled', value)
   ),

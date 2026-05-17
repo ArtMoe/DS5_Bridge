@@ -34,6 +34,7 @@ export interface CompanionSettings {
   muteKeyboardBehavior: MuteKeyboardBehavior;
   ledEnabled: boolean;
   idleDisconnectEnabled: boolean;
+  idleDisconnectTimeoutMinutes: number;
   usbSuspendDisconnectEnabled: boolean;
   sleepKeybindEnabled: boolean;
   pollingRateMode: PollingRateMode;

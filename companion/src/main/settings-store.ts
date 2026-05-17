@@ -28,6 +28,7 @@ export const DEFAULT_SETTINGS: CompanionSettings = {
   muteKeyboardBehavior: 'tap',
   ledEnabled: true,
   idleDisconnectEnabled: true,
+  idleDisconnectTimeoutMinutes: 15,
   usbSuspendDisconnectEnabled: true,
   sleepKeybindEnabled: false,
   pollingRateMode: '1000',
@@ -130,6 +131,9 @@ function normalizeSettings(value: Partial<CompanionSettings> | null | undefined)
     idleDisconnectEnabled: typeof value?.idleDisconnectEnabled === 'boolean'
       ? value.idleDisconnectEnabled
       : DEFAULT_SETTINGS.idleDisconnectEnabled,
+    idleDisconnectTimeoutMinutes: Number.isFinite(value?.idleDisconnectTimeoutMinutes)
+      ? Math.max(1, Math.min(120, Math.round(value!.idleDisconnectTimeoutMinutes!)))
+      : DEFAULT_SETTINGS.idleDisconnectTimeoutMinutes,
     usbSuspendDisconnectEnabled: typeof value?.usbSuspendDisconnectEnabled === 'boolean'
       ? value.usbSuspendDisconnectEnabled
       : DEFAULT_SETTINGS.usbSuspendDisconnectEnabled,

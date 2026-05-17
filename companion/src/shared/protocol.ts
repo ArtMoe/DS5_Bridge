@@ -69,7 +69,8 @@ export const COMMAND_ID = {
   STOP_HOST_AUDIO: 0x18,
   SET_DUPLEX_ENABLED: 0x19,
   SET_MIC_VOLUME: 0x1A,
-  SET_MIC_MUTE: 0x1B
+  SET_MIC_MUTE: 0x1B,
+  SET_IDLE_DISCONNECT_TIMEOUT: 0x1C
 } as const;
 
 export const HOST_AUDIO_PACKET_TYPE = {
@@ -167,10 +168,10 @@ export interface BridgeStatusPayload {
     lastHostOutputLength: number;
     lastHostOutputReportId: number;
     lastHostOutputCount: number;
-    lastHostOutputFirst16: number[];
   };
   ledEnabled: boolean;
   idleDisconnectEnabled: boolean;
+  idleDisconnectTimeoutMinutes: number;
   usbSuspendDisconnectEnabled: boolean;
   sleepKeybindEnabled: boolean;
   settingsRevision: number;
@@ -391,9 +392,9 @@ export function parseStatusReport(report: ArrayLike<number>): BridgeStatusPayloa
       usbHostMicMute: report[38] !== 0,
       lastHostOutputLength: report[39],
       lastHostOutputReportId: report[40],
-      lastHostOutputCount: readU16(report, 41),
-      lastHostOutputFirst16: Array.from({ length: 16 }, (_, index) => report[43 + index])
+      lastHostOutputCount: readU16(report, 41)
     },
+    idleDisconnectTimeoutMinutes: readU16(report, 43),
     ledEnabled: report[15] === 1,
     idleDisconnectEnabled: report[16] === 1,
     usbSuspendDisconnectEnabled: (statusFlags & 0x10) !== 0,

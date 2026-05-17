@@ -76,7 +76,9 @@
 #define CONTROL_SEND_HEADSET_AUDIO_IDLE_US 20000
 #define CYW43_POWER_CYCLE_HOLD_MS 750
 #define CONTROLLER_DISCONNECT_REBOOT_DELAY_MS 25
-#define IDLE_DISCONNECT_TIMEOUT_US (30ULL * 60ULL * 1000ULL * 1000ULL)
+#define DEFAULT_IDLE_DISCONNECT_TIMEOUT_MINUTES 15
+#define MIN_IDLE_DISCONNECT_TIMEOUT_MINUTES 1
+#define MAX_IDLE_DISCONNECT_TIMEOUT_MINUTES 120
 #define OUTPUT_PAYLOAD_VALID_FLAG0_OFFSET 0
 #define OUTPUT_PAYLOAD_VALID_FLAG1_OFFSET 1
 #define OUTPUT_PAYLOAD_MOTOR_RIGHT_OFFSET 2
@@ -208,6 +210,7 @@ static uint8_t last_classified_critical_report[DS_OUTPUT_REPORT_BT_SIZE];
 static bool last_classified_critical_report_valid = false;
 static critical_section_t queue_lock;
 uint32_t inactive_time = 0; // Tracks long controller inactivity.
+static uint16_t idle_disconnect_timeout_minutes = DEFAULT_IDLE_DISCONNECT_TIMEOUT_MINUTES;
 static uint8_t saved_lightbar_red = 0xff;
 static uint8_t saved_lightbar_green = 0xd7;
 static uint8_t saved_lightbar_blue = 0x00;
@@ -703,6 +706,22 @@ bool bt_disconnect() {
     return true;
 }
 
+bool bt_set_idle_disconnect_timeout_minutes(uint16_t minutes) {
+    if (
+        minutes < MIN_IDLE_DISCONNECT_TIMEOUT_MINUTES
+        || minutes > MAX_IDLE_DISCONNECT_TIMEOUT_MINUTES
+    ) {
+        return false;
+    }
+    idle_disconnect_timeout_minutes = minutes;
+    inactive_time = time_us_32();
+    return true;
+}
+
+uint16_t bt_idle_disconnect_timeout_minutes() {
+    return idle_disconnect_timeout_minutes;
+}
+
 void bt_l2cap_init() {
     l2cap_event_callback_registration.callback = &l2cap_packet_handler;
     l2cap_add_event_handler(&l2cap_event_callback_registration);
@@ -1081,6 +1100,23 @@ static bool select_next_control_packet_locked(control_packet &packet, uint32_t n
     return true;
 }
 
+static bool controller_input_report_is_active(uint8_t const *packet, uint16_t size) {
+    if (packet == nullptr || size <= 12 || packet[1] != 0x31 || (packet[2] & 0x02) != 0) {
+        return false;
+    }
+    return packet[3] < 120 || packet[3] > 140
+        || packet[4] < 120 || packet[4] > 140
+        || packet[5] < 120 || packet[5] > 140
+        || packet[6] < 120 || packet[6] > 140
+        || packet[7] > 0 || packet[8] > 0
+        || packet[10] != 0x08 || packet[11] != 0x00
+        || packet[12] != 0x00;
+}
+
+static uint64_t idle_disconnect_timeout_us() {
+    return static_cast<uint64_t>(idle_disconnect_timeout_minutes) * 60ULL * 1000ULL * 1000ULL;
+}
+
 static void l2cap_packet_handler(uint8_t packet_type, uint16_t channel, uint8_t *packet, uint16_t size) {
     (void) channel;
 
@@ -1094,9 +1130,9 @@ static void l2cap_packet_handler(uint8_t packet_type, uint16_t channel, uint8_t 
             if (mute[1]) { // Microphone mute is enabled.
                 return;
             }
-            if (packet[3] < 120 || packet[3] > 140) {
+            if (controller_input_report_is_active(packet, size)) {
                 inactive_time = time_us_32();
-            } else if (static_cast<uint64_t>(time_us_32() - inactive_time) > IDLE_DISCONNECT_TIMEOUT_US) {
+            } else if (static_cast<uint64_t>(time_us_32() - inactive_time) > idle_disconnect_timeout_us()) {
                 DS5_LOG("disconnect when inactive\n");
                 inactive_time = time_us_32();
                 bt_disconnect();

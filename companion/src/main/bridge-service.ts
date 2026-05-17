@@ -63,6 +63,8 @@ const LOW_BATTERY_PERCENT = 20;
 const AUDIO_DEBUG_LOG_LINE_LIMIT = 300;
 const STARTUP_REAPPLY_MIN_SETTLE_MS = 0;
 const STARTUP_REAPPLY_RETRY_DELAYS_MS = [250, 650, 1300] as const;
+const MIN_IDLE_DISCONNECT_TIMEOUT_MINUTES = 1;
+const MAX_IDLE_DISCONNECT_TIMEOUT_MINUTES = 120;
 const SONY_VENDOR_ID = 0x054c;
 const DUALSENSE_PRODUCT_IDS = new Set([0x0ce6, 0x0df2]);
 type HidDevice = HID.Device;
@@ -211,6 +213,13 @@ function normalizePollingRateMode(mode: PollingRateMode): PollingRateMode {
     return mode;
   }
   return '1000';
+}
+
+function normalizeIdleDisconnectTimeoutMinutes(minutes: number): number {
+  return Math.max(
+    MIN_IDLE_DISCONNECT_TIMEOUT_MINUTES,
+    Math.min(MAX_IDLE_DISCONNECT_TIMEOUT_MINUTES, Math.round(minutes))
+  );
 }
 
 function customSettingUpdate(update: Partial<CompanionSettings>): Partial<CompanionSettings> {
@@ -877,6 +886,14 @@ export class BridgeService extends EventEmitter {
     return this.getSnapshot();
   }
 
+  async setIdleDisconnectTimeoutMinutes(minutes: number): Promise<BridgeSnapshot> {
+    const value = normalizeIdleDisconnectTimeoutMinutes(minutes);
+    await this.sendSettingCommand(COMMAND_ID.SET_IDLE_DISCONNECT_TIMEOUT, value, {
+      idleDisconnectTimeoutMinutes: value
+    });
+    return this.getSnapshot();
+  }
+
   async setUsbSuspendDisconnectEnabled(enabled: boolean): Promise<BridgeSnapshot> {
     await this.sendSettingCommand(COMMAND_ID.SET_USB_SUSPEND_DISCONNECT_ENABLED, enabled ? 1 : 0, {
       usbSuspendDisconnectEnabled: enabled
@@ -1329,7 +1346,10 @@ export class BridgeService extends EventEmitter {
       state: 'connected',
       message: 'Companion firmware connected',
       status,
-      settings: this.settingsStore.get(),
+      settings: {
+        ...this.settingsStore.get(),
+        idleDisconnectTimeoutMinutes: status.idleDisconnectTimeoutMinutes
+      },
       diagnostics: this.withAudioDebugDiagnostics({
         hidPath: this.devicePath,
         protocolVersion: status.protocolVersion,
@@ -1512,6 +1532,9 @@ export class BridgeService extends EventEmitter {
       expectSettingsRevisionChange
     });
     await this.sendCommand(COMMAND_ID.SET_IDLE_DISCONNECT_ENABLED, settings.idleDisconnectEnabled ? 1 : 0, {
+      expectSettingsRevisionChange
+    });
+    await this.sendCommand(COMMAND_ID.SET_IDLE_DISCONNECT_TIMEOUT, settings.idleDisconnectTimeoutMinutes, {
       expectSettingsRevisionChange
     });
     await this.sendCommand(

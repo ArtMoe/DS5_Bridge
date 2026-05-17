@@ -1341,8 +1341,7 @@ export function App() {
       `usbHostMicMute=${debug.usbHostMicMute ? 'true' : 'false'}`,
       `audioRepairCount=${debug.lastHostOutputCount}`,
       `lastAudioRepairReportId=0x${hexByte(debug.lastHostOutputReportId)}`,
-      `lastAudioRepairLength=${debug.lastHostOutputLength}`,
-      `lastAudioRepairFirst16=${debug.lastHostOutputFirst16.map(hexByte).join(' ')}`
+      `lastAudioRepairLength=${debug.lastHostOutputLength}`
     ];
     if (host) {
       lines.push(

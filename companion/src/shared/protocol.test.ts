@@ -41,6 +41,11 @@ function writeU32(report: number[], offset: number, value: number): void {
   report[offset + 3] = (value >> 24) & 0xff;
 }
 
+function writeU16(report: number[], offset: number, value: number): void {
+  report[offset] = value & 0xff;
+  report[offset + 1] = (value >> 8) & 0xff;
+}
+
 describe('companion protocol', () => {
   it('parses a status report', () => {
     const report = baseReport(REPORT_ID.STATUS);
@@ -57,6 +62,7 @@ describe('companion protocol', () => {
     report[26] = 5;
     report[27] = 15;
     report[28] = 0xff;
+    writeU16(report, 43, 45);
     report[60] = 1;
     report[61] = 0x68;
     report[62] = 0x82;
@@ -79,6 +85,7 @@ describe('companion protocol', () => {
     expect(status.usbSuspendDisconnectEnabled).toBe(true);
     expect(status.sleepKeybindEnabled).toBe(true);
     expect(status.testAdaptiveTriggersBusy).toBe(true);
+    expect(status.idleDisconnectTimeoutMinutes).toBe(45);
     expect(status.muteButtonMode).toBe('keyboard');
     expect(status.muteKeyboardUsage).toBe(0x68);
     expect(status.muteKeyboardModifiers).toBe(0x02);
@@ -190,6 +197,13 @@ describe('companion protocol', () => {
     expect(report[7]).toBe(COMMAND_ID.SET_USB_SUSPEND_DISCONNECT_ENABLED);
     expect(report[8]).toBe(5);
     expect(report[9]).toBe(1);
+  });
+
+  it('builds an idle disconnect timeout command report', () => {
+    const report = buildCommandReport(COMMAND_ID.SET_IDLE_DISCONNECT_TIMEOUT, 6, 15);
+    expect(report[7]).toBe(COMMAND_ID.SET_IDLE_DISCONNECT_TIMEOUT);
+    expect(report[8]).toBe(6);
+    expect(report[9]).toBe(15);
   });
 
   it('builds sleep controller command reports', () => {

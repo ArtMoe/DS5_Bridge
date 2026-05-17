@@ -72,6 +72,7 @@ enum CommandId : uint8_t {
     CommandSetDuplexEnabled = 0x19,
     CommandSetMicVolume = 0x1A,
     CommandSetMicMute = 0x1B,
+    CommandSetIdleDisconnectTimeout = 0x1C,
 };
 
 enum AckResult : uint8_t {
@@ -230,6 +231,7 @@ void restore_defaults() {
     set_lightbar_color(0xff, 0xd7, 0x00, 100);
     set_led_enabled(true);
     set_idle_disconnect_enabled(true);
+    bt_set_idle_disconnect_timeout_minutes(15);
     usb_set_suspend_disconnect_enabled(true);
     usb_set_hid_polling_rate_mode(2);
 }
@@ -513,7 +515,7 @@ uint16_t build_status(uint8_t *buffer, uint16_t reqlen) {
     buffer[38] = host_output_report_len;
     buffer[39] = host_output_report_id;
     write_u16(buffer + 40, host_output_report_count);
-    memcpy(buffer + 42, host_output_report_first16, sizeof(host_output_report_first16));
+    write_u16(buffer + 42, bt_idle_disconnect_timeout_minutes());
     buffer[58] = lightbar_override_enabled ? 1 : 0;
     buffer[59] = mute_button_mode;
     buffer[60] = mute_keyboard_usage;
@@ -830,6 +832,15 @@ void handle_command(uint8_t const *buffer, uint16_t bufsize) {
                 return;
             }
             set_idle_disconnect_enabled(value == 1);
+            settings_revision++;
+            set_ack(command_id, sequence, AckOk);
+            return;
+
+        case CommandSetIdleDisconnectTimeout:
+            if (!bt_set_idle_disconnect_timeout_minutes(static_cast<uint16_t>(value))) {
+                set_ack(command_id, sequence, AckInvalidValue);
+                return;
+            }
             settings_revision++;
             set_ack(command_id, sequence, AckOk);
             return;

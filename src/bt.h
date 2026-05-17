@@ -21,6 +21,8 @@ void bt_register_data_callback(bt_data_callback_t callback);
 bool bt_is_controller_connected();
 uint8_t bt_controller_type();
 bool bt_disconnect();
+bool bt_set_idle_disconnect_timeout_minutes(uint16_t minutes);
+uint16_t bt_idle_disconnect_timeout_minutes();
 void bt_write(uint8_t* data,uint16_t len);
 bool bt_write_classified_output(uint8_t* data,uint16_t len);
 bool bt_sanitize_host_speaker_amp_ownership(uint8_t* data,uint16_t len);

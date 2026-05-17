@@ -417,6 +417,9 @@ function registerIpc(service: BridgeService): void {
   ));
   ipcMain.handle('bridge:setLedEnabled', (_event, value: boolean) => service.setLedEnabled(value));
   ipcMain.handle('bridge:setIdleDisconnectEnabled', (_event, value: boolean) => service.setIdleDisconnectEnabled(value));
+  ipcMain.handle('bridge:setIdleDisconnectTimeoutMinutes', (_event, value: number) => (
+    service.setIdleDisconnectTimeoutMinutes(value)
+  ));
   ipcMain.handle('bridge:setUsbSuspendDisconnectEnabled', (_event, value: boolean) => (
     service.setUsbSuspendDisconnectEnabled(value)
   ));

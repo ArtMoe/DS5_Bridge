@@ -47,6 +47,7 @@ import { SettingsStore } from './settings-store';
 type StatusOverrides = {
   controllerConnected?: boolean;
   batteryPercent?: number;
+  idleDisconnectTimeoutMinutes?: number;
   settingsRevision?: number;
   uptimeSeconds?: number;
   protocolMajor?: number;
@@ -70,6 +71,7 @@ const FULL_REAPPLY_COMMANDS = [
   COMMAND_ID.SET_DUPLEX_ENABLED,
   COMMAND_ID.SET_LED_ENABLED,
   COMMAND_ID.SET_IDLE_DISCONNECT_ENABLED,
+  COMMAND_ID.SET_IDLE_DISCONNECT_TIMEOUT,
   COMMAND_ID.SET_USB_SUSPEND_DISCONNECT_ENABLED,
   COMMAND_ID.SET_SLEEP_KEYBIND_ENABLED,
   COMMAND_ID.SET_POLLING_RATE_MODE
@@ -201,6 +203,7 @@ function statusReport(overrides: StatusOverrides = {}): number[] {
   report[26] = 5;
   report[27] = 15;
   report[28] = overrides.firmwareFlags ?? 1;
+  writeU16(report, 43, overrides.idleDisconnectTimeoutMinutes ?? 15);
   return report;
 }
 
@@ -607,6 +610,22 @@ describe('BridgeService', () => {
     expect(command?.[7]).toBe(COMMAND_ID.SET_USB_SUSPEND_DISCONNECT_ENABLED);
     expect(command?.[9]).toBe(0);
     expect(snapshot.settings.usbSuspendDisconnectEnabled).toBe(false);
+  });
+
+  it('sends and stores idle disconnect timeout settings', async () => {
+    const service = serviceFixture();
+    const device = new MockHidDevice();
+    device.status = statusReport({ controllerConnected: false });
+    hidMock.state.devicesList = [companionDeviceInfo()];
+    hidMock.state.openDevices.set('companion-path', device);
+
+    await poll(service);
+    const snapshot = await service.setIdleDisconnectTimeoutMinutes(20);
+
+    const command = device.sentReports.at(-1);
+    expect(command?.[7]).toBe(COMMAND_ID.SET_IDLE_DISCONNECT_TIMEOUT);
+    expect(command?.[9]).toBe(20);
+    expect(snapshot.settings.idleDisconnectTimeoutMinutes).toBe(20);
   });
 
   it('sends and stores sleep keybind settings', async () => {
