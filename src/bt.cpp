@@ -1642,6 +1642,42 @@ static uint8_t classify_output_report(uint8_t const *data, uint16_t len) {
     return OutputReasonStateOnly;
 }
 
+static bool audio_output_route_protected() {
+    return audio_host_encoded_active()
+        || audio_recent()
+        || usb_speaker_streaming_active();
+}
+
+static bool output_report_has_state_flags(uint8_t const *data, uint16_t len) {
+    if (data == nullptr || len < 3 + DS_OUTPUT_REPORT_COMMON_SIZE) {
+        return false;
+    }
+    if (data[0] != DS_OUTPUT_REPORT_BT || data[2] != DS_OUTPUT_TAG) {
+        return false;
+    }
+
+    const uint8_t *payload = data + 3;
+    const uint8_t flag0 = payload[OUTPUT_PAYLOAD_VALID_FLAG0_OFFSET];
+    const uint8_t flag1 = payload[OUTPUT_PAYLOAD_VALID_FLAG1_OFFSET];
+    const uint8_t flag2 = payload[OUTPUT_PAYLOAD_VALID_FLAG2_OFFSET];
+    const uint8_t state_mask0 =
+        DS_OUTPUT_VALID_FLAG0_COMPATIBLE_VIBRATION
+        | DS_OUTPUT_VALID_FLAG0_HAPTICS_SELECT
+        | DS_OUTPUT_VALID_FLAG0_RIGHT_TRIGGER_EFFECT
+        | DS_OUTPUT_VALID_FLAG0_LEFT_TRIGGER_EFFECT
+        | DS_OUTPUT_VALID_FLAG0_SPEAKER_VOLUME_ENABLE
+        | DS_OUTPUT_VALID_FLAG0_MIC_VOLUME_ENABLE;
+    const uint8_t state_mask1 =
+        DS_OUTPUT_VALID_FLAG1_MIC_MUTE_LED_CONTROL_ENABLE
+        | DS_OUTPUT_VALID_FLAG1_LIGHTBAR_CONTROL_ENABLE
+        | DS_OUTPUT_VALID_FLAG1_RELEASE_LEDS
+        | DS_OUTPUT_VALID_FLAG1_PLAYER_INDICATOR_CONTROL_ENABLE
+        | DS_OUTPUT_VALID_FLAG1_MOTOR_POWER_LEVEL_ENABLE;
+    const uint8_t state_mask2 = DS_OUTPUT_VALID_FLAG2_COMPATIBLE_VIBRATION2;
+
+    return ((flag0 & state_mask0) | (flag1 & state_mask1) | (flag2 & state_mask2)) != 0;
+}
+
 static bool split_state_from_mixed_output(uint8_t *data, uint16_t len) {
     if (data == nullptr || len < 3 + DS_OUTPUT_REPORT_COMMON_SIZE) {
         return false;
@@ -1913,6 +1949,12 @@ bool bt_write_classified_output(uint8_t *data, uint16_t len) {
         return true;
     }
     if (reason != OutputReasonStateOnly) {
+        if (audio_output_route_protected()) {
+            if (output_report_has_state_flags(data, len)) {
+                return enqueue_state_output(data, len, OutputReasonStateOnly);
+            }
+            return true;
+        }
         if (classified_critical_output_is_duplicate(data, len)) {
             return true;
         }
