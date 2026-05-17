@@ -1116,6 +1116,12 @@ export class BridgeService extends EventEmitter {
     const settings = this.settingsStore.get();
     const speakerVolumePercent = settings.speakerEnabled ? settings.speakerVolumePercent : 0;
     const duplexEnabled = settings.duplexMicEnabled;
+    if (this.hostAudioCommandActive) {
+      await this.hostAudioEngine.start(this.devicePath, speakerVolumePercent);
+      this.readHostAudioStatus();
+      return;
+    }
+
     this.clearHostAudioReportQueue();
     await this.sendCommand(COMMAND_ID.SET_HOST_AUDIO_ENABLED, 1, { expectSettingsRevisionChange });
     this.hostAudioCommandActive = true;
@@ -1428,7 +1434,9 @@ export class BridgeService extends EventEmitter {
     try {
       const settings = this.settingsStore.get();
       await this.applyCurrentSettings(settings, this.reapplyAttempt === 0);
-      if (this.reapplyAttempt >= STARTUP_REAPPLY_RETRY_DELAYS_MS.length) {
+      if (settings.hostEncodedAudioEnabled && this.hostAudioCommandActive) {
+        this.reappliedSessionKey = this.sessionKey;
+      } else if (this.reapplyAttempt >= STARTUP_REAPPLY_RETRY_DELAYS_MS.length) {
         this.reappliedSessionKey = this.sessionKey;
       } else {
         this.nextReapplyAt = Date.now() + STARTUP_REAPPLY_RETRY_DELAYS_MS[this.reapplyAttempt];
