@@ -65,6 +65,7 @@
 #define OPUS_ENCODE_BUDGET_US 10000
 #define SPEAKER_USB_SILENCE_TAIL_US 500000
 #define SPEAKER_SILENCE_PREROLL_USB_PACKETS 24
+#define SPEAKER_SILENCE_PREROLL_INTERVAL_US 10666
 #define SPEAKER_TRANSITION_FADE_SAMPLES 1920.0f
 #define HOST_HEARTBEAT_TIMEOUT_US 750000
 #define HOST_STREAM_TIMEOUT_US 250000
@@ -207,6 +208,7 @@ static uint32_t last_hid_output_debug_us = 0;
 static uint8_t hid_output_debug_burst_remaining = 0;
 static bool audio_silence_tail_logged = false;
 static uint8_t speaker_silence_preroll_packets_remaining = 0;
+static uint32_t speaker_silence_preroll_last_packet_us = 0;
 static float fallback_speaker_gain = 1.0f;
 static float fallback_speaker_target_gain = 1.0f;
 alignas(8) static uint32_t audio_core1_stack[8192];
@@ -916,6 +918,7 @@ static void clear_partial_audio_state() {
 
 static void schedule_speaker_silence_preroll() {
     speaker_silence_preroll_packets_remaining = SPEAKER_SILENCE_PREROLL_USB_PACKETS;
+    speaker_silence_preroll_last_packet_us = 0;
     audio_debug_packet_log_budget = max<uint8_t>(audio_debug_packet_log_budget, 4);
 }
 
@@ -930,6 +933,7 @@ void audio_handle_controller_disconnect() {
     drain_audio_queues();
     clear_partial_audio_state();
     speaker_silence_preroll_packets_remaining = 0;
+    speaker_silence_preroll_last_packet_us = 0;
     speaker_route_active = false;
     speaker_route_headset = false;
     last_audio_us = 0;
@@ -1858,6 +1862,44 @@ static void discard_usb_audio_packets(uint8_t max_reads) {
 #endif
 }
 
+static void queue_silent_speaker_block() {
+    static audio_raw_element element{};
+    memset(&element, 0, sizeof(element));
+    element.generation = audio_stream_generation;
+    if (queue_is_full(&audio_fifo)) {
+        queue_try_remove(&audio_fifo, NULL);
+    }
+    (void)queue_try_add(&audio_fifo, &element);
+}
+
+static void process_idle_speaker_silence_preroll(uint32_t now) {
+    if (
+        speaker_silence_preroll_packets_remaining == 0
+        || !speaker_route_active
+        || quiet_mode_enabled
+        || tud_audio_available()
+    ) {
+        return;
+    }
+    if (
+        speaker_silence_preroll_last_packet_us != 0
+        && !time_reached(now, speaker_silence_preroll_last_packet_us + SPEAKER_SILENCE_PREROLL_INTERVAL_US)
+    ) {
+        return;
+    }
+
+    queue_silent_speaker_block();
+    speaker_silence_preroll_last_packet_us = now;
+
+    int8_t haptic_buf[SAMPLE_SIZE]{};
+    if (!send_audio_haptics_packet(haptic_buf, true)) {
+        return;
+    }
+
+    speaker_silence_preroll_packets_remaining--;
+    last_audio_us = now;
+}
+
 static void process_mic_usb_output() {
     if (!host_mic_path_active() || !usb_mic_streaming_active()) {
         if (mic_usb_playout_started || mic_usb_pending_len != 0) {
@@ -2001,6 +2043,7 @@ void audio_mic_add_packet(uint8_t const *data, uint16_t len) {
 }
 
 void audio_loop() {
+    const uint32_t now = time_us_32();
     process_mic_usb_output();
     audio_host_poll();
 
@@ -2026,16 +2069,19 @@ void audio_loop() {
     }
 
     if (host_audio_requested && host_start_grace_active(time_us_32())) {
+        (void)prime_host_audio_route_if_needed();
         discard_usb_audio_packets(AUDIO_LOOP_MAX_USB_READS);
         return;
     }
 
     if (audio_runtime_mode == AudioRuntimeHostEncodedActive) {
+        (void)prime_host_audio_route_if_needed();
         discard_usb_audio_packets(AUDIO_LOOP_MAX_USB_READS);
         return;
     }
 
     update_persistent_speaker_route();
+    process_idle_speaker_silence_preroll(now);
 
     for (uint8_t i = 0; i < AUDIO_LOOP_MAX_USB_READS; i++) {
         if (!process_usb_audio_packet()) {
