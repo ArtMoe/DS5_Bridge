@@ -65,6 +65,9 @@ const api = {
   setSpeakerVolumeShortcutEnabled: (value: boolean): Promise<BridgeSnapshot> => (
     ipcRenderer.invoke('bridge:setSpeakerVolumeShortcutEnabled', value)
   ),
+  setControllerPowerSavingEnabled: (value: boolean): Promise<BridgeSnapshot> => (
+    ipcRenderer.invoke('bridge:setControllerPowerSavingEnabled', value)
+  ),
   setPollingRateMode: (value: PollingRateMode): Promise<BridgeSnapshot> => (
     ipcRenderer.invoke('bridge:setPollingRateMode', value)
   ),

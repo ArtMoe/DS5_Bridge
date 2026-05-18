@@ -69,6 +69,7 @@ const STARTUP_REAPPLY_MIN_SETTLE_MS = 0;
 const STARTUP_REAPPLY_RETRY_DELAYS_MS = [250, 650, 1300] as const;
 const MIN_IDLE_DISCONNECT_TIMEOUT_MINUTES = 1;
 const MAX_IDLE_DISCONNECT_TIMEOUT_MINUTES = 120;
+const CONTROLLER_POWER_SAVING_CAP_PERCENT = 60;
 const SONY_VENDOR_ID = 0x054c;
 const DUALSENSE_PRODUCT_IDS = new Set([0x0ce6, 0x0df2]);
 type HidDevice = HID.Device;
@@ -474,6 +475,7 @@ export class BridgeService extends EventEmitter {
   private lastHostAudioStatusReadAt = 0;
   private lastAudioDebugReadAt = 0;
   private lastHostAudioActivePollAt = 0;
+  private controllerPowerSavingActive: boolean | null = null;
   private previousControllerConnected: boolean | null = null;
   private lowBatteryToastActive = false;
   private volumeShortcutQueue: Promise<void> = Promise.resolve();
@@ -682,9 +684,74 @@ export class BridgeService extends EventEmitter {
     this.readHostAudioStatus();
   }
 
+  private isControllerPowerSavingActive(settings: CompanionSettings): boolean {
+    return settings.controllerPowerSavingEnabled && Boolean(this.hostAudioStatus?.headsetPlugged);
+  }
+
+  private capForControllerPowerSaving(value: number, settings: CompanionSettings): number {
+    return this.isControllerPowerSavingActive(settings)
+      ? Math.min(value, CONTROLLER_POWER_SAVING_CAP_PERCENT)
+      : value;
+  }
+
+  private effectiveHapticsGain(settings: CompanionSettings): number {
+    return settings.hapticsEnabled
+      ? this.capForControllerPowerSaving(settings.hapticsGainPercent, settings)
+      : 0;
+  }
+
+  private effectiveClassicRumbleGain(settings: CompanionSettings): number {
+    return settings.classicRumbleEnabled
+      ? this.capForControllerPowerSaving(settings.classicRumbleGainPercent, settings)
+      : 0;
+  }
+
+  private effectiveTriggerEffectIntensity(settings: CompanionSettings): number {
+    return settings.adaptiveTriggersEnabled
+      ? this.capForControllerPowerSaving(settings.triggerEffectIntensityPercent, settings)
+      : 0;
+  }
+
+  private effectiveLightbarBrightness(settings: CompanionSettings): number {
+    return settings.lightbarEnabled
+      ? this.capForControllerPowerSaving(settings.lightbarBrightnessPercent, settings)
+      : 0;
+  }
+
+  private async applyControllerPowerSavingSensitiveSettings(
+    settings: CompanionSettings,
+    expectSettingsRevisionChange: boolean
+  ): Promise<void> {
+    await this.sendCommand(COMMAND_ID.SET_HAPTICS_GAIN, this.effectiveHapticsGain(settings), {
+      expectSettingsRevisionChange
+    });
+    await this.sendCommand(COMMAND_ID.SET_CLASSIC_RUMBLE_GAIN, this.effectiveClassicRumbleGain(settings), {
+      expectSettingsRevisionChange
+    });
+    await this.sendCommand(COMMAND_ID.SET_TRIGGER_EFFECT_INTENSITY, this.effectiveTriggerEffectIntensity(settings), {
+      expectSettingsRevisionChange
+    });
+    await this.applyLightbarSettings(settings, expectSettingsRevisionChange);
+  }
+
+  private async syncControllerPowerSavingState(settings: CompanionSettings): Promise<void> {
+    const active = this.isControllerPowerSavingActive(settings);
+    if (this.controllerPowerSavingActive === active) {
+      return;
+    }
+    const previousActive = this.controllerPowerSavingActive;
+    this.controllerPowerSavingActive = active;
+    if (previousActive === null || this.reapplyActive || this.snapshot.state !== 'connected') {
+      return;
+    }
+    await this.applyControllerPowerSavingSensitiveSettings(settings, true);
+    this.emitSnapshot();
+  }
+
   async setHapticsGain(percent: number): Promise<BridgeSnapshot> {
     const value = Math.max(0, Math.min(200, Math.round(percent)));
-    const effectiveValue = this.settingsStore.get().hapticsEnabled ? value : 0;
+    const nextSettings = { ...this.settingsStore.get(), hapticsGainPercent: value };
+    const effectiveValue = this.effectiveHapticsGain(nextSettings);
     await this.sendSettingCommand(COMMAND_ID.SET_HAPTICS_GAIN, effectiveValue, customSettingUpdate({
       hapticsGainPercent: value
     }));
@@ -692,8 +759,8 @@ export class BridgeService extends EventEmitter {
   }
 
   async setHapticsEnabled(enabled: boolean): Promise<BridgeSnapshot> {
-    const settings = this.settingsStore.get();
-    await this.sendSettingCommand(COMMAND_ID.SET_HAPTICS_GAIN, enabled ? settings.hapticsGainPercent : 0, customSettingUpdate({
+    const settings = { ...this.settingsStore.get(), hapticsEnabled: enabled };
+    await this.sendSettingCommand(COMMAND_ID.SET_HAPTICS_GAIN, this.effectiveHapticsGain(settings), customSettingUpdate({
       hapticsEnabled: enabled
     }));
     return this.getSnapshot();
@@ -707,7 +774,8 @@ export class BridgeService extends EventEmitter {
 
   async setClassicRumbleGain(percent: number): Promise<BridgeSnapshot> {
     const value = Math.max(0, Math.min(200, Math.round(percent)));
-    const effectiveValue = this.settingsStore.get().classicRumbleEnabled ? value : 0;
+    const nextSettings = { ...this.settingsStore.get(), classicRumbleGainPercent: value };
+    const effectiveValue = this.effectiveClassicRumbleGain(nextSettings);
     await this.sendSettingCommand(COMMAND_ID.SET_CLASSIC_RUMBLE_GAIN, effectiveValue, customSettingUpdate({
       classicRumbleGainPercent: value
     }));
@@ -715,10 +783,10 @@ export class BridgeService extends EventEmitter {
   }
 
   async setClassicRumbleEnabled(enabled: boolean): Promise<BridgeSnapshot> {
-    const settings = this.settingsStore.get();
+    const settings = { ...this.settingsStore.get(), classicRumbleEnabled: enabled };
     await this.sendSettingCommand(
       COMMAND_ID.SET_CLASSIC_RUMBLE_GAIN,
-      enabled ? settings.classicRumbleGainPercent : 0,
+      this.effectiveClassicRumbleGain(settings),
       customSettingUpdate({ classicRumbleEnabled: enabled })
     );
     return this.getSnapshot();
@@ -726,7 +794,8 @@ export class BridgeService extends EventEmitter {
 
   async setTriggerEffectIntensity(percent: number): Promise<BridgeSnapshot> {
     const value = Math.max(0, Math.min(100, Math.round(percent)));
-    const effectiveValue = this.settingsStore.get().adaptiveTriggersEnabled ? value : 0;
+    const nextSettings = { ...this.settingsStore.get(), triggerEffectIntensityPercent: value };
+    const effectiveValue = this.effectiveTriggerEffectIntensity(nextSettings);
     await this.sendSettingCommand(COMMAND_ID.SET_TRIGGER_EFFECT_INTENSITY, effectiveValue, customSettingUpdate({
       triggerEffectIntensityPercent: value
     }));
@@ -740,10 +809,10 @@ export class BridgeService extends EventEmitter {
   }
 
   async setAdaptiveTriggersEnabled(enabled: boolean): Promise<BridgeSnapshot> {
-    const settings = this.settingsStore.get();
+    const settings = { ...this.settingsStore.get(), adaptiveTriggersEnabled: enabled };
     await this.sendSettingCommand(
       COMMAND_ID.SET_TRIGGER_EFFECT_INTENSITY,
-      enabled ? settings.triggerEffectIntensityPercent : 0,
+      this.effectiveTriggerEffectIntensity(settings),
       customSettingUpdate({ adaptiveTriggersEnabled: enabled })
     );
     if (!enabled && this.snapshot.state === 'connected') {
@@ -857,7 +926,13 @@ export class BridgeService extends EventEmitter {
   async setLightbarColor(color: string, brightnessPercent: number): Promise<BridgeSnapshot> {
     const parsed = parseHexColor(color);
     const brightness = Math.max(0, Math.min(100, Math.round(brightnessPercent)));
-    const ack = await this.sendCommand(COMMAND_ID.SET_LIGHTBAR_COLOR, brightness, {
+    const nextSettings = {
+      ...this.settingsStore.get(),
+      lightbarColor: parsed.hex,
+      lightbarBrightnessPercent: brightness
+    };
+    const effectiveBrightness = this.effectiveLightbarBrightness(nextSettings);
+    const ack = await this.sendCommand(COMMAND_ID.SET_LIGHTBAR_COLOR, effectiveBrightness, {
       expectSettingsRevisionChange: true,
       extraPayload: [parsed.red, parsed.green, parsed.blue]
     });
@@ -871,7 +946,7 @@ export class BridgeService extends EventEmitter {
           red: parsed.red,
           green: parsed.green,
           blue: parsed.blue,
-          brightnessPercent: brightness
+          brightnessPercent: effectiveBrightness
         };
       }
       this.emitSnapshot();
@@ -1004,6 +1079,19 @@ export class BridgeService extends EventEmitter {
     await this.sendSettingCommand(COMMAND_ID.SET_SPEAKER_VOLUME_SHORTCUT_ENABLED, enabled ? 1 : 0, {
       speakerVolumeShortcutEnabled: enabled
     });
+    return this.getSnapshot();
+  }
+
+  async setControllerPowerSavingEnabled(enabled: boolean): Promise<BridgeSnapshot> {
+    this.snapshot.settings = this.settingsStore.update({ controllerPowerSavingEnabled: enabled });
+    if (this.snapshot.state === 'connected') {
+      const wasActive = this.controllerPowerSavingActive;
+      this.controllerPowerSavingActive = this.isControllerPowerSavingActive(this.snapshot.settings);
+      if (wasActive !== this.controllerPowerSavingActive) {
+        await this.applyControllerPowerSavingSensitiveSettings(this.snapshot.settings, true);
+      }
+    }
+    this.emitSnapshot();
     return this.getSnapshot();
   }
 
@@ -1506,6 +1594,7 @@ export class BridgeService extends EventEmitter {
     };
     this.emitSnapshot();
     await this.updateMicKeepaliveEngine(status.controllerConnected);
+    await this.syncControllerPowerSavingState(settings);
 
     if (status.controllerConnected) {
       if (this.controllerConnectedSince === 0) {
@@ -1649,7 +1738,7 @@ export class BridgeService extends EventEmitter {
         encodeMuteKeyboardOptions(settings.muteKeyboardModifiers, settings.muteKeyboardBehavior)
       ]
     });
-    await this.sendCommand(COMMAND_ID.SET_HAPTICS_GAIN, settings.hapticsEnabled ? settings.hapticsGainPercent : 0, {
+    await this.sendCommand(COMMAND_ID.SET_HAPTICS_GAIN, this.effectiveHapticsGain(settings), {
       expectSettingsRevisionChange
     });
     await this.sendCommand(COMMAND_ID.SET_HAPTICS_BUFFER_LENGTH, settings.hapticsBufferLength, {
@@ -1657,12 +1746,12 @@ export class BridgeService extends EventEmitter {
     });
     await this.sendCommand(
       COMMAND_ID.SET_CLASSIC_RUMBLE_GAIN,
-      settings.classicRumbleEnabled ? settings.classicRumbleGainPercent : 0,
+      this.effectiveClassicRumbleGain(settings),
       { expectSettingsRevisionChange }
     );
     await this.sendCommand(
       COMMAND_ID.SET_TRIGGER_EFFECT_INTENSITY,
-      settings.adaptiveTriggersEnabled ? settings.triggerEffectIntensityPercent : 0,
+      this.effectiveTriggerEffectIntensity(settings),
       { expectSettingsRevisionChange }
     );
     if (!settings.adaptiveTriggersEnabled) {
@@ -1709,7 +1798,7 @@ export class BridgeService extends EventEmitter {
     const color = settings.lightbarEnabled ? parseHexColor(settings.lightbarColor) : { red: 0, green: 0, blue: 0 };
     await this.sendCommand(
       COMMAND_ID.SET_LIGHTBAR_COLOR,
-      settings.lightbarEnabled ? settings.lightbarBrightnessPercent : 0,
+      this.effectiveLightbarBrightness(settings),
       {
         expectSettingsRevisionChange,
         extraPayload: [color.red, color.green, color.blue]
@@ -1778,6 +1867,7 @@ export class BridgeService extends EventEmitter {
     this.devicePath = null;
     this.hostAudioCommandActive = false;
     this.hostAudioStatus = null;
+    this.controllerPowerSavingActive = null;
     this.hostAudioReportQueue = [];
     this.hostAudioWritePumpActive = false;
     this.hostAudioFrameCount = 0;

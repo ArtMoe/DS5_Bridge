@@ -41,8 +41,9 @@ export const DEFAULT_SETTINGS: CompanionSettings = {
   pollingRateMode: '1000',
   notifyControllerConnection: false,
   notifyLowBattery: false,
-  hostEncodedAudioEnabled: false,
+  hostEncodedAudioEnabled: true,
   duplexMicEnabled: false,
+  controllerPowerSavingEnabled: false,
   selectedButtonRemappingProfileId: DEFAULT_BUTTON_REMAP_PROFILE_ID,
   buttonRemappingProfiles: [DEFAULT_BUTTON_REMAP_PROFILE],
   buttonRemappingDraft: { ...DEFAULT_BUTTON_REMAP_PROFILE.mappings }
@@ -236,6 +237,9 @@ function normalizeSettings(value: Partial<CompanionSettings> | null | undefined)
     duplexMicEnabled: typeof value?.duplexMicEnabled === 'boolean'
       ? value.duplexMicEnabled
       : DEFAULT_SETTINGS.duplexMicEnabled,
+    controllerPowerSavingEnabled: typeof value?.controllerPowerSavingEnabled === 'boolean'
+      ? value.controllerPowerSavingEnabled
+      : DEFAULT_SETTINGS.controllerPowerSavingEnabled,
     selectedButtonRemappingProfileId,
     buttonRemappingProfiles,
     buttonRemappingDraft: normalizeRemapMap(value?.buttonRemappingDraft)

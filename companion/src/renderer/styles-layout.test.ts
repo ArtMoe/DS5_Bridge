@@ -50,7 +50,10 @@ describe('companion layout CSS', () => {
     expect(cssBlock('.control-page', 'grid-template-rows: auto minmax(var(--feature-card-height), auto);')).toContain(
       'grid-template-rows: auto minmax(var(--feature-card-height), auto);'
     );
-    expect(cssBlock('.control-page[hidden]', 'display: none;')).toContain('display: none;');
+    expect(cssBlock('.control-page', 'visibility: hidden;')).toContain('visibility: hidden;');
+    expect(cssBlock('.control-page', 'pointer-events: none;')).toContain('pointer-events: none;');
+    expect(cssBlock('.control-page.active', 'visibility: visible;')).toContain('visibility: visible;');
+    expect(cssBlock('.control-page.active', 'pointer-events: auto;')).toContain('pointer-events: auto;');
     expect(cssBlock('.feature-card-grid', 'height: auto;')).toContain('height: auto;');
   });
 

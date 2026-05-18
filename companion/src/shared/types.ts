@@ -45,6 +45,7 @@ export interface CompanionSettings {
   notifyLowBattery: boolean;
   hostEncodedAudioEnabled: boolean;
   duplexMicEnabled: boolean;
+  controllerPowerSavingEnabled: boolean;
   selectedButtonRemappingProfileId: string;
   buttonRemappingProfiles: ButtonRemapProfile[];
   buttonRemappingDraft: ButtonRemapMap;

@@ -434,6 +434,9 @@ function registerIpc(service: BridgeService): void {
   ipcMain.handle('bridge:setSpeakerVolumeShortcutEnabled', (_event, value: boolean) => (
     service.setSpeakerVolumeShortcutEnabled(value)
   ));
+  ipcMain.handle('bridge:setControllerPowerSavingEnabled', (_event, value: boolean) => (
+    service.setControllerPowerSavingEnabled(value)
+  ));
   ipcMain.handle('bridge:setPollingRateMode', (_event, value: PollingRateMode) => (
     service.setPollingRateMode(value)
   ));

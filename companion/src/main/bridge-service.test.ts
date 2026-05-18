@@ -336,10 +336,14 @@ function hostAudioStatusReport(overrides: Partial<{
   return report;
 }
 
-function createService(): { service: BridgeService; tempDir: string } {
+function createService(initialSettings?: Parameters<SettingsStore['update']>[0]): { service: BridgeService; tempDir: string } {
   const tempDir = mkdtempSync(path.join(tmpdir(), 'ds5-bridge-companion-'));
+  const settingsStore = new SettingsStore(tempDir);
+  if (initialSettings) {
+    settingsStore.update(initialSettings);
+  }
   return {
-    service: new BridgeService(new SettingsStore(tempDir)),
+    service: new BridgeService(settingsStore),
     tempDir
   };
 }
@@ -377,8 +381,8 @@ describe('BridgeService', () => {
     }
   });
 
-  function serviceFixture(): BridgeService {
-    const fixture = createService();
+  function serviceFixture(initialSettings?: Parameters<SettingsStore['update']>[0]): BridgeService {
+    const fixture = createService(initialSettings);
     tempDirs.push(fixture.tempDir);
     return fixture.service;
   }
@@ -473,7 +477,7 @@ describe('BridgeService', () => {
   });
 
   it('reapplies saved settings once per companion session and again after uptime drops', async () => {
-    const service = serviceFixture();
+    const service = serviceFixture({ hostEncodedAudioEnabled: false });
     const device = new MockHidDevice();
     device.settingsRevision = 4;
     device.status = statusReport({ controllerConnected: true, settingsRevision: 4, uptimeSeconds: 30 });
@@ -506,7 +510,7 @@ describe('BridgeService', () => {
   });
 
   it('reapplies current settings without feature-bit fallbacks', async () => {
-    const service = serviceFixture();
+    const service = serviceFixture({ hostEncodedAudioEnabled: false });
     const device = new MockHidDevice();
     device.status = statusReport({
       controllerConnected: true,
@@ -600,6 +604,45 @@ describe('BridgeService', () => {
     const command = device.sentReports.at(-1);
     expect(command?.[7]).toBe(COMMAND_ID.SET_TRIGGER_EFFECT_INTENSITY);
     expect(command?.[9]).toBe(45);
+    expect(snapshot.settings.triggerEffectIntensityPercent).toBe(45);
+  });
+
+  it('caps power-hungry controller settings while headphones are plugged in', async () => {
+    const service = serviceFixture({
+      hostEncodedAudioEnabled: false,
+      controllerPowerSavingEnabled: true
+    });
+    const device = new MockHidDevice();
+    device.status = statusReport({ controllerConnected: false });
+    device.hostAudioStatusReports = [hostAudioStatusReport({ headsetPlugged: true })];
+    hidMock.state.devicesList = [companionDeviceInfo()];
+    hidMock.state.openDevices.set('companion-path', device);
+
+    await poll(service);
+
+    let snapshot = await service.setHapticsGain(140);
+    expect(device.sentReports.at(-1)?.[7]).toBe(COMMAND_ID.SET_HAPTICS_GAIN);
+    expect(device.sentReports.at(-1)?.[9]).toBe(60);
+    expect(snapshot.settings.hapticsGainPercent).toBe(140);
+
+    snapshot = await service.setClassicRumbleGain(120);
+    expect(device.sentReports.at(-1)?.[7]).toBe(COMMAND_ID.SET_CLASSIC_RUMBLE_GAIN);
+    expect(device.sentReports.at(-1)?.[9]).toBe(60);
+    expect(snapshot.settings.classicRumbleGainPercent).toBe(120);
+
+    snapshot = await service.setTriggerEffectIntensity(80);
+    expect(device.sentReports.at(-1)?.[7]).toBe(COMMAND_ID.SET_TRIGGER_EFFECT_INTENSITY);
+    expect(device.sentReports.at(-1)?.[9]).toBe(60);
+    expect(snapshot.settings.triggerEffectIntensityPercent).toBe(80);
+
+    snapshot = await service.setLightbarColor('#ffffff', 100);
+    expect(device.sentReports.at(-1)?.[7]).toBe(COMMAND_ID.SET_LIGHTBAR_COLOR);
+    expect(device.sentReports.at(-1)?.[9]).toBe(60);
+    expect(snapshot.settings.lightbarBrightnessPercent).toBe(100);
+
+    snapshot = await service.setTriggerEffectIntensity(45);
+    expect(device.sentReports.at(-1)?.[7]).toBe(COMMAND_ID.SET_TRIGGER_EFFECT_INTENSITY);
+    expect(device.sentReports.at(-1)?.[9]).toBe(45);
     expect(snapshot.settings.triggerEffectIntensityPercent).toBe(45);
   });
 
@@ -789,7 +832,7 @@ describe('BridgeService', () => {
   });
 
   it('emits controller connect and disconnect toasts on status transitions', async () => {
-    const service = serviceFixture();
+    const service = serviceFixture({ hostEncodedAudioEnabled: false });
     const device = new MockHidDevice();
     device.status = statusReport({ controllerConnected: false });
     const toasts: Array<{ title: string; body: string }> = [];
@@ -812,7 +855,7 @@ describe('BridgeService', () => {
   });
 
   it('emits controller toasts when the companion interface disappears and returns', async () => {
-    const service = serviceFixture();
+    const service = serviceFixture({ hostEncodedAudioEnabled: false });
     const device = new MockHidDevice();
     device.status = statusReport({ controllerConnected: true });
     const toasts: Array<{ title: string; body: string }> = [];
@@ -836,7 +879,7 @@ describe('BridgeService', () => {
   });
 
   it('emits low battery toasts once until battery recovers', async () => {
-    const service = serviceFixture();
+    const service = serviceFixture({ hostEncodedAudioEnabled: false });
     const device = new MockHidDevice();
     device.status = statusReport({ controllerConnected: true, batteryPercent: 30 });
     const toasts: Array<{ title: string; body: string }> = [];

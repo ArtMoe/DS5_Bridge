@@ -5,8 +5,8 @@ import {
   IconAdjustmentsHorizontal as Settings2,
   IconAdjustmentsHorizontal as SlidersHorizontal,
   IconArrowRight as ArrowRight,
-  IconBattery4 as BatteryFull,
   IconBell as Bell,
+  IconBinary,
   IconBolt as Zap,
   IconBulb,
   IconCheck as Check,
@@ -84,6 +84,7 @@ const SPEAKER_VOLUME_STEP = 10;
 const MIC_VOLUME_STEP = 10;
 const LIGHTBAR_BRIGHTNESS_STEP = 10;
 const TRIGGER_EFFECT_STEP = 10;
+const CONTROLLER_POWER_SAVING_CAP_PERCENT = 60;
 const TEST_HAPTICS_LOCK_MS = 1100;
 const TEST_SPEAKER_LOCK_MS = 900;
 const TEST_MIC_LISTEN_MS = 5000;
@@ -313,6 +314,32 @@ function snapLightbarBrightness(value: number): number {
 
 function snapTriggerEffectIntensity(value: number): number {
   return Math.max(0, Math.min(100, Math.round(value / TRIGGER_EFFECT_STEP) * TRIGGER_EFFECT_STEP));
+}
+
+function controllerPowerSavingActiveFromSnapshot(snapshot: BridgeSnapshot | null | undefined): boolean {
+  return Boolean(snapshot?.settings.controllerPowerSavingEnabled && snapshot.diagnostics.hostAudioStatus?.headsetPlugged);
+}
+
+function capControllerPowerSavingValue(value: number, snapshot: BridgeSnapshot | null | undefined): number {
+  return controllerPowerSavingActiveFromSnapshot(snapshot)
+    ? Math.min(value, CONTROLLER_POWER_SAVING_CAP_PERCENT)
+    : value;
+}
+
+function displayHapticsValue(snapshot: BridgeSnapshot): number {
+  return snapHapticsValue(capControllerPowerSavingValue(snapshot.settings.hapticsGainPercent, snapshot));
+}
+
+function displayClassicRumbleValue(snapshot: BridgeSnapshot): number {
+  return snapHapticsValue(capControllerPowerSavingValue(snapshot.settings.classicRumbleGainPercent, snapshot));
+}
+
+function displayLightbarBrightnessValue(snapshot: BridgeSnapshot): number {
+  return snapLightbarBrightness(capControllerPowerSavingValue(snapshot.settings.lightbarBrightnessPercent, snapshot));
+}
+
+function displayTriggerEffectIntensityValue(snapshot: BridgeSnapshot): number {
+  return snapTriggerEffectIntensity(capControllerPowerSavingValue(snapshot.settings.triggerEffectIntensityPercent, snapshot));
 }
 
 function sliderTickClass(value: number, max: number): string | undefined {
@@ -1058,6 +1085,7 @@ export function App() {
   const [lightbarCommitPending, setLightbarCommitPending] = useState(false);
   const [sleepConfirmVisible, setSleepConfirmVisible] = useState(false);
   const [overviewSleepConfirmVisible, setOverviewSleepConfirmVisible] = useState(false);
+  const [hostEncodingDisableConfirmVisible, setHostEncodingDisableConfirmVisible] = useState(false);
   const hapticsEditingRef = useRef(false);
   const classicRumbleEditingRef = useRef(false);
   const speakerVolumeEditingRef = useRef(false);
@@ -1113,8 +1141,8 @@ export function App() {
     window.bridge.getStatus().then((next) => {
       if (!cancelled) {
         setSnapshot(next);
-        setHapticsValue(snapHapticsValue(next.settings.hapticsGainPercent));
-        setClassicRumbleValue(snapHapticsValue(next.settings.classicRumbleGainPercent));
+        setHapticsValue(displayHapticsValue(next));
+        setClassicRumbleValue(displayClassicRumbleValue(next));
         setSpeakerVolumeValue(snapSpeakerVolume(next.settings.speakerVolumePercent));
         setMicVolumeValue(snapMicVolume(next.settings.micVolumePercent));
         setRemapDraft(next.settings.buttonRemappingDraft);
@@ -1125,18 +1153,18 @@ export function App() {
           setCustomColorDraft(nextLightbarColor);
           window.localStorage.setItem('ds5bridge.customLightbarColor', nextLightbarColor);
         }
-        setLightbarBrightnessValue(snapLightbarBrightness(lightbarBrightnessFromSnapshot(next)));
-        setTriggerEffectIntensityValue(snapTriggerEffectIntensity(next.settings.triggerEffectIntensityPercent));
+        setLightbarBrightnessValue(displayLightbarBrightnessValue(next));
+        setTriggerEffectIntensityValue(displayTriggerEffectIntensityValue(next));
       }
     });
     const unsubscribe = window.bridge.onSnapshot((next) => {
       setSnapshot(next);
       setRemapDraft(next.settings.buttonRemappingDraft);
       if (!hapticsEditingRef.current) {
-        setHapticsValue(snapHapticsValue(next.settings.hapticsGainPercent));
+        setHapticsValue(displayHapticsValue(next));
       }
       if (!classicRumbleEditingRef.current) {
-        setClassicRumbleValue(snapHapticsValue(next.settings.classicRumbleGainPercent));
+        setClassicRumbleValue(displayClassicRumbleValue(next));
       }
       if (!speakerVolumeEditingRef.current) {
         setSpeakerVolumeValue(snapSpeakerVolume(next.settings.speakerVolumePercent));
@@ -1152,10 +1180,10 @@ export function App() {
         window.localStorage.setItem('ds5bridge.customLightbarColor', nextLightbarColor);
       }
       if (!lightbarBrightnessEditingRef.current) {
-        setLightbarBrightnessValue(snapLightbarBrightness(lightbarBrightnessFromSnapshot(next)));
+        setLightbarBrightnessValue(displayLightbarBrightnessValue(next));
       }
       if (!triggerEffectEditingRef.current) {
-        setTriggerEffectIntensityValue(snapTriggerEffectIntensity(next.settings.triggerEffectIntensityPercent));
+        setTriggerEffectIntensityValue(displayTriggerEffectIntensityValue(next));
       }
     });
     return () => {
@@ -1367,10 +1395,13 @@ export function App() {
   const audioStreamActive = Boolean(snapshot?.status?.audioRecent && pendingAction !== 'speaker' && !speakerTestLocked);
   const hostAudioStatus = snapshot?.diagnostics.hostAudioStatus;
   const headsetOutputDetected = Boolean(hostAudioStatus?.headsetPlugged);
+  const controllerPowerSavingActive = controllerPowerSavingActiveFromSnapshot(snapshot);
+  const hapticsSliderMax = controllerPowerSavingActive ? CONTROLLER_POWER_SAVING_CAP_PERCENT : 200;
+  const percentSliderMax = controllerPowerSavingActive ? CONTROLLER_POWER_SAVING_CAP_PERCENT : 100;
   const OutputIcon = headsetOutputDetected ? Headphones : Volume2;
-  const outputControlLabel = headsetOutputDetected ? 'Headset' : 'Speaker';
-  const outputControlLower = headsetOutputDetected ? 'headset' : 'speaker';
-  const outputPresetLower = headsetOutputDetected ? 'headset' : 'speaker';
+  const outputControlLabel = headsetOutputDetected ? 'Headphones' : 'Speaker';
+  const outputControlLower = headsetOutputDetected ? 'headphones' : 'speaker';
+  const outputPresetLower = headsetOutputDetected ? 'headphones' : 'speaker';
   const hostAudioEnabled = Boolean(snapshot?.settings.hostEncodedAudioEnabled);
   const duplexMicEnabled = Boolean(snapshot?.settings.duplexMicEnabled);
   const audioEnabled = speakerEnabled || duplexMicEnabled;
@@ -1552,21 +1583,22 @@ export function App() {
     : connected
       ? 'Waiting'
       : 'Offline';
-  const overviewBatteryState = connected && controllerConnected
-    ? batteryCharging
-      ? 'Charging'
-      : batteryPercent >= 95
-        ? 'Full'
-        : batteryPercent <= 20
-          ? 'Low'
-          : 'Good'
-    : 'Unavailable';
-  const overviewBatteryCharging = connected && controllerConnected
-    ? batteryCharging ? 'Yes' : 'No'
-    : '--';
-  const overviewAudioOutputLabel = headsetOutputDetected ? 'Headset' : 'Speaker';
-  const overviewAudioOutputValue = `${speakerVolumeValue}%`;
-  const overviewMicValue = `${micVolumeValue}%`;
+  const overviewEncoderState = !connected
+    ? 'Unavailable'
+    : hostAudioEnabled
+      ? 'On'
+      : 'Off';
+  const overviewEncoderDetail = !connected
+    ? '--'
+    : hostAudioActive
+      ? 'Active'
+      : hostAudioStarting
+        ? 'Starting'
+        : hostAudioEnabled
+          ? `Fallback: ${hostAudioStatus?.fallbackReason?.replaceAll('-', ' ') ?? 'pending'}`
+          : 'Pico Local';
+  const overviewAudioOutputLabel = headsetOutputDetected ? 'Headphones' : 'Speaker';
+  const overviewSpeakerVolumeValue = `${speakerVolumeValue}%`;
   const overviewFirmwareLabel = snapshot?.status?.firmwareVersion ?? '--';
   const testTriggersUnavailable = !connected
     || !adaptiveTriggersSupported
@@ -1744,6 +1776,7 @@ export function App() {
       !snapshot
       || snapshot.state !== 'connected'
       || !snapshot.settings.hapticsEnabled
+      || (controllerPowerSavingActive && snapshot.settings.hapticsGainPercent > CONTROLLER_POWER_SAVING_CAP_PERCENT && snappedValue === CONTROLLER_POWER_SAVING_CAP_PERCENT)
       || snappedValue === snapshot.settings.hapticsGainPercent
       || hapticsCommitPending
     ) {
@@ -1756,11 +1789,11 @@ export function App() {
     try {
       const next = await window.bridge.setHapticsGain(snappedValue);
       setSnapshot(next);
-      setHapticsValue(snapHapticsValue(next.settings.hapticsGainPercent));
+      setHapticsValue(displayHapticsValue(next));
     } catch {
       const next = await window.bridge.getStatus();
       setSnapshot(next);
-      setHapticsValue(snapHapticsValue(next.settings.hapticsGainPercent));
+      setHapticsValue(displayHapticsValue(next));
     } finally {
       setHapticsCommitPending(false);
       hapticsEditingRef.current = false;
@@ -1773,6 +1806,7 @@ export function App() {
       !snapshot
       || snapshot.state !== 'connected'
       || !snapshot.settings.classicRumbleEnabled
+      || (controllerPowerSavingActive && snapshot.settings.classicRumbleGainPercent > CONTROLLER_POWER_SAVING_CAP_PERCENT && snappedValue === CONTROLLER_POWER_SAVING_CAP_PERCENT)
       || snappedValue === snapshot.settings.classicRumbleGainPercent
       || classicRumbleCommitPending
     ) {
@@ -1785,11 +1819,11 @@ export function App() {
     try {
       const next = await window.bridge.setClassicRumbleGain(snappedValue);
       setSnapshot(next);
-      setClassicRumbleValue(snapHapticsValue(next.settings.classicRumbleGainPercent));
+      setClassicRumbleValue(displayClassicRumbleValue(next));
     } catch {
       const next = await window.bridge.getStatus();
       setSnapshot(next);
-      setClassicRumbleValue(snapHapticsValue(next.settings.classicRumbleGainPercent));
+      setClassicRumbleValue(displayClassicRumbleValue(next));
     } finally {
       setClassicRumbleCommitPending(false);
       classicRumbleEditingRef.current = false;
@@ -1829,12 +1863,24 @@ export function App() {
   async function commitLightbar(nextColor = lightbarColor, brightness = lightbarBrightnessValue) {
     const color = normalizeHexColor(nextColor);
     const snappedBrightness = snapLightbarBrightness(brightness);
+    const shouldPreserveSavedBrightness = Boolean(
+      snapshot
+      && controllerPowerSavingActive
+      && snapshot.settings.lightbarBrightnessPercent > CONTROLLER_POWER_SAVING_CAP_PERCENT
+      && snappedBrightness === CONTROLLER_POWER_SAVING_CAP_PERCENT
+    );
     if (
       !snapshot
       || snapshot.state !== 'connected'
       || !lightbarSupported
       || !snapshot.settings.lightbarEnabled
       || lightbarCommitPending
+      || (
+        controllerPowerSavingActive
+        && snapshot.settings.lightbarBrightnessPercent > CONTROLLER_POWER_SAVING_CAP_PERCENT
+        && snappedBrightness === CONTROLLER_POWER_SAVING_CAP_PERCENT
+        && color === normalizeHexColor(snapshot.settings.lightbarColor)
+      )
       || (
         color === normalizeHexColor(snapshot.settings.lightbarColor)
         && snappedBrightness === snapshot.settings.lightbarBrightnessPercent
@@ -1846,9 +1892,16 @@ export function App() {
 
     setLightbarCommitPending(true);
     try {
-      setSnapshot(await window.bridge.setLightbarColor(color, snappedBrightness));
+      const persistedBrightness = shouldPreserveSavedBrightness
+        ? snapshot.settings.lightbarBrightnessPercent
+        : snappedBrightness;
+      const next = await window.bridge.setLightbarColor(color, persistedBrightness);
+      setSnapshot(next);
+      setLightbarBrightnessValue(displayLightbarBrightnessValue(next));
     } catch {
-      setSnapshot(await window.bridge.getStatus());
+      const next = await window.bridge.getStatus();
+      setSnapshot(next);
+      setLightbarBrightnessValue(displayLightbarBrightnessValue(next));
     } finally {
       setLightbarCommitPending(false);
       lightbarBrightnessEditingRef.current = false;
@@ -1862,6 +1915,7 @@ export function App() {
       || snapshot.state !== 'connected'
       || !adaptiveTriggersSupported
       || !snapshot.settings.adaptiveTriggersEnabled
+      || (controllerPowerSavingActive && snapshot.settings.triggerEffectIntensityPercent > CONTROLLER_POWER_SAVING_CAP_PERCENT && snappedValue === CONTROLLER_POWER_SAVING_CAP_PERCENT)
       || snappedValue === snapshot.settings.triggerEffectIntensityPercent
     ) {
       triggerEffectEditingRef.current = false;
@@ -1869,9 +1923,13 @@ export function App() {
     }
 
     try {
-      setSnapshot(await window.bridge.setTriggerEffectIntensity(snappedValue));
+      const next = await window.bridge.setTriggerEffectIntensity(snappedValue);
+      setSnapshot(next);
+      setTriggerEffectIntensityValue(displayTriggerEffectIntensityValue(next));
     } catch {
-      setSnapshot(await window.bridge.getStatus());
+      const next = await window.bridge.getStatus();
+      setSnapshot(next);
+      setTriggerEffectIntensityValue(displayTriggerEffectIntensityValue(next));
     } finally {
       triggerEffectEditingRef.current = false;
     }
@@ -1924,20 +1982,20 @@ export function App() {
   }
 
   function setLightbarPreset(value: number) {
-    const brightness = snapLightbarBrightness(value);
+    const brightness = snapLightbarBrightness(capControllerPowerSavingValue(value, snapshot));
     setLightbarBrightnessValue(brightness);
     void commitLightbar(lightbarColor, brightness);
   }
 
   function setHapticsPreset(value: number) {
-    const snappedValue = snapHapticsValue(value);
+    const snappedValue = snapHapticsValue(capControllerPowerSavingValue(value, snapshot));
     hapticsEditingRef.current = true;
     setHapticsValue(snappedValue);
     void commitHapticsValue(snappedValue);
   }
 
   function setClassicRumblePreset(value: number) {
-    const snappedValue = snapHapticsValue(value);
+    const snappedValue = snapHapticsValue(capControllerPowerSavingValue(value, snapshot));
     classicRumbleEditingRef.current = true;
     setClassicRumbleValue(snappedValue);
     void commitClassicRumbleValue(snappedValue);
@@ -1986,7 +2044,7 @@ export function App() {
   }
 
   function setTriggerIntensityPreset(value: number) {
-    const snappedValue = snapTriggerEffectIntensity(value);
+    const snappedValue = snapTriggerEffectIntensity(capControllerPowerSavingValue(value, snapshot));
     setTriggerEffectIntensityValue(snappedValue);
     void commitTriggerEffectIntensity(snappedValue);
   }
@@ -1996,16 +2054,29 @@ export function App() {
     return LIGHTBAR_COLOR_NAMES[normalized] ?? 'Custom';
   }
 
+  function isPreservingPowerSavingCap(savedValue: number, visibleValue: number): boolean {
+    return controllerPowerSavingActive
+      && savedValue > CONTROLLER_POWER_SAVING_CAP_PERCENT
+      && visibleValue === CONTROLLER_POWER_SAVING_CAP_PERCENT;
+  }
+
   function runFeedbackTest() {
     setTestLocked(true);
     void runAction(showClassicRumbleControl ? 'test-rumble' : 'test', async () => {
       if (snapshot && showClassicRumbleControl) {
-        if (classicRumbleValue !== snapshot.settings.classicRumbleGainPercent) {
+        if (
+          classicRumbleValue !== snapshot.settings.classicRumbleGainPercent
+          && !isPreservingPowerSavingCap(snapshot.settings.classicRumbleGainPercent, classicRumbleValue)
+        ) {
           await window.bridge.setClassicRumbleGain(classicRumbleValue);
         }
         return window.bridge.testClassicRumble();
       }
-      if (snapshot && hapticsValue !== snapshot.settings.hapticsGainPercent) {
+      if (
+        snapshot
+        && hapticsValue !== snapshot.settings.hapticsGainPercent
+        && !isPreservingPowerSavingCap(snapshot.settings.hapticsGainPercent, hapticsValue)
+      ) {
         await window.bridge.setHapticsGain(hapticsValue);
       }
       return window.bridge.testHaptics();
@@ -2083,7 +2154,11 @@ export function App() {
   function runTestAdaptiveTriggers() {
     setTriggerTestLocked(true);
     void runAction('triggers', async () => {
-      if (snapshot && triggerEffectIntensityValue !== snapshot.settings.triggerEffectIntensityPercent) {
+      if (
+        snapshot
+        && triggerEffectIntensityValue !== snapshot.settings.triggerEffectIntensityPercent
+        && !isPreservingPowerSavingCap(snapshot.settings.triggerEffectIntensityPercent, triggerEffectIntensityValue)
+      ) {
         await window.bridge.setTriggerEffectIntensity(triggerEffectIntensityValue);
       }
       return window.bridge.testAdaptiveTriggers(snapshot?.settings.triggerTestMode ?? 'feedback', triggerTarget);
@@ -2199,9 +2274,24 @@ export function App() {
 
   function toggleHostEncodedAudioEnabled() {
     if (!snapshot) return;
-    void runAction('host-audio-enabled', () => (
-      window.bridge.setHostEncodedAudioEnabled(!snapshot.settings.hostEncodedAudioEnabled)
-    ));
+    if (snapshot.settings.hostEncodedAudioEnabled) {
+      setHostEncodingDisableConfirmVisible(true);
+      return;
+    }
+    void runAction('host-audio-enabled', () => window.bridge.setHostEncodedAudioEnabled(true));
+  }
+
+  function closeHostEncodingDisableConfirm() {
+    setHostEncodingDisableConfirmVisible(false);
+  }
+
+  function confirmDisableHostEncoding() {
+    if (!snapshot) {
+      closeHostEncodingDisableConfirm();
+      return;
+    }
+    void runAction('host-audio-enabled', () => window.bridge.setHostEncodedAudioEnabled(false));
+    closeHostEncodingDisableConfirm();
   }
 
   function toggleAudioEnabled() {
@@ -2518,6 +2608,7 @@ export function App() {
                 </div>
               )}
             </div>
+            <span className="bridge-tool-divider" aria-hidden="true" />
           </div>
           <div className="window-actions">
             <button type="button" title="Minimize" onClick={() => void window.bridge.minimizeWindow()}>
@@ -2611,11 +2702,11 @@ export function App() {
       <section className="control-panel flat-control-panel">
         <div className="control-pages">
           <div
-            className="control-page overview-page"
+            className={`control-page overview-page ${activeControlTab === 'overview' ? 'active' : ''}`}
             role="tabpanel"
             id="control-panel-overview"
             aria-labelledby="control-tab-overview"
-            hidden={activeControlTab !== 'overview'}
+            aria-hidden={activeControlTab !== 'overview'}
           >
             <div className="feature-heading overview-heading">
               <div>
@@ -2648,21 +2739,21 @@ export function App() {
                 </div>
               </button>
 
-              <button className="overview-card" type="button" onClick={() => selectControlTab('system')}>
+              <button className="overview-card" type="button" onClick={() => selectControlTab('audio')}>
                 <div className="overview-card-title">
-                  <span className="feature-icon overview-icon battery-overview-icon"><BatteryFull size={19} /></span>
-                  <h3>Battery</h3>
+                  <span className="feature-icon overview-icon"><IconBinary size={19} /></span>
+                  <h3>Encoder</h3>
                 </div>
                 <div className="overview-fields">
                   <div>
-                    <span>{connected && controllerConnected ? batteryPercentLabel : '--'}</span>
-                    <strong className={overviewBatteryState === 'Full' || overviewBatteryState === 'Good' ? 'success-value' : ''}>
-                      {overviewBatteryState}
+                    <span>Host Encoding</span>
+                    <strong className={overviewEncoderState === 'On' ? 'success-value' : ''}>
+                      {overviewEncoderState}
                     </strong>
                   </div>
                   <div>
-                    <span>Charging</span>
-                    <strong>{overviewBatteryCharging}</strong>
+                    <span>Status</span>
+                    <strong>{overviewEncoderDetail}</strong>
                   </div>
                 </div>
               </button>
@@ -2674,12 +2765,12 @@ export function App() {
                 </div>
                 <div className="overview-fields">
                   <div>
-                    <span>{overviewAudioOutputLabel}</span>
-                    <strong>{overviewAudioOutputValue}</strong>
+                    <span>Route</span>
+                    <strong>{overviewAudioOutputLabel}</strong>
                   </div>
                   <div>
-                    <span>Microphone</span>
-                    <strong>{overviewMicValue}</strong>
+                    <span>Volume</span>
+                    <strong>{overviewSpeakerVolumeValue}</strong>
                   </div>
                 </div>
               </button>
@@ -2763,11 +2854,11 @@ export function App() {
                       <input
                         type="range"
                         min="0"
-                        max="200"
+                        max={hapticsSliderMax}
                         step={HAPTICS_STEP}
                         value={hapticsValue}
                         disabled={!connected || !snapshot.settings.hapticsEnabled}
-                        style={{ '--range-fill': `${hapticsValue / 2}%` } as CSSProperties}
+                        style={{ '--range-fill': `${(hapticsValue / hapticsSliderMax) * 100}%` } as CSSProperties}
                         onPointerDown={() => {
                           hapticsEditingRef.current = true;
                         }}
@@ -2871,11 +2962,11 @@ export function App() {
                       <input
                         type="range"
                         min="0"
-                        max="100"
+                        max={percentSliderMax}
                         step={LIGHTBAR_BRIGHTNESS_STEP}
                         value={lightbarBrightnessValue}
                         disabled={!connected || !lightbarSupported || !snapshot.settings.lightbarEnabled || lightbarCommitPending}
-                        style={{ '--range-fill': `${lightbarBrightnessValue}%` } as CSSProperties}
+                        style={{ '--range-fill': `${(lightbarBrightnessValue / percentSliderMax) * 100}%` } as CSSProperties}
                         onPointerDown={() => {
                           lightbarBrightnessEditingRef.current = true;
                         }}
@@ -2907,11 +2998,11 @@ export function App() {
           </div>
 
           <div
-            className="control-page haptics-page"
+            className={`control-page haptics-page ${activeControlTab === 'haptics' ? 'active' : ''}`}
             role="tabpanel"
             id="control-panel-haptics"
             aria-labelledby="control-tab-haptics"
-            hidden={activeControlTab !== 'haptics'}
+            aria-hidden={activeControlTab !== 'haptics'}
           >
               <div className="feature-heading">
                 <div>
@@ -2937,7 +3028,7 @@ export function App() {
                   <div className="feature-card-title">
                     <button
                       type="button"
-                      className={`feature-icon haptics-enable-button ${showClassicRumbleControl ? 'icon-medium' : 'icon-compact'} ${activeHapticsFeatureEnabled ? 'active' : ''}`}
+                      className={`feature-icon haptics-enable-button ${showClassicRumbleControl ? 'icon-medium' : 'icon-compact'} ${activeHapticsFeatureEnabled ? 'active' : ''} ${controllerPowerSavingActive && activeHapticsFeatureEnabled ? 'power-saving-active' : ''}`}
                       aria-pressed={activeHapticsFeatureEnabled}
                       aria-label={showClassicRumbleControl ? 'Enable rumble' : 'Enable haptics'}
                       title={showClassicRumbleControl ? 'Enable rumble' : 'Enable haptics'}
@@ -2979,11 +3070,11 @@ export function App() {
                           <input
                             type="range"
                             min="0"
-                            max="200"
+                            max={hapticsSliderMax}
                             step={HAPTICS_STEP}
                             value={classicRumbleValue}
                             disabled={!connected || !snapshot.settings.classicRumbleEnabled}
-                            style={{ '--range-fill': `${classicRumbleValue / 2}%` } as CSSProperties}
+                            style={{ '--range-fill': `${(classicRumbleValue / hapticsSliderMax) * 100}%` } as CSSProperties}
                             onPointerDown={() => {
                               classicRumbleEditingRef.current = true;
                             }}
@@ -3005,11 +3096,11 @@ export function App() {
                           <input
                             type="range"
                             min="0"
-                            max="200"
+                            max={hapticsSliderMax}
                             step={HAPTICS_STEP}
                             value={hapticsValue}
                             disabled={!connected || !snapshot.settings.hapticsEnabled}
-                            style={{ '--range-fill': `${hapticsValue / 2}%` } as CSSProperties}
+                            style={{ '--range-fill': `${(hapticsValue / hapticsSliderMax) * 100}%` } as CSSProperties}
                             onPointerDown={() => {
                               hapticsEditingRef.current = true;
                             }}
@@ -3104,11 +3195,11 @@ export function App() {
           </div>
 
           <div
-            className="control-page audio-page"
+            className={`control-page audio-page ${activeControlTab === 'audio' ? 'active' : ''}`}
             role="tabpanel"
             id="control-panel-audio"
             aria-labelledby="control-tab-audio"
-            hidden={activeControlTab !== 'audio'}
+            aria-hidden={activeControlTab !== 'audio'}
           >
               <div className="feature-heading">
                 <div>
@@ -3369,11 +3460,11 @@ export function App() {
           </div>
 
           <div
-            className="control-page triggers-page"
+            className={`control-page triggers-page ${activeControlTab === 'triggers' ? 'active' : ''}`}
             role="tabpanel"
             id="control-panel-triggers"
             aria-labelledby="control-tab-triggers"
-            hidden={activeControlTab !== 'triggers'}
+            aria-hidden={activeControlTab !== 'triggers'}
           >
               <div className="feature-heading">
                 <div>
@@ -3399,7 +3490,7 @@ export function App() {
                   <div className="feature-card-title">
                     <button
                       type="button"
-                      className={`feature-icon triggers-enable-button icon-compact ${snapshot.settings.adaptiveTriggersEnabled ? 'active' : ''}`}
+                      className={`feature-icon triggers-enable-button icon-compact ${snapshot.settings.adaptiveTriggersEnabled ? 'active' : ''} ${controllerPowerSavingActive && snapshot.settings.adaptiveTriggersEnabled ? 'power-saving-active' : ''}`}
                       aria-pressed={snapshot.settings.adaptiveTriggersEnabled}
                       aria-label="Enable adaptive triggers"
                       title="Enable adaptive triggers"
@@ -3420,11 +3511,11 @@ export function App() {
                         <input
                           type="range"
                           min="0"
-                          max="100"
+                          max={percentSliderMax}
                           step={TRIGGER_EFFECT_STEP}
                           value={triggerEffectIntensityValue}
                           disabled={!connected || !adaptiveTriggersSupported || !snapshot.settings.adaptiveTriggersEnabled}
-                          style={{ '--range-fill': `${triggerEffectIntensityValue}%` } as CSSProperties}
+                          style={{ '--range-fill': `${(triggerEffectIntensityValue / percentSliderMax) * 100}%` } as CSSProperties}
                           onPointerDown={() => {
                             triggerEffectEditingRef.current = true;
                           }}
@@ -3532,11 +3623,11 @@ export function App() {
           </div>
 
           <div
-            className="control-page lighting-page"
+            className={`control-page lighting-page ${activeControlTab === 'lighting' ? 'active' : ''}`}
             role="tabpanel"
             id="control-panel-lighting"
             aria-labelledby="control-tab-lighting"
-            hidden={activeControlTab !== 'lighting'}
+            aria-hidden={activeControlTab !== 'lighting'}
           >
               <div className="feature-heading">
                 <div>
@@ -3562,7 +3653,7 @@ export function App() {
                   <div className="feature-card-title">
                     <button
                       type="button"
-                      className={`feature-icon lighting-enable-button icon-large ${snapshot.settings.lightbarEnabled ? 'active' : ''}`}
+                      className={`feature-icon lighting-enable-button icon-large ${snapshot.settings.lightbarEnabled ? 'active' : ''} ${controllerPowerSavingActive && snapshot.settings.lightbarEnabled ? 'power-saving-active' : ''}`}
                       aria-pressed={snapshot.settings.lightbarEnabled}
                       aria-label="Enable lighting"
                       title="Enable lighting"
@@ -3583,11 +3674,11 @@ export function App() {
                         <input
                           type="range"
                           min="0"
-                          max="100"
+                          max={percentSliderMax}
                           step={LIGHTBAR_BRIGHTNESS_STEP}
                           value={lightbarBrightnessValue}
                           disabled={!connected || !lightbarSupported || !snapshot.settings.lightbarEnabled}
-                          style={{ '--range-fill': `${lightbarBrightnessValue}%` } as CSSProperties}
+                          style={{ '--range-fill': `${(lightbarBrightnessValue / percentSliderMax) * 100}%` } as CSSProperties}
                           onPointerDown={() => {
                             lightbarBrightnessEditingRef.current = true;
                           }}
@@ -3744,11 +3835,11 @@ export function App() {
           </div>
 
           <div
-            className="control-page remapping-page"
+            className={`control-page remapping-page ${activeControlTab === 'remapping' ? 'active' : ''}`}
             role="tabpanel"
             id="control-panel-remapping"
             aria-labelledby="control-tab-remapping"
-            hidden={activeControlTab !== 'remapping'}
+            aria-hidden={activeControlTab !== 'remapping'}
           >
               <div className="feature-heading system-heading remapping-heading">
                 <div>
@@ -3923,11 +4014,11 @@ export function App() {
           </div>
 
           <div
-            className="control-page system-page"
+            className={`control-page system-page ${activeControlTab === 'system' ? 'active' : ''}`}
             role="tabpanel"
             id="control-panel-system"
             aria-labelledby="control-tab-system"
-            hidden={activeControlTab !== 'system'}
+            aria-hidden={activeControlTab !== 'system'}
           >
               <div className="feature-heading system-heading">
                 <div>
@@ -4140,6 +4231,56 @@ export function App() {
       </section>
       </main>
 
+      {hostEncodingDisableConfirmVisible && (
+        <div
+          className="modal-backdrop"
+          role="presentation"
+          onMouseDown={closeHostEncodingDisableConfirm}
+        >
+          <form
+            className="settings-menu bridge-settings-modal host-encoding-confirm-modal"
+            role="dialog"
+            aria-modal="true"
+            aria-label="Disable host encoding"
+            onMouseDown={(event) => event.stopPropagation()}
+            onSubmit={(event) => {
+              event.preventDefault();
+              confirmDisableHostEncoding();
+            }}
+          >
+            <div className="settings-menu-heading bridge-settings-modal-heading">
+              <div className="modal-heading-copy">
+                <IconBinary size={16} />
+                <span>Disable Host Encoding?</span>
+              </div>
+              <button
+                className="modal-close-button"
+                type="button"
+                aria-label="Close host encoding dialog"
+                onClick={closeHostEncodingDisableConfirm}
+              >
+                <X size={16} />
+              </button>
+            </div>
+            <p className="remap-profile-dialog-copy">
+              Host encoding helps keep controller audio smooth. Turning it off may cause audio stuttering.
+            </p>
+            <div className="remap-profile-dialog-actions">
+              <button type="button" className="secondary-action" onClick={closeHostEncodingDisableConfirm}>
+                Cancel
+              </button>
+              <button
+                type="submit"
+                className="primary-action danger"
+                disabled={pendingAction !== null}
+              >
+                Disable
+              </button>
+            </div>
+          </form>
+        </div>
+      )}
+
       {remapProfileDialogMode && (
         <div
           className="modal-backdrop"
@@ -4292,6 +4433,24 @@ export function App() {
                 disabled={!connected || !usbSuspendDisconnectSupported}
                 onClick={() => void runAction('usb-suspend', () => (
                   window.bridge.setUsbSuspendDisconnectEnabled(!snapshot.settings.usbSuspendDisconnectEnabled)
+                ))}
+              >
+                <span />
+              </button>
+            </div>
+            <div className="settings-menu-row">
+              <div className="settings-menu-copy">
+                <strong>Controller Power Saving</strong>
+                <span>Caps haptics, triggers, and lightbar brightness at 60% while headphones are plugged in</span>
+              </div>
+              <button
+                type="button"
+                role="switch"
+                aria-checked={snapshot.settings.controllerPowerSavingEnabled}
+                className={`switch ${snapshot.settings.controllerPowerSavingEnabled ? 'on' : ''}`}
+                disabled={pendingAction !== null}
+                onClick={() => void runAction('controller-power-saving', () => (
+                  window.bridge.setControllerPowerSavingEnabled(!snapshot.settings.controllerPowerSavingEnabled)
                 ))}
               >
                 <span />
