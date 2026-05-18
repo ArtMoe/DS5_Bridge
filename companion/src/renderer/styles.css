@@ -1632,6 +1632,41 @@ button {
     opacity 180ms ease;
 }
 
+.feature-icon > svg {
+  width: 24px;
+  height: 24px;
+}
+
+.feature-icon.icon-medium > svg {
+  width: 25px;
+  height: 25px;
+}
+
+.feature-icon.icon-compact > svg {
+  width: 26px;
+  height: 26px;
+}
+
+.feature-icon.icon-large > svg {
+  width: 27px;
+  height: 27px;
+}
+
+.feature-icon.icon-largest > svg {
+  width: 28px;
+  height: 28px;
+}
+
+.feature-icon.icon-wide > svg {
+  width: 22px;
+  height: 22px;
+}
+
+.overview-icon > svg {
+  width: 19px;
+  height: 19px;
+}
+
 button.feature-icon {
   padding: 0;
 }

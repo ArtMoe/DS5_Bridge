@@ -2937,7 +2937,7 @@ export function App() {
                   <div className="feature-card-title">
                     <button
                       type="button"
-                      className={`feature-icon haptics-enable-button ${activeHapticsFeatureEnabled ? 'active' : ''}`}
+                      className={`feature-icon haptics-enable-button ${showClassicRumbleControl ? 'icon-medium' : 'icon-compact'} ${activeHapticsFeatureEnabled ? 'active' : ''}`}
                       aria-pressed={activeHapticsFeatureEnabled}
                       aria-label={showClassicRumbleControl ? 'Enable rumble' : 'Enable haptics'}
                       title={showClassicRumbleControl ? 'Enable rumble' : 'Enable haptics'}
@@ -3151,7 +3151,7 @@ export function App() {
                   <div className="feature-card-title">
                     <button
                       type="button"
-                      className={`feature-icon audio-enable-button ${
+                      className={`feature-icon audio-enable-button icon-medium ${
                         showMicrophoneControl
                           ? duplexMicEnabled
                             ? 'active'
@@ -3399,7 +3399,7 @@ export function App() {
                   <div className="feature-card-title">
                     <button
                       type="button"
-                      className={`feature-icon triggers-enable-button ${snapshot.settings.adaptiveTriggersEnabled ? 'active' : ''}`}
+                      className={`feature-icon triggers-enable-button icon-compact ${snapshot.settings.adaptiveTriggersEnabled ? 'active' : ''}`}
                       aria-pressed={snapshot.settings.adaptiveTriggersEnabled}
                       aria-label="Enable adaptive triggers"
                       title="Enable adaptive triggers"
@@ -3562,7 +3562,7 @@ export function App() {
                   <div className="feature-card-title">
                     <button
                       type="button"
-                      className={`feature-icon lighting-enable-button ${snapshot.settings.lightbarEnabled ? 'active' : ''}`}
+                      className={`feature-icon lighting-enable-button icon-large ${snapshot.settings.lightbarEnabled ? 'active' : ''}`}
                       aria-pressed={snapshot.settings.lightbarEnabled}
                       aria-label="Enable lighting"
                       title="Enable lighting"
@@ -3957,7 +3957,7 @@ export function App() {
               <div className="feature-card-grid">
                 <section className="system-card mute-card">
                   <div className="feature-card-title system-card-heading">
-                    <span className="feature-icon system-icon"><VolumeX size={20} /></span>
+                    <span className="feature-icon system-icon icon-wide"><VolumeX size={20} /></span>
                     <div className="title-copy">
                       <h3>Mute Button</h3>
                       <p>Set controller mute behavior.</p>
@@ -4028,7 +4028,7 @@ export function App() {
 
                 <section className={`system-card device-card ${showDiagnostics ? 'expanded' : ''}`}>
                   <div className="feature-card-title system-card-heading">
-                    <span className="feature-icon system-icon">
+                    <span className="feature-icon system-icon icon-wide">
                       {showDiagnostics ? <SlidersHorizontal size={20} /> : <Settings2 size={20} />}
                     </span>
                     <div className="title-copy">
