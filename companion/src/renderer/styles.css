@@ -1089,6 +1089,16 @@ button {
   background: transparent;
 }
 
+.sidebar-action-button.tentative:disabled {
+  cursor: default;
+  opacity: 0.58;
+}
+
+.control-tabs button.tentative:disabled {
+  cursor: default;
+  opacity: 0.58;
+}
+
 .sidebar-action-button.active {
   color: #ffffff;
   border-color: rgba(77, 147, 255, 0.26);

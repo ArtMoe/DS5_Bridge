@@ -6,13 +6,13 @@ import {
   Bell,
   Check,
   ChevronDown,
+  Gamepad2,
   Headphones,
   House,
   Keyboard,
   Mic,
   Minus,
   Moon,
-  MoreHorizontal,
   Palette,
   Play,
   RefreshCcw,
@@ -2202,13 +2202,13 @@ export function App() {
                   {label}
                 </button>
               ))}
+              <button className="tentative" type="button" role="tab" aria-selected={false} disabled>
+                <Gamepad2 size={16} />
+                Button Remapping
+              </button>
             </div>
           </div>
           <div className="sidebar-actions">
-            <button className="sidebar-action-button" type="button">
-              <MoreHorizontal size={18} />
-              <span>More</span>
-            </button>
             <div className="header-settings">
               <button
                 className={`sidebar-action-button ${showBridgeSettings ? 'active' : ''}`}
@@ -2361,7 +2361,7 @@ export function App() {
                     </button>
                     <div className="title-copy">
                       <h3>{showClassicRumbleControl ? 'Rumble' : 'Intensity'}</h3>
-                      <p>{showClassicRumbleControl ? 'Game Rumble Strength' : 'Haptic Feedback Strength'}</p>
+                      <p>{showClassicRumbleControl ? 'Rumble Strength' : 'Haptic Strength'}</p>
                     </div>
                     <div className="dual-selector haptics-mode-selector" role="tablist" aria-label="Haptics control mode">
                       <button
