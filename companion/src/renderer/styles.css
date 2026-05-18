@@ -1089,16 +1089,6 @@ button {
   background: transparent;
 }
 
-.sidebar-action-button.tentative:disabled {
-  cursor: default;
-  opacity: 0.58;
-}
-
-.control-tabs button.tentative:disabled {
-  cursor: default;
-  opacity: 0.58;
-}
-
 .sidebar-action-button.active {
   color: #ffffff;
   border-color: rgba(77, 147, 255, 0.26);
@@ -1152,6 +1142,11 @@ button {
 
 .overview-page {
   grid-template-rows: auto auto;
+}
+
+.remapping-page {
+  min-height: calc(100vh - var(--window-bar-height) - 72px);
+  grid-template-rows: auto minmax(0, 1fr);
 }
 
 .overview-heading {
@@ -1445,6 +1440,199 @@ button.feature-icon {
 
 .feature-card-title .title-copy p {
   font-size: 12px;
+}
+
+.remapping-card {
+  --remapping-art-height: clamp(390px, calc(100vh - var(--window-bar-height) - 220px), 520px);
+  min-height: calc(var(--remapping-art-height) + 28px);
+  height: 100%;
+  padding: 14px;
+  overflow: visible;
+}
+
+.remapping-layout {
+  position: relative;
+  display: grid;
+  grid-template-columns: minmax(128px, 0.36fr) minmax(420px, 2.06fr) minmax(128px, 0.36fr);
+  align-items: center;
+  gap: 12px;
+  min-height: calc(var(--feature-card-height) - 28px);
+}
+
+.remapping-callout-layer {
+  position: absolute;
+  z-index: 1;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  overflow: visible;
+  pointer-events: none;
+}
+
+.remapping-callout-layer polyline {
+  fill: none;
+  stroke: rgba(151, 158, 163, 0.72);
+  stroke-width: 1;
+  stroke-linecap: square;
+  stroke-linejoin: miter;
+  vector-effect: non-scaling-stroke;
+  transition: stroke 140ms ease, stroke-width 140ms ease, filter 140ms ease, opacity 140ms ease;
+}
+
+.remapping-callout-layer polyline.active {
+  stroke: #4d9dff;
+  stroke-width: 2;
+  opacity: 1;
+  filter: drop-shadow(0 0 6px rgba(40, 124, 255, 0.62));
+}
+
+.remapping-side {
+  position: relative;
+  z-index: 2;
+  min-width: 0;
+  height: var(--remapping-art-height);
+}
+
+.remapping-pill {
+  position: absolute;
+  z-index: 2;
+  top: var(--remapping-callout-top);
+  left: 50%;
+  transform: translate(-50%, -50%);
+  width: min(100%, 128px);
+  min-width: 0;
+  min-height: 36px;
+  padding: 3px;
+  border: 1px solid rgba(142, 164, 194, 0.18);
+  border-radius: 999px;
+  display: grid;
+  grid-template-columns: 36px 22px minmax(46px, 1fr);
+  align-items: stretch;
+  gap: 0;
+  background: rgba(5, 13, 23, 0.58);
+  overflow: visible;
+  transition: border-color 140ms ease, background 140ms ease, box-shadow 140ms ease;
+}
+
+.remapping-pill:hover,
+.remapping-pill:focus-within {
+  z-index: 5;
+  border-color: rgba(77, 157, 255, 0.52);
+  background: rgba(9, 24, 40, 0.82);
+  box-shadow:
+    0 0 0 1px rgba(40, 124, 255, 0.12),
+    0 0 22px rgba(40, 124, 255, 0.12);
+}
+
+.remapping-pill:has(.custom-select.open) {
+  z-index: 40;
+}
+
+.remapping-pill:has(.custom-select.open) .custom-select-menu {
+  z-index: 120;
+}
+
+.remapping-source,
+.remap-glyph-option {
+  min-width: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  color: #eef4ff;
+  font-size: 11px;
+  font-weight: 700;
+  white-space: nowrap;
+}
+
+.remapping-source {
+  height: 100%;
+  min-height: 100%;
+  padding-left: 0;
+  border-radius: 999px 0 0 999px;
+  background: rgba(40, 124, 255, 0.08);
+}
+
+.remapping-arrow {
+  display: grid;
+  place-items: center;
+  min-width: 0;
+  color: #6faeff;
+  background: rgba(255, 255, 255, 0.025);
+}
+
+.remapping-arrow svg {
+  stroke-width: 2.4;
+}
+
+.remapping-source img,
+.remap-glyph-option img {
+  width: 24px;
+  height: 24px;
+  flex: 0 0 24px;
+  object-fit: contain;
+  display: block;
+}
+
+.remapping-select .custom-select-button {
+  height: 100%;
+  padding: 0 6px 0 6px;
+  border-width: 0 0 0 1px;
+  border-color: rgba(142, 164, 194, 0.14);
+  border-radius: 0 999px 999px 0;
+  grid-template-columns: minmax(0, 1fr) 12px;
+  gap: 2px;
+  background: rgba(10, 22, 36, 0.72);
+}
+
+.remapping-select .custom-select-button > span,
+.remapping-select .custom-select-menu button > span {
+  height: 100%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.remapping-select .custom-select-button svg {
+  width: 12px;
+  height: 12px;
+}
+
+.remapping-select .custom-select-menu {
+  min-width: 54px;
+}
+
+.remapping-select .custom-select-menu button {
+  min-height: 30px;
+  grid-template-columns: minmax(0, 1fr);
+  padding: 0 8px;
+}
+
+.remapping-controller-stage {
+  position: relative;
+  z-index: 0;
+  min-width: 0;
+  height: var(--remapping-art-height);
+  display: grid;
+  place-items: center;
+  overflow: hidden;
+}
+
+.remapping-controller-stage::before {
+  content: "";
+  position: absolute;
+  inset: 14px 24px;
+  border-radius: 50%;
+  background: radial-gradient(circle, rgba(40, 124, 255, 0.12), transparent 66%);
+  pointer-events: none;
+}
+
+.remapping-controller-art {
+  position: relative;
+  width: min(100%, calc(var(--remapping-art-height) * 1.391));
+  height: var(--remapping-art-height);
+  object-fit: contain;
+  filter: drop-shadow(0 18px 34px rgba(0, 0, 0, 0.36));
 }
 
 .audio-enable-button svg,
@@ -2691,6 +2879,11 @@ button.feature-icon {
   overscroll-behavior: contain;
   scrollbar-width: thin;
   scrollbar-color: rgba(129, 148, 176, 0.72) rgba(255, 255, 255, 0.06);
+}
+
+.custom-select.menu-top .custom-select-menu {
+  top: auto;
+  bottom: calc(100% + 6px);
 }
 
 .custom-select-menu::-webkit-scrollbar {

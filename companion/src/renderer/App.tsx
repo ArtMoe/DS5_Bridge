@@ -1,7 +1,8 @@
-import { type CSSProperties, useEffect, useMemo, useRef, useState } from 'react';
+import { type CSSProperties, type ReactNode, useEffect, useMemo, useRef, useState } from 'react';
 import {
   type LucideIcon,
   Activity,
+  ArrowRight,
   BatteryFull,
   Bell,
   Check,
@@ -28,16 +29,56 @@ import {
 } from 'lucide-react';
 import bridgeMarkUrl from '../../../assets/controllers/ds5-bridge_mark.svg';
 import controllerImage from '../../../assets/controllers/dualsense-edge-front.svg';
+import remappingLayoutImage from '../../../assets/controllers/dualsense-remapping-layout.svg';
+import circleGlyphUrl from '../../../assets/glyphs/ps5-buttons-outline-white/svg/Circle.svg';
+import createGlyphUrl from '../../../assets/glyphs/ps5-buttons-outline-white/svg/Create.svg';
+import crossGlyphUrl from '../../../assets/glyphs/ps5-buttons-outline-white/svg/Cross.svg';
 import dpadDownGlyphUrl from '../../../assets/glyphs/ps5-buttons-outline-white/svg/D-Pad Down.svg';
+import dpadLeftGlyphUrl from '../../../assets/glyphs/ps5-buttons-outline-white/svg/D-Pad Left.svg';
+import dpadRightGlyphUrl from '../../../assets/glyphs/ps5-buttons-outline-white/svg/D-Pad Right.svg';
 import dpadUpGlyphUrl from '../../../assets/glyphs/ps5-buttons-outline-white/svg/D-Pad Up.svg';
+import l1GlyphUrl from '../../../assets/glyphs/ps5-buttons-outline-white/svg/L1.svg';
+import l2GlyphUrl from '../../../assets/glyphs/ps5-buttons-outline-white/svg/L2.svg';
+import leftStickClickGlyphUrl from '../../../assets/glyphs/ps5-buttons-outline-white/svg/Left Stick Click.svg';
+import optionsGlyphUrl from '../../../assets/glyphs/ps5-buttons-outline-white/svg/Options.svg';
 import psHomeGlyphUrl from '../../../assets/glyphs/ps5-buttons-outline-white/svg/Home.svg';
+import r1GlyphUrl from '../../../assets/glyphs/ps5-buttons-outline-white/svg/R1.svg';
+import r2GlyphUrl from '../../../assets/glyphs/ps5-buttons-outline-white/svg/R2.svg';
+import rightStickClickGlyphUrl from '../../../assets/glyphs/ps5-buttons-outline-white/svg/Right Stick Click.svg';
+import squareGlyphUrl from '../../../assets/glyphs/ps5-buttons-outline-white/svg/Square.svg';
 import triangleGlyphUrl from '../../../assets/glyphs/ps5-buttons-outline-white/svg/Triangle.svg';
 import testSpeakerToneUrl from './assets/test-speaker-tone-silence-tail.mp3';
 import { ackResultName } from '../shared/protocol';
 import type { BridgePresetId, MuteButtonMode, MuteKeyboardBehavior, PollingRateMode, TriggerTestMode, TriggerTestTarget } from '../shared/protocol';
 import type { BridgeSnapshot } from '../shared/types';
 
-type ControlTab = 'overview' | 'haptics' | 'audio' | 'triggers' | 'lighting' | 'system';
+type ControlTab = 'overview' | 'haptics' | 'audio' | 'triggers' | 'lighting' | 'remapping' | 'system';
+type RemapButtonId =
+  | 'l2'
+  | 'l1'
+  | 'create'
+  | 'dpad-up'
+  | 'dpad-left'
+  | 'dpad-down'
+  | 'dpad-right'
+  | 'l3'
+  | 'r2'
+  | 'r1'
+  | 'options'
+  | 'triangle'
+  | 'circle'
+  | 'cross'
+  | 'square'
+  | 'r3';
+type RemapButtonDefinition = {
+  id: RemapButtonId;
+  label: string;
+  glyphUrl: string;
+};
+type RemapCalloutLayout = {
+  top: number;
+  points: string;
+};
 type LightbarPaletteCell = {
   color: string;
   name: string;
@@ -161,12 +202,84 @@ const IDLE_DISCONNECT_TIMEOUT_OPTIONS: Array<[string, number]> = [
   ['15 min', 15],
   ['30 min', 30]
 ];
+const REMAP_BUTTONS: Record<RemapButtonId, RemapButtonDefinition> = {
+  l2: { id: 'l2', label: 'L2', glyphUrl: l2GlyphUrl },
+  l1: { id: 'l1', label: 'L1', glyphUrl: l1GlyphUrl },
+  create: { id: 'create', label: 'Create', glyphUrl: createGlyphUrl },
+  'dpad-up': { id: 'dpad-up', label: 'D-pad Up', glyphUrl: dpadUpGlyphUrl },
+  'dpad-left': { id: 'dpad-left', label: 'D-pad Left', glyphUrl: dpadLeftGlyphUrl },
+  'dpad-down': { id: 'dpad-down', label: 'D-pad Down', glyphUrl: dpadDownGlyphUrl },
+  'dpad-right': { id: 'dpad-right', label: 'D-pad Right', glyphUrl: dpadRightGlyphUrl },
+  l3: { id: 'l3', label: 'L3', glyphUrl: leftStickClickGlyphUrl },
+  r2: { id: 'r2', label: 'R2', glyphUrl: r2GlyphUrl },
+  r1: { id: 'r1', label: 'R1', glyphUrl: r1GlyphUrl },
+  options: { id: 'options', label: 'Options', glyphUrl: optionsGlyphUrl },
+  triangle: { id: 'triangle', label: 'Triangle', glyphUrl: triangleGlyphUrl },
+  circle: { id: 'circle', label: 'Circle', glyphUrl: circleGlyphUrl },
+  cross: { id: 'cross', label: 'Cross', glyphUrl: crossGlyphUrl },
+  square: { id: 'square', label: 'Square', glyphUrl: squareGlyphUrl },
+  r3: { id: 'r3', label: 'R3', glyphUrl: rightStickClickGlyphUrl }
+};
+const REMAP_LEFT_BUTTON_IDS: RemapButtonId[] = ['l2', 'l1', 'create', 'dpad-up', 'dpad-left', 'dpad-down', 'dpad-right', 'l3'];
+const REMAP_RIGHT_BUTTON_IDS: RemapButtonId[] = ['r2', 'r1', 'options', 'triangle', 'circle', 'cross', 'square', 'r3'];
+const REMAP_STICK_CLICK_IDS: RemapButtonId[] = ['l3', 'r3'];
+const REMAP_TARGET_OPTIONS: Array<[string, RemapButtonId]> = [
+  ...REMAP_LEFT_BUTTON_IDS,
+  ...REMAP_RIGHT_BUTTON_IDS
+].map((id) => [REMAP_BUTTONS[id].label, id]);
+const DEFAULT_REMAP_DRAFT = Object.fromEntries(
+  REMAP_TARGET_OPTIONS.map(([, id]) => [id, id])
+) as Record<RemapButtonId, RemapButtonId>;
+const REMAP_STICK_CLICK_TARGET_OPTIONS: Array<[string, RemapButtonId]> = REMAP_STICK_CLICK_IDS.map((id) => [
+  REMAP_BUTTONS[id].label,
+  id
+]);
+const REMAP_SVG_VIEWBOX_WIDTH = 597.47;
+const REMAP_SVG_VIEWBOX_HEIGHT = 429.39;
+const REMAP_PILL_WIDTH = 128;
+const REMAP_CALLOUT_POINTS: Record<RemapButtonId, Array<[number, number]>> = {
+  l2: [[2.4, 3.17], [117.91, 3.17], [171.1, 93.49]],
+  l1: [[2.4, 63.71], [129.99, 63.71], [161.13, 118.36]],
+  create: [[2.4, 124.24], [110.86, 124.24], [134, 163], [186.65, 162.89]],
+  'dpad-up': [[2.4, 184.78], [146.83, 184.78]],
+  'dpad-right': [[2.4, 245.32], [126.31, 245.32], [138.09, 221.25]],
+  'dpad-down': [[2.4, 305.86], [124.63, 305.86], [162.42, 241.39]],
+  'dpad-left': [[2.4, 366.39], [106.55, 366.39], [189.13, 221.85]],
+  l3: [[2.4, 426.93], [143.77, 426.93], [230.4, 275.47]],
+  r2: [[595.34, 3.17], [480.78, 3.17], [427.95, 93.94]],
+  r1: [[595.34, 63.71], [468.92, 63.71], [437.92, 117.79]],
+  options: [[595.34, 124.24], [487.5, 124.24], [464.28, 162.89], [411.62, 162.89]],
+  triangle: [[595.34, 184.78], [453.97, 184.78]],
+  circle: [[595.34, 245.32], [486.88, 245.32], [473.71, 222.09]],
+  cross: [[595.34, 305.86], [472.22, 305.86], [438.56, 248.84]],
+  square: [[595.34, 366.39], [485.42, 366.39], [405.35, 223.46]],
+  r3: [[595.34, 426.93], [453.97, 426.93], [369.45, 275.47]]
+};
+const REMAP_CALLOUT_Y: Record<RemapButtonId, number> = {
+  l2: 3.17,
+  l1: 63.71,
+  create: 124.24,
+  'dpad-up': 184.78,
+  'dpad-right': 245.32,
+  'dpad-down': 305.86,
+  'dpad-left': 366.39,
+  l3: 426.93,
+  r2: 3.17,
+  r1: 63.71,
+  options: 124.24,
+  triangle: 184.78,
+  circle: 245.32,
+  cross: 305.86,
+  square: 366.39,
+  r3: 426.93
+};
 const CONTROL_TABS: Array<{ id: ControlTab; label: string; Icon: LucideIcon }> = [
   { id: 'overview', label: 'Overview', Icon: House },
   { id: 'audio', label: 'Audio', Icon: Volume2 },
   { id: 'haptics', label: 'Haptics', Icon: Sparkles },
   { id: 'triggers', label: 'Triggers', Icon: Zap },
   { id: 'lighting', label: 'Lighting', Icon: Palette },
+  { id: 'remapping', label: 'Button Remapping', Icon: Gamepad2 },
   { id: 'system', label: 'System', Icon: Settings2 }
 ];
 
@@ -181,6 +294,8 @@ type CustomSelectProps<T extends SelectValue> = {
   disabled?: boolean;
   className?: string;
   showSelectedCheck?: boolean;
+  renderValue?: (label: string, value: T) => ReactNode;
+  renderOption?: (label: string, value: T) => ReactNode;
   ariaLabel: string;
   onChange: (value: T) => void;
 };
@@ -715,6 +830,8 @@ function CustomSelect<T extends SelectValue>({
   disabled = false,
   className = '',
   showSelectedCheck = true,
+  renderValue,
+  renderOption,
   ariaLabel,
   onChange
 }: CustomSelectProps<T>) {
@@ -725,6 +842,7 @@ function CustomSelect<T extends SelectValue>({
   const longList = options.length > 18;
   const defaultMenuMaxHeight = longList ? 360 : 232;
   const [menuMaxHeight, setMenuMaxHeight] = useState(defaultMenuMaxHeight);
+  const [menuPlacement, setMenuPlacement] = useState<'top' | 'bottom'>('bottom');
 
   function updateMenuMaxHeight() {
     const root = rootRef.current;
@@ -738,9 +856,14 @@ function CustomSelect<T extends SelectValue>({
     const boundaryRect = boundary?.getBoundingClientRect();
     const menuGap = 6;
     const lowerLimit = Math.min(window.innerHeight, boundaryRect?.bottom ?? window.innerHeight);
+    const upperLimit = Math.max(0, boundaryRect?.top ?? 0);
     const spaceBelow = Math.max(1, Math.floor(lowerLimit - rootRect.bottom - menuGap));
-    const nextMaxHeight = longList ? spaceBelow : Math.min(defaultMenuMaxHeight, spaceBelow);
+    const spaceAbove = Math.max(1, Math.floor(rootRect.top - upperLimit - menuGap));
+    const nextPlacement = spaceBelow < 92 && spaceAbove > spaceBelow ? 'top' : 'bottom';
+    const availableSpace = nextPlacement === 'top' ? spaceAbove : spaceBelow;
+    const nextMaxHeight = longList ? availableSpace : Math.min(defaultMenuMaxHeight, availableSpace);
 
+    setMenuPlacement(nextPlacement);
     setMenuMaxHeight(Math.max(1, nextMaxHeight));
   }
 
@@ -801,7 +924,7 @@ function CustomSelect<T extends SelectValue>({
   return (
     <div
       ref={rootRef}
-      className={`custom-select ${className} ${open ? 'open' : ''} ${disabled ? 'disabled' : ''}`}
+      className={`custom-select ${className} ${open ? 'open' : ''} menu-${menuPlacement} ${disabled ? 'disabled' : ''}`}
       style={{ '--custom-select-menu-max-height': `${menuMaxHeight}px` } as CSSProperties}
     >
       <button
@@ -822,7 +945,7 @@ function CustomSelect<T extends SelectValue>({
           }
         }}
       >
-        <span>{selected?.[0] ?? String(value)}</span>
+        <span>{selected ? (renderValue?.(selected[0], selected[1]) ?? selected[0]) : String(value)}</span>
         <ChevronDown size={18} />
       </button>
       {open && (
@@ -839,7 +962,7 @@ function CustomSelect<T extends SelectValue>({
                 className={selectedOption ? 'selected' : ''}
                 onClick={() => choose(optionValue)}
               >
-                <span>{label}</span>
+                <span>{renderOption?.(label, optionValue) ?? label}</span>
                 {showSelectedCheck && selectedOption && <Check size={15} />}
               </button>
             );
@@ -880,6 +1003,20 @@ function UptimeValue({
   return <span className="uptime-value">{displayUptime ?? '--'}s</span>;
 }
 
+function RemapGlyphOption({ label, value }: { label: string; value: RemapButtonId }) {
+  const button = REMAP_BUTTONS[value];
+
+  return (
+    <span className="remap-glyph-option" title={label}>
+      <img src={button.glyphUrl} alt={label} />
+    </span>
+  );
+}
+
+function remapTargetOptionsFor(buttonId: RemapButtonId): Array<[string, RemapButtonId]> {
+  return REMAP_STICK_CLICK_IDS.includes(buttonId) ? REMAP_STICK_CLICK_TARGET_OPTIONS : REMAP_TARGET_OPTIONS;
+}
+
 export function App() {
   const [snapshot, setSnapshot] = useState<BridgeSnapshot | null>(null);
   const [showDiagnostics, setShowDiagnostics] = useState(false);
@@ -901,6 +1038,9 @@ export function App() {
   const [lightbarBrightnessValue, setLightbarBrightnessValue] = useState(100);
   const [triggerEffectIntensityValue, setTriggerEffectIntensityValue] = useState(100);
   const [triggerTarget, setTriggerTarget] = useState<TriggerTestTarget>('both');
+  const [remapDraft, setRemapDraft] = useState<Record<RemapButtonId, RemapButtonId>>(DEFAULT_REMAP_DRAFT);
+  const [remapCalloutLayout, setRemapCalloutLayout] = useState<Record<RemapButtonId, RemapCalloutLayout> | null>(null);
+  const [hoveredRemapButton, setHoveredRemapButton] = useState<RemapButtonId | null>(null);
   const [pendingAction, setPendingAction] = useState<string | null>(null);
   const [showBridgeSettings, setShowBridgeSettings] = useState(false);
   const [showNotificationsMenu, setShowNotificationsMenu] = useState(false);
@@ -926,6 +1066,10 @@ export function App() {
   const lightbarBrightnessEditingRef = useRef(false);
   const triggerEffectEditingRef = useRef(false);
   const notificationsRef = useRef<HTMLDivElement>(null);
+  const remappingLayoutRef = useRef<HTMLDivElement>(null);
+  const remappingLeftSideRef = useRef<HTMLDivElement>(null);
+  const remappingRightSideRef = useRef<HTMLDivElement>(null);
+  const remappingArtRef = useRef<HTMLImageElement>(null);
   const customColorPickerRef = useRef<HTMLDivElement>(null);
   const customSwatchPrimeTimerRef = useRef<number | null>(null);
   const sleepConfirmTimerRef = useRef<number | null>(null);
@@ -1022,6 +1166,88 @@ export function App() {
   useEffect(() => {
     setSpeakerOutputAvailable(true);
   }, []);
+
+  useEffect(() => {
+    if (activeControlTab !== 'remapping') {
+      return undefined;
+    }
+
+    const leftSide = remappingLeftSideRef.current;
+    const rightSide = remappingRightSideRef.current;
+    const layout = remappingLayoutRef.current;
+    const art = remappingArtRef.current;
+    if (!leftSide || !rightSide || !layout || !art) {
+      return undefined;
+    }
+    const leftSideElement = leftSide;
+    const rightSideElement = rightSide;
+    const layoutElement = layout;
+    const artElement = art;
+
+    function updateRemapCalloutPositions() {
+      const artRect = artElement.getBoundingClientRect();
+      const leftRect = leftSideElement.getBoundingClientRect();
+      const rightRect = rightSideElement.getBoundingClientRect();
+      const layoutRect = layoutElement.getBoundingClientRect();
+      const viewBoxAspect = REMAP_SVG_VIEWBOX_WIDTH / REMAP_SVG_VIEWBOX_HEIGHT;
+      const renderedSvgHeight = Math.min(artRect.height, artRect.width / viewBoxAspect);
+      const renderedSvgWidth = renderedSvgHeight * viewBoxAspect;
+      const renderedSvgTop = artRect.top + (artRect.height - renderedSvgHeight) / 2;
+      const renderedSvgLeft = artRect.left + (artRect.width - renderedSvgWidth) / 2;
+      const nextLayout = {} as Record<RemapButtonId, RemapCalloutLayout>;
+      const mapSvgPoint = ([x, y]: [number, number]) => (
+        `${renderedSvgLeft + (x / REMAP_SVG_VIEWBOX_WIDTH) * renderedSvgWidth - layoutRect.left},${renderedSvgTop + (y / REMAP_SVG_VIEWBOX_HEIGHT) * renderedSvgHeight - layoutRect.top}`
+      );
+
+      for (const buttonId of REMAP_LEFT_BUTTON_IDS) {
+        const top = renderedSvgTop + (REMAP_CALLOUT_Y[buttonId] / REMAP_SVG_VIEWBOX_HEIGHT) * renderedSvgHeight - leftRect.top;
+        const pillCenterX = leftRect.left + leftRect.width / 2;
+        const pillRightX = pillCenterX + REMAP_PILL_WIDTH / 2;
+        nextLayout[buttonId] = {
+          top,
+          points: [
+            `${pillRightX - layoutRect.left},${leftRect.top + top - layoutRect.top}`,
+            ...REMAP_CALLOUT_POINTS[buttonId].map(mapSvgPoint)
+          ].join(' ')
+        };
+      }
+      for (const buttonId of REMAP_RIGHT_BUTTON_IDS) {
+        const top = renderedSvgTop + (REMAP_CALLOUT_Y[buttonId] / REMAP_SVG_VIEWBOX_HEIGHT) * renderedSvgHeight - rightRect.top;
+        const pillCenterX = rightRect.left + rightRect.width / 2;
+        const pillLeftX = pillCenterX - REMAP_PILL_WIDTH / 2;
+        nextLayout[buttonId] = {
+          top,
+          points: [
+            `${pillLeftX - layoutRect.left},${rightRect.top + top - layoutRect.top}`,
+            ...REMAP_CALLOUT_POINTS[buttonId].map(mapSvgPoint)
+          ].join(' ')
+        };
+      }
+
+      setRemapCalloutLayout((current) => {
+        if (current && REMAP_TARGET_OPTIONS.every(([, buttonId]) => (
+          Math.abs(current[buttonId].top - nextLayout[buttonId].top) < 0.5
+          && current[buttonId].points === nextLayout[buttonId].points
+        ))) {
+          return current;
+        }
+        return nextLayout;
+      });
+    }
+
+    updateRemapCalloutPositions();
+    const resizeObserver = new ResizeObserver(updateRemapCalloutPositions);
+    resizeObserver.observe(leftSideElement);
+    resizeObserver.observe(rightSideElement);
+    resizeObserver.observe(layoutElement);
+    resizeObserver.observe(artElement);
+    window.addEventListener('resize', updateRemapCalloutPositions);
+
+    return () => {
+      resizeObserver.disconnect();
+      window.removeEventListener('resize', updateRemapCalloutPositions);
+    };
+  }, [activeControlTab]);
 
   useEffect(() => {
     if (!connected) {
@@ -2202,10 +2428,6 @@ export function App() {
                   {label}
                 </button>
               ))}
-              <button className="tentative" type="button" role="tab" aria-selected={false} disabled>
-                <Gamepad2 size={16} />
-                Button Remapping
-              </button>
             </div>
           </div>
           <div className="sidebar-actions">
@@ -3158,6 +3380,113 @@ export function App() {
                   </div>
                 </section>
               </div>
+          </div>
+
+          <div
+            className="control-page remapping-page"
+            role="tabpanel"
+            id="control-panel-remapping"
+            aria-labelledby="control-tab-remapping"
+            hidden={activeControlTab !== 'remapping'}
+          >
+              <div className="feature-heading">
+                <div>
+                  <h2>Button Remapping</h2>
+                  <p>Choose replacement targets for controller button slots.</p>
+                </div>
+              </div>
+              <section className="feature-card remapping-card">
+                <div className="remapping-layout" ref={remappingLayoutRef}>
+                  <svg className="remapping-callout-layer" aria-hidden="true">
+                    {remapCalloutLayout && REMAP_TARGET_OPTIONS.map(([, buttonId]) => (
+                      <polyline
+                        key={buttonId}
+                        className={hoveredRemapButton === buttonId ? 'active' : undefined}
+                        points={remapCalloutLayout[buttonId].points}
+                      />
+                    ))}
+                  </svg>
+                  <div className="remapping-side remapping-side-left" ref={remappingLeftSideRef} aria-label="Left side button mappings">
+                    {REMAP_LEFT_BUTTON_IDS.map((buttonId) => {
+                      const button = REMAP_BUTTONS[buttonId];
+                      const targetOptions = remapTargetOptionsFor(buttonId);
+                      return (
+                        <div
+                          className="remapping-pill"
+                          key={buttonId}
+                          onMouseEnter={() => setHoveredRemapButton(buttonId)}
+                          onMouseLeave={() => setHoveredRemapButton((current) => current === buttonId ? null : current)}
+                          onFocusCapture={() => setHoveredRemapButton(buttonId)}
+                          onBlurCapture={() => setHoveredRemapButton((current) => current === buttonId ? null : current)}
+                          style={{
+                            '--remapping-callout-top': remapCalloutLayout
+                              ? `${remapCalloutLayout[buttonId].top}px`
+                              : `${(REMAP_CALLOUT_Y[buttonId] / REMAP_SVG_VIEWBOX_HEIGHT) * 100}%`
+                          } as CSSProperties}
+                        >
+                          <span className="remapping-source">
+                            <img src={button.glyphUrl} alt={button.label} title={button.label} />
+                          </span>
+                          <span className="remapping-arrow" aria-hidden="true">
+                            <ArrowRight size={15} />
+                          </span>
+                          <CustomSelect
+                            value={remapDraft[buttonId]}
+                            options={targetOptions}
+                            className="remapping-select"
+                            showSelectedCheck={false}
+                            ariaLabel={`${button.label} remap target`}
+                            renderValue={(label, value) => <RemapGlyphOption label={label} value={value} />}
+                            renderOption={(label, value) => <RemapGlyphOption label={label} value={value} />}
+                            onChange={(value) => setRemapDraft((draft) => ({ ...draft, [buttonId]: value }))}
+                          />
+                        </div>
+                      );
+                    })}
+                  </div>
+                  <div className="remapping-controller-stage" aria-hidden="true">
+                    <img ref={remappingArtRef} className="remapping-controller-art" src={remappingLayoutImage} alt="" />
+                  </div>
+                  <div className="remapping-side remapping-side-right" ref={remappingRightSideRef} aria-label="Right side button mappings">
+                    {REMAP_RIGHT_BUTTON_IDS.map((buttonId) => {
+                      const button = REMAP_BUTTONS[buttonId];
+                      const targetOptions = remapTargetOptionsFor(buttonId);
+                      return (
+                        <div
+                          className="remapping-pill"
+                          key={buttonId}
+                          onMouseEnter={() => setHoveredRemapButton(buttonId)}
+                          onMouseLeave={() => setHoveredRemapButton((current) => current === buttonId ? null : current)}
+                          onFocusCapture={() => setHoveredRemapButton(buttonId)}
+                          onBlurCapture={() => setHoveredRemapButton((current) => current === buttonId ? null : current)}
+                          style={{
+                            '--remapping-callout-top': remapCalloutLayout
+                              ? `${remapCalloutLayout[buttonId].top}px`
+                              : `${(REMAP_CALLOUT_Y[buttonId] / REMAP_SVG_VIEWBOX_HEIGHT) * 100}%`
+                          } as CSSProperties}
+                        >
+                          <span className="remapping-source">
+                            <img src={button.glyphUrl} alt={button.label} title={button.label} />
+                          </span>
+                          <span className="remapping-arrow" aria-hidden="true">
+                            <ArrowRight size={15} />
+                          </span>
+                          <CustomSelect
+                            value={remapDraft[buttonId]}
+                            options={targetOptions}
+                            className="remapping-select"
+                            showSelectedCheck={false}
+                            ariaLabel={`${button.label} remap target`}
+                            renderValue={(label, value) => <RemapGlyphOption label={label} value={value} />}
+                            renderOption={(label, value) => <RemapGlyphOption label={label} value={value} />}
+                            onChange={(value) => setRemapDraft((draft) => ({ ...draft, [buttonId]: value }))}
+                          />
+                        </div>
+                      );
+                    })}
+                  </div>
+                </div>
+              </section>
           </div>
 
           <div
