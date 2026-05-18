@@ -11,7 +11,8 @@ import {
   COMPANION_USAGE_PAGE,
   MAGIC,
   REPORT_ID,
-  REPORT_LENGTH
+  REPORT_LENGTH,
+  SHORTCUT_EVENT
 } from '../shared/protocol';
 
 const hidMock = vi.hoisted(() => {
@@ -677,7 +678,7 @@ describe('BridgeService', () => {
     await poll(service);
     await service.setSleepKeybindEnabled(true);
 
-    device.emit('data', Buffer.from([REPORT_ID.INPUT, 3]));
+    device.emit('data', Buffer.from([REPORT_ID.INPUT, SHORTCUT_EVENT.SLEEP_CONTROLLER]));
     await flushReapply();
     await flushReapply();
 
@@ -716,7 +717,7 @@ describe('BridgeService', () => {
     await service.setSpeakerVolumeShortcutEnabled(true);
     expect(service.getSnapshot().settings.speakerEnabled).toBe(true);
 
-    device.emit('data', Buffer.from([REPORT_ID.INPUT, 2]));
+    device.emit('data', Buffer.from([REPORT_ID.INPUT, SHORTCUT_EVENT.CONTROLLER_VOLUME_UP]));
     await flushReapply();
     await flushReapply();
 

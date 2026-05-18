@@ -21,6 +21,7 @@ import {
   parseHostAudioStatusReport,
   parseStatusReport,
   HOST_AUDIO_PACKET_TYPE,
+  SHORTCUT_EVENT,
   normalizeBridgePresetId,
   pollingRateModeValue
 } from '../shared/protocol';
@@ -33,6 +34,7 @@ import type {
   MuteButtonMode,
   MuteKeyboardBehavior,
   PollingRateMode,
+  ShortcutEvent,
   TriggerTestMode,
   TriggerTestTarget
 } from '../shared/protocol';
@@ -278,6 +280,19 @@ function isExpectedHidDisconnectError(error: unknown): boolean {
     || message.includes('hid device disconnected');
 }
 
+function parseShortcutEvent(data: Buffer | number[]): ShortcutEvent | null {
+  const report = Array.from(data);
+  const event = report[0] === REPORT_ID.INPUT ? report[1] : report[0];
+  switch (event) {
+    case SHORTCUT_EVENT.CONTROLLER_VOLUME_DOWN:
+    case SHORTCUT_EVENT.CONTROLLER_VOLUME_UP:
+    case SHORTCUT_EVENT.SLEEP_CONTROLLER:
+      return event;
+    default:
+      return null;
+  }
+}
+
 function formatUsbDebugEvent(prefix: string, args: number[]): string {
   const [type, arg1, arg2, arg3, arg4] = args;
   switch (type) {
@@ -460,6 +475,11 @@ export class BridgeService extends EventEmitter {
   private previousControllerConnected: boolean | null = null;
   private lowBatteryToastActive = false;
   private volumeShortcutQueue: Promise<void> = Promise.resolve();
+  private readonly shortcutActionHandlers: Record<ShortcutEvent, () => Promise<void>> = {
+    [SHORTCUT_EVENT.CONTROLLER_VOLUME_DOWN]: () => this.applyControllerVolumeShortcut(-10),
+    [SHORTCUT_EVENT.CONTROLLER_VOLUME_UP]: () => this.applyControllerVolumeShortcut(10),
+    [SHORTCUT_EVENT.SLEEP_CONTROLLER]: () => this.applySleepShortcut()
+  };
 
   constructor(private readonly settingsStore: SettingsStore) {
     super();
@@ -491,26 +511,15 @@ export class BridgeService extends EventEmitter {
   }
 
   private readonly handleCompanionInputData = (data: Buffer | number[]): void => {
-    const report = Array.from(data);
-    const event = report[0] === REPORT_ID.INPUT ? report[1] : report[0];
-    if (event === 3) {
-      this.volumeShortcutQueue = this.volumeShortcutQueue
-        .catch(() => {
-          // Keep later shortcut events alive after a failed command.
-        })
-        .then(() => this.applySleepShortcut());
+    const event = parseShortcutEvent(data);
+    if (event === null) {
       return;
     }
-    if (event !== 1 && event !== 2) {
-      return;
-    }
-
-    const delta = event === 2 ? 10 : -10;
     this.volumeShortcutQueue = this.volumeShortcutQueue
       .catch(() => {
         // Keep later shortcut events alive after a failed command.
       })
-      .then(() => this.applySpeakerVolumeShortcut(delta));
+      .then(() => this.dispatchShortcutAction(event));
   };
 
   private readonly handleCompanionDeviceError = (error: Error): void => {
@@ -934,7 +943,11 @@ export class BridgeService extends EventEmitter {
     return this.getSnapshot();
   }
 
-  private async applySpeakerVolumeShortcut(deltaPercent: number): Promise<void> {
+  private async dispatchShortcutAction(event: ShortcutEvent): Promise<void> {
+    await this.shortcutActionHandlers[event]();
+  }
+
+  private async applyControllerVolumeShortcut(deltaPercent: number): Promise<void> {
     const settings = this.settingsStore.get();
     if (!settings.speakerVolumeShortcutEnabled || !settings.speakerEnabled) {
       return;

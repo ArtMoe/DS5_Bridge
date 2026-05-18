@@ -1,6 +1,7 @@
 #include "companion.h"
 
 #include <algorithm>
+#include <cstddef>
 #include <cstring>
 
 #include "audio.h"
@@ -25,10 +26,7 @@ constexpr uint8_t kDpadMask = 0x0F;
 constexpr uint8_t kDpadUp = 0x00;
 constexpr uint8_t kDpadDown = 0x04;
 constexpr uint8_t kDpadNeutral = 0x08;
-constexpr uint8_t kShortcutEventVolumeDown = 0x01;
-constexpr uint8_t kShortcutEventVolumeUp = 0x02;
-constexpr uint8_t kShortcutEventSleep = 0x03;
-constexpr uint32_t kSpeakerVolumeShortcutRepeatUs = 180000;
+constexpr uint32_t kShortcutRepeatUs = 180000;
 constexpr uint8_t kDefaultMuteKeyboardUsage = 0x68; // F13
 constexpr uint8_t kMuteKeyboardModifierMask = 0x0F;
 constexpr uint8_t kMuteKeyboardHoldFlag = 0x80;
@@ -101,6 +99,42 @@ enum MuteButtonMode : uint8_t {
     MuteButtonQuiet = 2,
 };
 
+enum ShortcutEvent : uint8_t {
+    ShortcutEventControllerVolumeDown = 0x01,
+    ShortcutEventControllerVolumeUp = 0x02,
+    ShortcutEventSleepController = 0x03,
+};
+
+enum ShortcutSetting : uint8_t {
+    ShortcutSettingSleepKeybind,
+    ShortcutSettingControllerVolume,
+};
+
+enum ShortcutCombo : uint8_t {
+    ShortcutComboHomeDpadUp,
+    ShortcutComboHomeDpadDown,
+    ShortcutComboHomeTriangle,
+};
+
+enum ShortcutTrigger : uint8_t {
+    ShortcutTriggerPressed,
+    ShortcutTriggerRepeat,
+};
+
+struct ShortcutBinding {
+    ShortcutCombo combo;
+    ShortcutEvent event;
+    ShortcutSetting setting;
+    ShortcutTrigger trigger;
+};
+
+constexpr ShortcutBinding kShortcutBindings[] = {
+    {ShortcutComboHomeDpadDown, ShortcutEventControllerVolumeDown, ShortcutSettingControllerVolume, ShortcutTriggerRepeat},
+    {ShortcutComboHomeDpadUp, ShortcutEventControllerVolumeUp, ShortcutSettingControllerVolume, ShortcutTriggerRepeat},
+    {ShortcutComboHomeTriangle, ShortcutEventSleepController, ShortcutSettingSleepKeybind, ShortcutTriggerPressed},
+};
+constexpr size_t kShortcutBindingCount = sizeof(kShortcutBindings) / sizeof(kShortcutBindings[0]);
+
 critical_section_t companion_report_cs;
 uint8_t last_controller_report[63]{};
 bool have_controller_report = false;
@@ -119,11 +153,10 @@ uint8_t mute_keyboard_usage = kDefaultMuteKeyboardUsage;
 uint8_t mute_keyboard_modifiers = 0;
 bool mute_button_last_pressed = false;
 bool sleep_keybind_enabled = false;
-bool sleep_combo_last_pressed = false;
 bool speaker_volume_shortcut_enabled = false;
-uint8_t speaker_volume_combo_last_direction = kDpadNeutral;
-uint32_t speaker_volume_combo_last_step_us = 0;
-uint8_t speaker_volume_shortcut_pending_event = 0;
+bool shortcut_binding_last_pressed[kShortcutBindingCount]{};
+uint32_t shortcut_binding_last_step_us[kShortcutBindingCount]{};
+uint8_t pending_shortcut_event = 0;
 bool mute_keyboard_pending = false;
 bool mute_keyboard_pressed = false;
 uint32_t mute_keyboard_release_at_us = 0;
@@ -228,11 +261,10 @@ void restore_defaults() {
     mute_keyboard_modifiers = 0;
     mute_button_last_pressed = false;
     sleep_keybind_enabled = false;
-    sleep_combo_last_pressed = false;
     speaker_volume_shortcut_enabled = false;
-    speaker_volume_combo_last_direction = kDpadNeutral;
-    speaker_volume_combo_last_step_us = 0;
-    speaker_volume_shortcut_pending_event = 0;
+    std::fill(shortcut_binding_last_pressed, shortcut_binding_last_pressed + kShortcutBindingCount, false);
+    std::fill(shortcut_binding_last_step_us, shortcut_binding_last_step_us + kShortcutBindingCount, 0);
+    pending_shortcut_event = 0;
     mute_keyboard_pending = false;
     mute_keyboard_pressed = false;
     mute_led_flash_pending = false;
@@ -878,7 +910,8 @@ void handle_command(uint8_t const *buffer, uint16_t bufsize) {
                 return;
             }
             sleep_keybind_enabled = value == 1;
-            sleep_combo_last_pressed = false;
+            std::fill(shortcut_binding_last_pressed, shortcut_binding_last_pressed + kShortcutBindingCount, false);
+            std::fill(shortcut_binding_last_step_us, shortcut_binding_last_step_us + kShortcutBindingCount, 0);
             settings_revision++;
             set_ack(command_id, sequence, AckOk);
             return;
@@ -889,9 +922,9 @@ void handle_command(uint8_t const *buffer, uint16_t bufsize) {
                 return;
             }
             speaker_volume_shortcut_enabled = value == 1;
-            speaker_volume_combo_last_direction = kDpadNeutral;
-            speaker_volume_combo_last_step_us = 0;
-            speaker_volume_shortcut_pending_event = 0;
+            std::fill(shortcut_binding_last_pressed, shortcut_binding_last_pressed + kShortcutBindingCount, false);
+            std::fill(shortcut_binding_last_step_us, shortcut_binding_last_step_us + kShortcutBindingCount, 0);
+            pending_shortcut_event = 0;
             settings_revision++;
             set_ack(command_id, sequence, AckOk);
             return;
@@ -996,6 +1029,73 @@ void handle_command(uint8_t const *buffer, uint16_t bufsize) {
     }
 }
 
+bool shortcut_setting_enabled(ShortcutSetting setting) {
+    switch (setting) {
+        case ShortcutSettingSleepKeybind:
+            return sleep_keybind_enabled;
+        case ShortcutSettingControllerVolume:
+            return speaker_volume_shortcut_enabled;
+        default:
+            return false;
+    }
+}
+
+bool shortcut_combo_pressed(const ShortcutBinding &binding, const uint8_t *report) {
+    const bool home_pressed = (report[9] & kHomeButtonBit) != 0;
+    if (!home_pressed) {
+        return false;
+    }
+
+    const uint8_t dpad_direction = report[7] & kDpadMask;
+    switch (binding.combo) {
+        case ShortcutComboHomeDpadUp:
+            return dpad_direction == kDpadUp;
+        case ShortcutComboHomeDpadDown:
+            return dpad_direction == kDpadDown;
+        case ShortcutComboHomeTriangle:
+            return (report[7] & kTriangleButtonBit) != 0;
+        default:
+            return false;
+    }
+}
+
+void suppress_shortcut_input(const ShortcutBinding &binding, uint8_t *report) {
+    report[9] &= static_cast<uint8_t>(~kHomeButtonBit);
+    switch (binding.combo) {
+        case ShortcutComboHomeDpadUp:
+        case ShortcutComboHomeDpadDown:
+            report[7] = static_cast<uint8_t>((report[7] & ~kDpadMask) | kDpadNeutral);
+            break;
+        case ShortcutComboHomeTriangle:
+            report[7] &= static_cast<uint8_t>(~kTriangleButtonBit);
+            break;
+        default:
+            break;
+    }
+}
+
+void process_shortcut_bindings(uint8_t *report) {
+    const uint32_t now = time_us_32();
+    for (size_t i = 0; i < kShortcutBindingCount; i++) {
+        const ShortcutBinding &binding = kShortcutBindings[i];
+        const bool pressed = shortcut_setting_enabled(binding.setting) && shortcut_combo_pressed(binding, report);
+        if (pressed) {
+            suppress_shortcut_input(binding, report);
+            const bool should_emit = binding.trigger == ShortcutTriggerPressed
+                ? !shortcut_binding_last_pressed[i]
+                : (!shortcut_binding_last_pressed[i]
+                    || static_cast<uint32_t>(now - shortcut_binding_last_step_us[i]) >= kShortcutRepeatUs);
+            if (should_emit) {
+                pending_shortcut_event = binding.event;
+                shortcut_binding_last_step_us[i] = now;
+            }
+        } else {
+            shortcut_binding_last_step_us[i] = 0;
+        }
+        shortcut_binding_last_pressed[i] = pressed;
+    }
+}
+
 } // namespace
 
 void companion_init() {
@@ -1005,10 +1105,10 @@ void companion_init() {
 }
 
 void companion_loop() {
-    if (speaker_volume_shortcut_pending_event != 0 && tud_hid_n_ready(COMPANION_HID_INSTANCE)) {
-        const uint8_t event = speaker_volume_shortcut_pending_event;
+    if (pending_shortcut_event != 0 && tud_hid_n_ready(COMPANION_HID_INSTANCE)) {
+        const uint8_t event = pending_shortcut_event;
         if (tud_hid_n_report(COMPANION_HID_INSTANCE, COMPANION_REPORT_INPUT, &event, 1)) {
-            speaker_volume_shortcut_pending_event = 0;
+            pending_shortcut_event = 0;
         }
     }
     audio_test_haptics_loop();
@@ -1025,42 +1125,10 @@ void companion_process_controller_report(uint8_t *report, uint16_t len) {
     const bool home_pressed = (report[9] & kHomeButtonBit) != 0;
     const uint8_t dpad_direction = report[7] & kDpadMask;
     const bool dpad_pressed = dpad_direction <= 0x07;
+    process_shortcut_bindings(report);
     if (home_pressed && dpad_pressed) {
         report[9] &= static_cast<uint8_t>(~kHomeButtonBit);
     }
-
-    const bool speaker_volume_combo_pressed = speaker_volume_shortcut_enabled
-        && home_pressed
-        && (dpad_direction == kDpadUp || dpad_direction == kDpadDown);
-    if (speaker_volume_combo_pressed) {
-        report[7] = static_cast<uint8_t>((report[7] & ~kDpadMask) | kDpadNeutral);
-        const uint32_t now = time_us_32();
-        if (
-            speaker_volume_combo_last_direction != dpad_direction
-            || static_cast<uint32_t>(now - speaker_volume_combo_last_step_us) >= kSpeakerVolumeShortcutRepeatUs
-        ) {
-            speaker_volume_shortcut_pending_event = dpad_direction == kDpadUp
-                ? kShortcutEventVolumeUp
-                : kShortcutEventVolumeDown;
-            speaker_volume_combo_last_step_us = now;
-        }
-        speaker_volume_combo_last_direction = dpad_direction;
-    } else {
-        speaker_volume_combo_last_direction = kDpadNeutral;
-        if (!home_pressed) {
-            speaker_volume_combo_last_step_us = 0;
-        }
-    }
-
-    const bool sleep_combo_pressed = home_pressed && (report[7] & kTriangleButtonBit) != 0;
-    if (sleep_keybind_enabled && sleep_combo_pressed) {
-        report[9] &= static_cast<uint8_t>(~kHomeButtonBit);
-        report[7] &= static_cast<uint8_t>(~kTriangleButtonBit);
-        if (!sleep_combo_last_pressed) {
-            speaker_volume_shortcut_pending_event = kShortcutEventSleep;
-        }
-    }
-    sleep_combo_last_pressed = sleep_combo_pressed;
 
     const bool pressed = (report[9] & kMuteButtonBit) != 0;
     if (mute_button_mode != MuteButtonNormal) {

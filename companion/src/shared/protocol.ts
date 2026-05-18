@@ -17,6 +17,12 @@ export const REPORT_ID = {
   HOST_AUDIO_STATUS: 0x08
 } as const;
 
+export const SHORTCUT_EVENT = {
+  CONTROLLER_VOLUME_DOWN: 0x01,
+  CONTROLLER_VOLUME_UP: 0x02,
+  SLEEP_CONTROLLER: 0x03
+} as const;
+
 export const AUDIO_DEBUG_EVENT = {
   AUDIO_START: 1,
   RESET_GAP: 2,
@@ -105,6 +111,7 @@ export const ACK_RESULT = {
 } as const;
 
 export type AckResultCode = typeof ACK_RESULT[keyof typeof ACK_RESULT];
+export type ShortcutEvent = typeof SHORTCUT_EVENT[keyof typeof SHORTCUT_EVENT];
 export type MuteButtonMode = 'normal' | 'keyboard' | 'quiet';
 export type MuteKeyboardBehavior = 'tap' | 'hold';
 export type TriggerTestMode = 'feedback' | 'weapon' | 'vibration';
