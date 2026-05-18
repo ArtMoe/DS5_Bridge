@@ -1447,7 +1447,12 @@ button.feature-icon {
   min-height: calc(var(--remapping-art-height) + 28px);
   height: 100%;
   padding: 14px;
+  display: grid;
+  align-items: center;
   overflow: visible;
+  background:
+    linear-gradient(145deg, rgba(5, 13, 22, 0.98), rgba(2, 7, 13, 0.99)),
+    #040a12;
 }
 
 .remapping-layout {
@@ -1456,6 +1461,7 @@ button.feature-icon {
   grid-template-columns: minmax(128px, 0.36fr) minmax(420px, 2.06fr) minmax(128px, 0.36fr);
   align-items: center;
   gap: 12px;
+  width: 100%;
   min-height: calc(var(--feature-card-height) - 28px);
 }
 
@@ -1471,17 +1477,31 @@ button.feature-icon {
 
 .remapping-callout-layer polyline {
   fill: none;
-  stroke: rgba(151, 158, 163, 0.72);
-  stroke-width: 1;
   stroke-linecap: square;
   stroke-linejoin: miter;
   vector-effect: non-scaling-stroke;
   transition: stroke 140ms ease, stroke-width 140ms ease, filter 140ms ease, opacity 140ms ease;
 }
 
-.remapping-callout-layer polyline.active {
+.remapping-callout-underlay {
+  stroke: rgba(2, 7, 13, 0.44);
+  stroke-width: 2.1;
+  stroke-linejoin: round;
+}
+
+.remapping-callout-line {
+  stroke: rgba(205, 216, 228, 0.84);
+  stroke-width: 1.1;
+}
+
+.remapping-callout-layer g.active .remapping-callout-underlay {
+  stroke: rgba(2, 7, 13, 0.56);
+  stroke-width: 2.8;
+}
+
+.remapping-callout-layer g.active .remapping-callout-line {
   stroke: #4d9dff;
-  stroke-width: 2;
+  stroke-width: 1.8;
   opacity: 1;
   filter: drop-shadow(0 0 6px rgba(40, 124, 255, 0.62));
 }
@@ -1623,7 +1643,7 @@ button.feature-icon {
   position: absolute;
   inset: 14px 24px;
   border-radius: 50%;
-  background: radial-gradient(circle, rgba(40, 124, 255, 0.12), transparent 66%);
+  background: radial-gradient(circle, rgba(40, 124, 255, 0.08), transparent 66%);
   pointer-events: none;
 }
 
@@ -1632,7 +1652,11 @@ button.feature-icon {
   width: min(100%, calc(var(--remapping-art-height) * 1.391));
   height: var(--remapping-art-height);
   object-fit: contain;
-  filter: drop-shadow(0 18px 34px rgba(0, 0, 0, 0.36));
+  filter:
+    brightness(0.9)
+    contrast(1.04)
+    saturate(1.05)
+    drop-shadow(0 18px 34px rgba(0, 0, 0, 0.38));
 }
 
 .audio-enable-button svg,

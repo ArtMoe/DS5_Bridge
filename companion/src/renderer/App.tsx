@@ -3398,13 +3398,22 @@ export function App() {
               <section className="feature-card remapping-card">
                 <div className="remapping-layout" ref={remappingLayoutRef}>
                   <svg className="remapping-callout-layer" aria-hidden="true">
-                    {remapCalloutLayout && REMAP_TARGET_OPTIONS.map(([, buttonId]) => (
-                      <polyline
-                        key={buttonId}
-                        className={hoveredRemapButton === buttonId ? 'active' : undefined}
-                        points={remapCalloutLayout[buttonId].points}
-                      />
-                    ))}
+                    {remapCalloutLayout && (
+                      <g>
+                        {REMAP_TARGET_OPTIONS.map(([, buttonId]) => (
+                          <g key={buttonId} className={hoveredRemapButton === buttonId ? 'active' : undefined}>
+                            <polyline
+                              className="remapping-callout-underlay"
+                              points={remapCalloutLayout[buttonId].points}
+                            />
+                            <polyline
+                              className="remapping-callout-line"
+                              points={remapCalloutLayout[buttonId].points}
+                            />
+                          </g>
+                        ))}
+                      </g>
+                    )}
                   </svg>
                   <div className="remapping-side remapping-side-left" ref={remappingLeftSideRef} aria-label="Left side button mappings">
                     {REMAP_LEFT_BUTTON_IDS.map((buttonId) => {
