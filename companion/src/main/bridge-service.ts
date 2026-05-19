@@ -52,6 +52,7 @@ import {
   playHostAudioTestTone,
   type HostAudioFramePayload
 } from './host-audio-engine';
+import { HidDiscoveryClient } from './hid-discovery-client';
 import { SettingsStore } from './settings-store';
 
 const POLL_INTERVAL_MS = 500;
@@ -72,7 +73,7 @@ const MAX_IDLE_DISCONNECT_TIMEOUT_MINUTES = 120;
 const CONTROLLER_POWER_SAVING_CAP_PERCENT = 60;
 const SONY_VENDOR_ID = 0x054c;
 const DUALSENSE_PRODUCT_IDS = new Set([0x0ce6, 0x0df2]);
-type HidDevice = HID.Device;
+type DiscoveredHidDevice = HidDeviceSummary;
 type BridgeDiagnosticsWithoutAudioLog = Omit<
   BridgeDiagnostics,
   'audioDebugLogPath' | 'audioDebugLogLines' | 'audioDebugDroppedCount' | 'audioDebugStats' | 'hostAudioStatus'
@@ -139,24 +140,11 @@ const PRESET_SETTINGS: Record<Exclude<BridgePresetId, 'custom'>, Partial<Compani
   }
 };
 
-function summarizeDevice(device: HidDevice): HidDeviceSummary {
-  return {
-    path: device.path,
-    vendorId: device.vendorId,
-    productId: device.productId,
-    usagePage: device.usagePage,
-    usage: device.usage,
-    product: device.product,
-    manufacturer: device.manufacturer,
-    interface: device.interface
-  };
-}
-
-function isCompanionCandidate(device: HidDevice): boolean {
+function isCompanionCandidate(device: HidDeviceSummary): boolean {
   return device.usagePage === COMPANION_USAGE_PAGE && device.usage === COMPANION_USAGE && Boolean(device.path);
 }
 
-function isDualSenseDevice(device: HidDevice): boolean {
+function isDualSenseDevice(device: HidDeviceSummary): boolean {
   return device.vendorId === SONY_VENDOR_ID
     && DUALSENSE_PRODUCT_IDS.has(device.productId ?? 0)
     && /DualSense/i.test(device.product ?? '');
@@ -446,6 +434,7 @@ export class BridgeService extends EventEmitter {
   private hostAudioHeartbeatTimer: NodeJS.Timeout | null = null;
   private readonly hostAudioEngine = new HostAudioEngine();
   private readonly micKeepaliveEngine = new MicKeepaliveEngine();
+  private readonly hidDiscovery = new HidDiscoveryClient();
   private snapshot: BridgeSnapshot;
   private lastEmittedSnapshotSignature: string | null = null;
   private commandSequence = 0;
@@ -566,6 +555,7 @@ export class BridgeService extends EventEmitter {
     }
     await this.hostAudioEngine.stop();
     await this.micKeepaliveEngine.stop();
+    this.hidDiscovery.stop();
     this.closeDevice();
   }
 
@@ -573,8 +563,8 @@ export class BridgeService extends EventEmitter {
     return structuredClone(this.snapshot);
   }
 
-  listDevices(): HidDeviceSummary[] {
-    return HID.devices().map(summarizeDevice);
+  listDevices(): Promise<HidDeviceSummary[]> {
+    return this.hidDiscovery.listDevices();
   }
 
   pausePollingFor(milliseconds: number): void {
@@ -1516,8 +1506,8 @@ export class BridgeService extends EventEmitter {
     }
     this.lastHostAudioActivePollAt = now;
 
-    const devices = HID.devices();
-    const rawDevices = devices.map(summarizeDevice);
+    const rawDevices = await this.hidDiscovery.listDevices();
+    const devices = rawDevices;
     const companionDevices = devices.filter(isCompanionCandidate);
 
     if (companionDevices.length === 0) {
@@ -1612,11 +1602,11 @@ export class BridgeService extends EventEmitter {
     if (this.device) {
       return;
     }
-    const devices = HID.devices().filter(isCompanionCandidate);
+    const devices = (await this.hidDiscovery.listDevices()).filter(isCompanionCandidate);
     await this.openAndReadStatus(devices);
   }
 
-  private async openAndReadStatus(devices: HidDevice[]) {
+  private async openAndReadStatus(devices: DiscoveredHidDevice[]) {
     for (const candidate of devices) {
       if (!candidate.path) {
         continue;
