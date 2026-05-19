@@ -45,6 +45,7 @@ over Bluetooth.
 - Runtime controls for haptics, rumble, adaptive triggers, controller audio,
   microphone level, lightbar behavior, shortcuts, notifications, and power
   saving.
+- Bluetooth signal monitoring for a quick read on wireless audio quality.
 - Button remapping with named profiles, unsaved-change tracking, save-as,
   rename, and delete controls.
 - Host encoded audio support for smoother controller speaker and headphones
