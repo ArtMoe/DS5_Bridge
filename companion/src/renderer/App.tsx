@@ -20,7 +20,6 @@ import {
   IconDeviceGamepad3,
   IconDeviceMobileVibration as Vibrate,
   IconHeadphones as Headphones,
-  IconInfoOctagon,
   IconKeyboard as Keyboard,
   IconLayoutDashboard,
   IconMicrophone as Mic,
@@ -32,6 +31,7 @@ import {
   IconRefresh as RefreshCcw,
   IconRipple,
   IconSettings as SettingsIcon,
+  IconBluetooth,
   IconSparkles as Sparkles,
   IconSquare as SquareIcon,
   IconTestPipe,
@@ -1603,7 +1603,6 @@ export function App() {
   const sidebarBatteryLabel = connected && controllerConnected
     ? `Battery ${batteryPercentLabel}`
     : 'Battery unavailable';
-  const selectedPresetLabel = BRIDGE_PRESET_OPTIONS.find(([, id]) => id === snapshot?.settings.selectedPresetId)?.[0] ?? 'Custom';
   const pollingRateLabel = POLLING_RATE_OPTIONS.find(([, mode]) => mode === snapshot?.settings.pollingRateMode)?.[0]
     .replace(' / Real-time', '')
     ?? '--';
@@ -1637,6 +1636,29 @@ export function App() {
   const overviewAudioOutputLabel = connected ? (headsetOutputDetected ? 'Headphones' : 'Speaker') : '--';
   const overviewSpeakerVolumeValue = `${speakerVolumeValue}%`;
   const overviewFirmwareLabel = snapshot?.status?.firmwareVersion ?? '--';
+  const overviewSignalValue = connected ? snapshot?.status?.signalStrengthDbm : null;
+  const overviewSignalQuality = overviewSignalValue === null || overviewSignalValue === undefined
+    ? null
+    : overviewSignalValue >= -15
+      ? 'Excellent'
+      : overviewSignalValue >= -22
+        ? 'Good'
+        : overviewSignalValue >= -27
+          ? 'Audio Risk'
+          : 'Poor';
+  const overviewSignalTone = overviewSignalQuality === 'Excellent' || overviewSignalQuality === 'Good'
+    ? 'good'
+    : overviewSignalQuality === 'Audio Risk'
+      ? 'warn'
+      : overviewSignalQuality === 'Poor'
+        ? 'bad'
+        : 'idle';
+  const overviewSignalTitle = overviewSignalValue !== null && overviewSignalValue !== undefined
+    ? `${overviewSignalValue} dBm`
+    : undefined;
+  const overviewSignalLabel = overviewSignalQuality
+    ? overviewSignalQuality
+    : '--';
   const overviewShortcutItems = [
     snapshot?.settings.sleepKeybindEnabled ? 'Sleep Shortcut' : null,
     snapshot?.settings.speakerVolumeShortcutEnabled ? 'Volume Shortcut' : null
@@ -2840,13 +2862,15 @@ export function App() {
 
               <button className="overview-card" type="button" onClick={() => selectControlTab('system')}>
                 <div className="overview-card-title">
-                  <span className="feature-icon overview-icon"><IconInfoOctagon size={19} /></span>
-                  <h3>Device Status</h3>
+                  <span className="feature-icon overview-icon"><IconBluetooth size={19} /></span>
+                  <h3>Wireless</h3>
                 </div>
                 <div className="overview-fields">
                   <div>
-                    <span>Profile</span>
-                    <strong>{selectedPresetLabel}</strong>
+                    <span>Signal</span>
+                    <strong className={`signal-value ${overviewSignalTone}`} title={overviewSignalTitle}>
+                      {overviewSignalLabel}
+                    </strong>
                   </div>
                   <div>
                     <span>Firmware</span>

@@ -65,7 +65,7 @@ const AUDIO_DEBUG_DIAGNOSTICS_ENABLED = false;
 const HOST_AUDIO_MAX_QUEUED_FRAMES = 2;
 const HOST_AUDIO_STOP_FADE_MS = 40;
 const LOW_BATTERY_PERCENT = 20;
-const FIRMWARE_UPDATE_REQUIRED_MESSAGE = 'Firmware 1.0.0 update required';
+const FIRMWARE_UPDATE_REQUIRED_MESSAGE = 'Firmware 1.0.1 update required';
 const AUDIO_DEBUG_LOG_LINE_LIMIT = 300;
 const STARTUP_REAPPLY_MIN_SETTLE_MS = 0;
 const STARTUP_REAPPLY_RETRY_DELAYS_MS = [250, 650, 1300] as const;
@@ -1559,7 +1559,7 @@ export class BridgeService extends EventEmitter {
           uptimeSeconds: status.uptimeSeconds,
           settingsRevision: status.settingsRevision,
           lastAck: this.snapshot.diagnostics.lastAck,
-          lastError: `Firmware ${status.firmwareVersion} is too old for this companion app. Update the bridge firmware to 1.0.0 or newer.`,
+          lastError: `Firmware ${status.firmwareVersion} is too old for this companion app. Update the bridge firmware to 1.0.1 or newer.`,
           lastPollAt: Date.now(),
           rawDevices
         })

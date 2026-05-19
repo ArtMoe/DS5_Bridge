@@ -4,7 +4,7 @@ export const REPORT_LENGTH = 64;
 export const PAYLOAD_LENGTH = 63;
 export const MAGIC = 'DS5B';
 export const PROTOCOL_MAJOR = 1;
-export const PROTOCOL_MINOR = 0;
+export const PROTOCOL_MINOR = 1;
 
 export const REPORT_ID = {
   STATUS: 0x01,
@@ -227,6 +227,7 @@ export interface BridgeStatusPayload {
   ledEnabled: boolean;
   idleDisconnectEnabled: boolean;
   idleDisconnectTimeoutMinutes: number;
+  signalStrengthDbm: number | null;
   usbSuspendDisconnectEnabled: boolean;
   sleepKeybindEnabled: boolean;
   settingsRevision: number;
@@ -453,6 +454,7 @@ export function parseStatusReport(report: ArrayLike<number>): BridgeStatusPayloa
       lastHostOutputCount: readU16(report, 41)
     },
     idleDisconnectTimeoutMinutes: readU16(report, 43),
+    signalStrengthDbm: report[7] === 1 && report[46] === 1 ? (report[45] << 24) >> 24 : null,
     ledEnabled: report[15] === 1,
     idleDisconnectEnabled: report[16] === 1,
     usbSuspendDisconnectEnabled: (statusFlags & 0x10) !== 0,

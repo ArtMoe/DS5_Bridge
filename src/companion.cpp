@@ -15,10 +15,10 @@ namespace {
 
 constexpr uint8_t kMagic[] = {'D', 'S', '5', 'B'};
 constexpr uint8_t kProtocolMajor = 1;
-constexpr uint8_t kProtocolMinor = 0;
+constexpr uint8_t kProtocolMinor = 1;
 constexpr uint8_t kFirmwareMajor = 1;
 constexpr uint8_t kFirmwareMinor = 0;
-constexpr uint8_t kFirmwarePatch = 0;
+constexpr uint8_t kFirmwarePatch = 1;
 constexpr uint8_t kTriangleButtonBit = 0x80;
 constexpr uint8_t kSquareButtonBit = 0x10;
 constexpr uint8_t kCrossButtonBit = 0x20;
@@ -623,6 +623,8 @@ uint16_t build_status(uint8_t *buffer, uint16_t reqlen) {
     buffer[39] = host_output_report_id;
     write_u16(buffer + 40, host_output_report_count);
     write_u16(buffer + 42, bt_idle_disconnect_timeout_minutes());
+    buffer[44] = static_cast<uint8_t>(bt_get_signal_strength());
+    buffer[45] = bt_has_signal_strength() ? 1 : 0;
     buffer[58] = lightbar_override_enabled ? 1 : 0;
     buffer[59] = mute_button_mode;
     buffer[60] = mute_keyboard_usage;

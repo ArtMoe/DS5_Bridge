@@ -10,6 +10,8 @@ import {
   COMPANION_USAGE,
   COMPANION_USAGE_PAGE,
   MAGIC,
+  PROTOCOL_MAJOR,
+  PROTOCOL_MINOR,
   REPORT_ID,
   REPORT_LENGTH,
   SHORTCUT_EVENT
@@ -54,6 +56,7 @@ type StatusOverrides = {
   settingsRevision?: number;
   uptimeSeconds?: number;
   protocolMajor?: number;
+  protocolMinor?: number;
   magic?: string;
   firmwareMajor?: number;
   firmwareMinor?: number;
@@ -192,12 +195,17 @@ function writeMagic(report: number[], magic = MAGIC): void {
   report[4] = magic.charCodeAt(3);
 }
 
+function writeVersion(report: number[]): void {
+  report[5] = PROTOCOL_MAJOR;
+  report[6] = PROTOCOL_MINOR;
+}
+
 function statusReport(overrides: StatusOverrides = {}): number[] {
   const report = new Array<number>(REPORT_LENGTH).fill(0);
   report[0] = REPORT_ID.STATUS;
   writeMagic(report, overrides.magic);
-  report[5] = overrides.protocolMajor ?? 1;
-  report[6] = 0;
+  report[5] = overrides.protocolMajor ?? PROTOCOL_MAJOR;
+  report[6] = overrides.protocolMinor ?? PROTOCOL_MINOR;
   report[7] = overrides.controllerConnected ?? true ? 1 : 0;
   report[8] = 1;
   report[9] = overrides.batteryPercent ?? 78;
@@ -229,8 +237,7 @@ function ackReport(options: {
   const report = new Array<number>(REPORT_LENGTH).fill(0);
   report[0] = REPORT_ID.ACK;
   writeMagic(report);
-  report[5] = 1;
-  report[6] = 0;
+  writeVersion(report);
   report[7] = options.commandId;
   report[8] = options.sequence;
   report[9] = options.result;
@@ -248,8 +255,7 @@ function audioDebugReport(events: Array<{
   const report = new Array<number>(REPORT_LENGTH).fill(0);
   report[0] = REPORT_ID.AUDIO_DEBUG;
   writeMagic(report);
-  report[5] = 1;
-  report[6] = 0;
+  writeVersion(report);
   report[7] = Math.min(events.length, 3);
   report[8] = 14;
   writeU32(report, 9, events.at(-1)?.sequence ?? 0);
@@ -285,8 +291,7 @@ function audioStatsReport(values: Partial<{
   const report = new Array<number>(REPORT_LENGTH).fill(0);
   report[0] = REPORT_ID.AUDIO_STATS;
   writeMagic(report);
-  report[5] = 1;
-  report[6] = 0;
+  writeVersion(report);
   report[7] = 1;
   writeU32(report, 8, values.usbAudioGapMaxUs ?? 0);
   writeU32(report, 12, values.usbAudioGapOver1500Count ?? 0);
@@ -322,8 +327,7 @@ function hostAudioStatusReport(overrides: Partial<{
   const report = new Array<number>(REPORT_LENGTH).fill(0);
   report[0] = REPORT_ID.HOST_AUDIO_STATUS;
   writeMagic(report);
-  report[5] = 1;
-  report[6] = 0;
+  writeVersion(report);
   report[7] = overrides.mode ?? 0;
   report[8] = overrides.fallbackReason ?? 1;
   report[9] = overrides.hostRequested ? 1 : 0;
@@ -476,7 +480,7 @@ describe('BridgeService', () => {
     await pollAndPublishErrors(badVersionService);
 
     expect(badVersionService.getSnapshot().state).toBe('incompatible');
-    expect(badVersionService.getSnapshot().message).toBe('Firmware 1.0.0 update required');
+    expect(badVersionService.getSnapshot().message).toBe('Firmware 1.0.1 update required');
     expect(badVersionService.getSnapshot().diagnostics.lastError).toContain('Firmware update required');
   });
 
@@ -491,9 +495,9 @@ describe('BridgeService', () => {
 
     const snapshot = service.getSnapshot();
     expect(snapshot.state).toBe('incompatible');
-    expect(snapshot.message).toBe('Firmware 1.0.0 update required');
+    expect(snapshot.message).toBe('Firmware 1.0.1 update required');
     expect(snapshot.status?.firmwareVersion).toBe('0.5.15');
-    expect(snapshot.diagnostics.lastError).toContain('Update the bridge firmware to 1.0.0 or newer');
+    expect(snapshot.diagnostics.lastError).toContain('Update the bridge firmware to 1.0.1 or newer');
     expect(device.sentReports).toEqual([]);
   });
 

@@ -20,6 +20,8 @@ int bt_init();
 void bt_register_data_callback(bt_data_callback_t callback);
 bool bt_is_controller_connected();
 uint8_t bt_controller_type();
+int8_t bt_get_signal_strength();
+bool bt_has_signal_strength();
 bool bt_disconnect();
 bool bt_set_idle_disconnect_timeout_minutes(uint16_t minutes);
 uint16_t bt_idle_disconnect_timeout_minutes();
@@ -59,8 +61,9 @@ void bt_set_adaptive_trigger_effect(uint8_t mode, uint8_t intensity_percent, uin
 void bt_reset_adaptive_triggers();
 void bt_schedule_lightbar_restore(uint32_t delay_ms);
 void bt_lightbar_loop();
+void bt_signal_strength_loop();
 std::vector<uint8_t> get_feature_data(uint8_t reportId,uint16_t len);
 void init_feature();
-void set_feature_data(uint8_t reportId, uint8_t* data,uint16_t len);
+void set_feature_data(uint8_t reportId, uint8_t const* data,uint16_t len);
 
 #endif //DS5_BRIDGE_BT_H

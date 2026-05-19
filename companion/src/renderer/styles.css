@@ -1413,6 +1413,22 @@ button {
   color: #55d76c;
 }
 
+.overview-fields .signal-value.good {
+  color: #55d76c;
+}
+
+.overview-fields .signal-value.warn {
+  color: #ffd36a;
+}
+
+.overview-fields .signal-value.bad {
+  color: #ff7f93;
+}
+
+.overview-fields .signal-value.idle {
+  color: #eef4ff;
+}
+
 .overview-control-grid {
   width: min(100%, 800px);
   display: grid;

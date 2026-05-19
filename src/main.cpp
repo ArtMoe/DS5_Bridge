@@ -206,11 +206,17 @@ uint16_t tud_hid_get_report_cb(uint8_t itf, uint8_t report_id, hid_report_type_t
         0
     );
     std::vector<uint8_t> feature_data = get_feature_data(report_id, reqlen);
-    if (!feature_data.empty()) {
-        memcpy(buffer, feature_data.data() + 1, feature_data.size() - 1);
+    if (feature_data.empty() || buffer == nullptr) {
+        return 0;
     }
 
-    return feature_data.empty() ? 0 : feature_data.size() - 1;
+    const uint16_t available = static_cast<uint16_t>(feature_data.size() - 1);
+    const uint16_t copy_len = available < reqlen ? available : reqlen;
+    if (copy_len > 0) {
+        memcpy(buffer, feature_data.data() + 1, copy_len);
+    }
+
+    return copy_len;
 }
 
 // Invoked when received SET_REPORT control request or
@@ -243,15 +249,16 @@ void tud_hid_set_report_cb(uint8_t itf, uint8_t report_id, hid_report_type_t rep
 
     // INTERRUPT OUT
     if (report_id == 0) {
+        if (buffer == nullptr || bufsize == 0) {
+            return;
+        }
         switch (buffer[0]) {
             case 0x02: {
                 usb_note_hid_output();
                 uint8_t outputData[78]{};
                 outputData[0] = 0x31;
                 outputData[1] = reportSeqCounter << 4;
-                if (++reportSeqCounter == 256) {
-                    reportSeqCounter = 0;
-                }
+                reportSeqCounter = (reportSeqCounter + 1) & 0x0F;
                 outputData[2] = 0x10;
                 uint16_t payloadLen = 0;
                 if (bufsize > 1) {
@@ -332,7 +339,7 @@ void tud_hid_set_report_cb(uint8_t itf, uint8_t report_id, hid_report_type_t rep
         || report_id == 0x62
         || report_id == 0x61
     ) {
-        set_feature_data(report_id,const_cast<uint8_t *>(buffer),bufsize);
+        set_feature_data(report_id,buffer,bufsize);
         return;
     }
 }
@@ -387,6 +394,7 @@ int main() {
         usb_pm_poll();
         audio_loop();
         bt_lightbar_loop();
+        bt_signal_strength_loop();
 #ifdef ENABLE_COMPANION
         companion_loop();
 #endif

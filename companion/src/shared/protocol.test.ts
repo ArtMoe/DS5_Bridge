@@ -12,6 +12,8 @@ import {
   HOST_AUDIO_PAYLOAD_LENGTH,
   HOST_AUDIO_REPORT_FRAME_LENGTH,
   MAGIC,
+  PROTOCOL_MAJOR,
+  PROTOCOL_MINOR,
   REPORT_ID,
   buildButtonRemapPayload,
   buildCommandReport,
@@ -31,8 +33,8 @@ function baseReport(reportId: number): number[] {
   report[2] = MAGIC.charCodeAt(1);
   report[3] = MAGIC.charCodeAt(2);
   report[4] = MAGIC.charCodeAt(3);
-  report[5] = 1;
-  report[6] = 0;
+  report[5] = PROTOCOL_MAJOR;
+  report[6] = PROTOCOL_MINOR;
   return report;
 }
 
@@ -65,6 +67,8 @@ describe('companion protocol', () => {
     report[27] = 15;
     report[28] = 0xff;
     writeU16(report, 43, 45);
+    report[45] = 0xd8;
+    report[46] = 1;
     report[60] = 1;
     report[61] = 0x68;
     report[62] = 0x82;
@@ -88,6 +92,7 @@ describe('companion protocol', () => {
     expect(status.sleepKeybindEnabled).toBe(true);
     expect(status.testAdaptiveTriggersBusy).toBe(true);
     expect(status.idleDisconnectTimeoutMinutes).toBe(45);
+    expect(status.signalStrengthDbm).toBe(-40);
     expect(status.muteButtonMode).toBe('keyboard');
     expect(status.muteKeyboardUsage).toBe(0x68);
     expect(status.muteKeyboardModifiers).toBe(0x02);

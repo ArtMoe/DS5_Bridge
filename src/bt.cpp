@@ -16,6 +16,7 @@
 #include "audio.h"
 #include "btstack_event.h"
 #include "controller_report.h"
+#include "gap.h"
 #include "l2cap.h"
 #include "pico/cyw43_arch.h"
 #include "pico/stdio.h"
@@ -96,6 +97,15 @@
 #define OUTPUT_PAYLOAD_LIGHTBAR_RED_OFFSET 44
 #define OUTPUT_PAYLOAD_LIGHTBAR_GREEN_OFFSET 45
 #define OUTPUT_PAYLOAD_LIGHTBAR_BLUE_OFFSET 46
+#define RSSI_POLL_INTERVAL_US 2000000u
+#define RSSI_REQUEST_TIMEOUT_US 1000000u
+
+#define HCI_SEND_CMD_LOGGED(cmd, ...) do { \
+    const uint8_t err = hci_send_cmd((cmd), ##__VA_ARGS__); \
+    if (err != 0) { \
+        DS5_LOG("[HCI] %s failed err=0x%02X\n", opcode_to_str((cmd)->opcode), err); \
+    } \
+} while (0)
 
 using std::unordered_map;
 using std::vector;
@@ -192,6 +202,10 @@ static uint16_t hid_interrupt_cid;
 static bt_data_callback_t bt_data_callback = nullptr;
 static uint8_t controller_type = ControllerTypeUnknown;
 static bool controller_type_check_pending = false;
+static int8_t bt_rssi = 0;
+static bool bt_rssi_known = false;
+static bool bt_rssi_request_pending = false;
+static uint32_t bt_rssi_last_request_us = 0;
 unordered_map<uint8_t, vector<uint8_t> > feature_data;
 static bool feature_prefetch_active = false;
 static queue<output_packet> critical_queue;
@@ -303,6 +317,14 @@ bool bt_is_controller_connected() {
 
 uint8_t bt_controller_type() {
     return controller_type;
+}
+
+int8_t bt_get_signal_strength() {
+    return bt_rssi;
+}
+
+bool bt_has_signal_strength() {
+    return bt_rssi_known;
 }
 
 void bt_set_classic_rumble_gain(uint8_t gain_percent) {
@@ -696,13 +718,40 @@ void bt_lightbar_loop() {
     );
 }
 
+void bt_signal_strength_loop() {
+    if (acl_handle == HCI_CON_HANDLE_INVALID || hid_interrupt_cid == 0) {
+        bt_rssi = 0;
+        bt_rssi_known = false;
+        bt_rssi_request_pending = false;
+        bt_rssi_last_request_us = 0;
+        return;
+    }
+
+    const uint32_t now = time_us_32();
+    if (bt_rssi_request_pending) {
+        if (packet_age_us(now, bt_rssi_last_request_us) < RSSI_REQUEST_TIMEOUT_US) {
+            return;
+        }
+        bt_rssi_request_pending = false;
+    }
+
+    if (bt_rssi_last_request_us != 0 && packet_age_us(now, bt_rssi_last_request_us) < RSSI_POLL_INTERVAL_US) {
+        return;
+    }
+
+    if (gap_read_rssi(acl_handle) != 0) {
+        bt_rssi_request_pending = true;
+        bt_rssi_last_request_us = now;
+    }
+}
+
 bool bt_disconnect() {
     if (acl_handle == HCI_CON_HANDLE_INVALID) {
         return false;
     }
 
     // 0x13 = remote user terminated connection
-    hci_send_cmd(&hci_disconnect, acl_handle, 0x13);
+    HCI_SEND_CMD_LOGGED(&hci_disconnect, acl_handle, 0x13);
     return true;
 }
 
@@ -802,7 +851,7 @@ static void hci_packet_handler(uint8_t packet_type, uint16_t channel, uint8_t *p
             if (device_found) {
                 DS5_LOG("[HCI] Connecting to %s...\n", bd_addr_to_str(current_device_addr));
                 new_pair = true;
-                hci_send_cmd(&hci_create_connection, current_device_addr,
+                HCI_SEND_CMD_LOGGED(&hci_create_connection, current_device_addr,
                              hci_usable_acl_packet_types(), 0, 0, 0, 1);
             }
             break;
@@ -832,10 +881,14 @@ static void hci_packet_handler(uint8_t packet_type, uint16_t channel, uint8_t *p
             if (status == 0) {
                 const hci_con_handle_t handle = hci_event_connection_complete_get_connection_handle(packet);
                 acl_handle = handle;
+                bt_rssi = 0;
+                bt_rssi_known = false;
+                bt_rssi_request_pending = false;
+                bt_rssi_last_request_us = 0;
                 hci_event_connection_complete_get_bd_addr(packet, current_device_addr);
                 DS5_LOG("[HCI] ACL connected handle=0x%04X\n", handle);
                 DS5_LOG("[HCI] Request authentication on handle=0x%04X\n", handle);
-                hci_send_cmd(&hci_authentication_requested, handle);
+                HCI_SEND_CMD_LOGGED(&hci_authentication_requested, handle);
             } else {
                 device_found = false;
                 new_pair = false;
@@ -851,18 +904,13 @@ static void hci_packet_handler(uint8_t packet_type, uint16_t channel, uint8_t *p
             link_key_t link_key;
             link_key_type_t link_key_type;
             bool link = gap_get_link_key_for_bd_addr(addr, link_key, &link_key_type);
-            DS5_LOG("[HCI] Link key: ");
-            for (int i = 0; i < sizeof(link_key_t); i++) {
-                DS5_LOG("%02X", link_key[i]);
-            }
-            DS5_LOG("\n");
             if (link) {
                 DS5_LOG("[HCI] Link key request from %s, reply stored key type=%u\n", bd_addr_to_str(addr),
                        (unsigned int) link_key_type);
-                hci_send_cmd(&hci_link_key_request_reply, addr, link_key);
+                HCI_SEND_CMD_LOGGED(&hci_link_key_request_reply, addr, link_key);
             } else {
                 DS5_LOG("[HCI] Link key request from %s, no key, force re-pair\n", bd_addr_to_str(addr));
-                hci_send_cmd(&hci_link_key_request_negative_reply, addr);
+                HCI_SEND_CMD_LOGGED(&hci_link_key_request_negative_reply, addr);
             }
             break;
         }
@@ -871,7 +919,7 @@ static void hci_packet_handler(uint8_t packet_type, uint16_t channel, uint8_t *p
             bd_addr_t addr;
             hci_event_user_confirmation_request_get_bd_addr(packet, addr);
             DS5_LOG("[HCI] User confirmation request from %s, accept\n", bd_addr_to_str(addr));
-            hci_send_cmd(&hci_user_confirmation_request_reply, addr);
+            HCI_SEND_CMD_LOGGED(&hci_user_confirmation_request_reply, addr);
             break;
         }
 
@@ -890,9 +938,9 @@ static void hci_packet_handler(uint8_t packet_type, uint16_t channel, uint8_t *p
             if (status != ERROR_CODE_SUCCESS) {
                 DS5_LOG("[HCI] Authentication failed, drop stored key for %s\n", bd_addr_to_str(current_device_addr));
                 gap_drop_link_key_for_bd_addr(current_device_addr);
-                // gap_inquiry_start(30);
+                gap_inquiry_start(30);
             } else {
-                hci_send_cmd(&hci_set_connection_encryption, handle, 1);
+                HCI_SEND_CMD_LOGGED(&hci_set_connection_encryption, handle, 1);
             }
             break;
         }
@@ -925,7 +973,7 @@ static void hci_packet_handler(uint8_t packet_type, uint16_t channel, uint8_t *p
             if ((cod & 0x000F00) == 0x000500) {
                 bd_addr_copy(current_device_addr, addr);
                 gap_inquiry_stop();
-                hci_send_cmd(&hci_accept_connection_request, addr, 0x01);
+                HCI_SEND_CMD_LOGGED(&hci_accept_connection_request, addr, 0x01);
             }
             break;
         }
@@ -939,6 +987,10 @@ static void hci_packet_handler(uint8_t packet_type, uint16_t channel, uint8_t *p
             device_found = false;
             new_pair = false;
             acl_handle = HCI_CON_HANDLE_INVALID;
+            bt_rssi = 0;
+            bt_rssi_known = false;
+            bt_rssi_request_pending = false;
+            bt_rssi_last_request_us = 0;
             hid_control_cid = 0;
             hid_interrupt_cid = 0;
             audio_handle_controller_disconnect();
@@ -952,6 +1004,16 @@ static void hci_packet_handler(uint8_t packet_type, uint16_t channel, uint8_t *p
             DS5_LOG("[HCI] Disconnected reason=0x%02X, power-cycle CYW43 then reboot Pico\n", reason);
             power_down_cyw43_for_reboot();
             watchdog_reboot(0, 0, CONTROLLER_DISCONNECT_REBOOT_DELAY_MS);
+            break;
+        }
+
+        case GAP_EVENT_RSSI_MEASUREMENT: {
+            const hci_con_handle_t handle = gap_event_rssi_measurement_get_con_handle(packet);
+            if (handle == acl_handle) {
+                bt_rssi = static_cast<int8_t>(gap_event_rssi_measurement_get_rssi(packet));
+                bt_rssi_known = true;
+                bt_rssi_request_pending = false;
+            }
             break;
         }
     }
@@ -1149,10 +1211,12 @@ static void l2cap_packet_handler(uint8_t packet_type, uint16_t channel, uint8_t 
                     DS5_LOG("[L2CAP] Connected controller detected as DualSense\n");
                 }
             }
-            if (packet[0] == 0xA3) {
+            if (size >= 2 && packet[0] == 0xA3) {
                 uint8_t report_id = packet[1];
-                feature_data[report_id].assign(packet + 1, packet + size);
-                DS5_LOG("[L2CAP] Stored Feature Report 0x%02X, len=%u\n", report_id, size - 1);
+                if (feature_data.size() < 32 || feature_data.contains(report_id)) {
+                    feature_data[report_id].assign(packet + 1, packet + size);
+                    DS5_LOG("[L2CAP] Stored Feature Report 0x%02X, len=%u\n", report_id, size - 1);
+                }
             }
             DS5_LOG("[L2CAP] HID Control data len=%u\n", size);
             DS5_HEXDUMP(packet, size);
@@ -1184,6 +1248,8 @@ static void l2cap_packet_handler(uint8_t packet_type, uint16_t channel, uint8_t 
                     if (!mute[0]) {
                         cyw43_arch_gpio_put(CYW43_WL_GPIO_LED_PIN, true);
                     }
+                    gap_connectable_control(0);
+                    gap_discoverable_control(0);
                     inactive_time = time_us_32();
 
                     DS5_LOG("Init DualSense\n");
@@ -2093,8 +2159,12 @@ vector<uint8_t> get_feature_data(uint8_t reportId, uint16_t len) {
     return ret;
 }
 
-void set_feature_data(uint8_t reportId, uint8_t* data,uint16_t len) {
+void set_feature_data(uint8_t reportId, uint8_t const* data,uint16_t len) {
     if (hid_control_cid != 0) {
+        if (data == nullptr || len < 4 || len > 62) {
+            DS5_LOG("[L2CAP] Set Feature Report 0x%02X rejected: len=%u\n", reportId, len);
+            return;
+        }
         vector<uint8_t> set_feature(len + 2);
         set_feature[0] = 0x53;
         set_feature[1] = reportId;
