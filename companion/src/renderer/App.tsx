@@ -4387,168 +4387,192 @@ export function App() {
                 <X size={16} />
               </button>
             </div>
-            <div className="settings-menu-section-label">General</div>
-            <div className="settings-menu-row">
-              <div className="settings-menu-copy">
-                <strong>UI Scale</strong>
-              </div>
-              <CustomSelect
-                value={snapshot.settings.uiScalePercent}
-                options={UI_SCALE_OPTIONS}
-                className="settings-scale-select"
-                showSelectedCheck={false}
-                ariaLabel="UI scale"
-                disabled={pendingAction !== null}
-                onChange={(value) => {
-                  void runAction('ui-scale', () => window.bridge.setUiScalePercent(value));
-                }}
-              />
-            </div>
-            <div className="settings-menu-row">
-              <div className="settings-menu-copy">
-                <strong>Pico LED</strong>
-              </div>
-              <button
-                type="button"
-                role="switch"
-                aria-checked={snapshot.settings.ledEnabled}
-                className={`switch ${snapshot.settings.ledEnabled ? 'on' : ''}`}
-                disabled={!connected}
-                onClick={() => void runAction('led', () => window.bridge.setLedEnabled(!snapshot.settings.ledEnabled))}
-              >
-                <span />
-              </button>
-            </div>
-            <div className="settings-menu-section-label">Connection Behavior</div>
-            <div className="settings-menu-row">
-              <div className="settings-menu-copy">
-                <strong>Idle Disconnect</strong>
-              </div>
-              <div className="settings-menu-controls">
-                <CustomSelect
-                  value={snapshot.settings.idleDisconnectTimeoutMinutes}
-                  options={IDLE_DISCONNECT_TIMEOUT_OPTIONS}
-                  className="settings-timeout-select"
-                  showSelectedCheck={false}
-                  ariaLabel="Idle disconnect timeout"
-                  disabled={!connected || !snapshot.settings.idleDisconnectEnabled}
-                  onChange={(value) => {
-                    void runAction('idle-timeout', () => window.bridge.setIdleDisconnectTimeoutMinutes(value));
-                  }}
-                />
-                <button
-                  type="button"
-                  role="switch"
-                  aria-checked={snapshot.settings.idleDisconnectEnabled}
-                  className={`switch ${snapshot.settings.idleDisconnectEnabled ? 'on' : ''}`}
-                  disabled={!connected}
-                  onClick={() => void runAction('idle', () => (
-                    window.bridge.setIdleDisconnectEnabled(!snapshot.settings.idleDisconnectEnabled)
-                  ))}
-                >
-                  <span />
-                </button>
-              </div>
-            </div>
-            <div className="settings-menu-row">
-              <div className="settings-menu-copy">
-                <strong>PC Sleep Disconnect</strong>
-              </div>
-              <button
-                type="button"
-                role="switch"
-                aria-checked={snapshot.settings.usbSuspendDisconnectEnabled}
-                className={`switch ${snapshot.settings.usbSuspendDisconnectEnabled ? 'on' : ''}`}
-                disabled={!connected || !usbSuspendDisconnectSupported}
-                onClick={() => void runAction('usb-suspend', () => (
-                  window.bridge.setUsbSuspendDisconnectEnabled(!snapshot.settings.usbSuspendDisconnectEnabled)
-                ))}
-              >
-                <span />
-              </button>
-            </div>
-            <div className="settings-menu-section-label">Power & Controller</div>
-            <div className="settings-menu-row">
-              <div className="settings-menu-copy">
-                <strong>Controller Power Saving</strong>
-                <span>Caps haptics, triggers, and lightbar brightness at 60% while headphones are plugged in</span>
-              </div>
-              <button
-                type="button"
-                role="switch"
-                aria-checked={snapshot.settings.controllerPowerSavingEnabled}
-                className={`switch ${snapshot.settings.controllerPowerSavingEnabled ? 'on' : ''}`}
-                disabled={pendingAction !== null}
-                onClick={() => void runAction('controller-power-saving', () => (
-                  window.bridge.setControllerPowerSavingEnabled(!snapshot.settings.controllerPowerSavingEnabled)
-                ))}
-              >
-                <span />
-              </button>
-            </div>
-            <div className="settings-menu-section-label">Shortcuts</div>
-            <div className="settings-menu-row">
-              <div className="settings-menu-copy settings-menu-copy-tooltip">
-                <strong>Sleep Shortcut</strong>
-                <div className="settings-shortcut-tooltip shortcut-glyph-tooltip" role="tooltip">
-                  <span>Put controller to sleep with</span>
-                  <span className="shortcut-glyph-row" aria-label="PlayStation Home and Triangle">
-                    <span className="shortcut-glyph-key">
-                      <img src={psHomeGlyphUrl} alt="PlayStation Home" />
-                    </span>
-                    <span className="shortcut-plus" aria-hidden="true">+</span>
-                    <span className="shortcut-glyph-key">
-                      <img src={triangleGlyphUrl} alt="Triangle" />
-                    </span>
-                  </span>
+            <div className="bridge-settings-columns">
+              <div className="bridge-settings-column">
+                <div className="settings-menu-section-label">General</div>
+                <div className="settings-menu-row">
+                  <div className="settings-menu-copy">
+                    <strong>UI Scale</strong>
+                  </div>
+                  <CustomSelect
+                    value={snapshot.settings.uiScalePercent}
+                    options={UI_SCALE_OPTIONS}
+                    className="settings-scale-select"
+                    showSelectedCheck={false}
+                    ariaLabel="UI scale"
+                    disabled={pendingAction !== null}
+                    onChange={(value) => {
+                      void runAction('ui-scale', () => window.bridge.setUiScalePercent(value));
+                    }}
+                  />
+                </div>
+                <div className="settings-menu-row">
+                  <div className="settings-menu-copy">
+                    <strong>Launch at Startup</strong>
+                    <span>Start in the tray when Windows starts</span>
+                  </div>
+                  <button
+                    type="button"
+                    role="switch"
+                    aria-checked={snapshot.settings.launchAtStartupEnabled}
+                    className={`switch ${snapshot.settings.launchAtStartupEnabled ? 'on' : ''}`}
+                    disabled={pendingAction !== null}
+                    onClick={() => void runAction('launch-at-startup', () => (
+                      window.bridge.setLaunchAtStartupEnabled(!snapshot.settings.launchAtStartupEnabled)
+                    ))}
+                  >
+                    <span />
+                  </button>
+                </div>
+                <div className="settings-menu-row">
+                  <div className="settings-menu-copy">
+                    <strong>Pico LED</strong>
+                  </div>
+                  <button
+                    type="button"
+                    role="switch"
+                    aria-checked={snapshot.settings.ledEnabled}
+                    className={`switch ${snapshot.settings.ledEnabled ? 'on' : ''}`}
+                    disabled={!connected}
+                    onClick={() => void runAction('led', () => window.bridge.setLedEnabled(!snapshot.settings.ledEnabled))}
+                  >
+                    <span />
+                  </button>
+                </div>
+                <div className="settings-menu-section-label">Connection Behavior</div>
+                <div className="settings-menu-row">
+                  <div className="settings-menu-copy">
+                    <strong>Idle Disconnect</strong>
+                  </div>
+                  <div className="settings-menu-controls">
+                    <CustomSelect
+                      value={snapshot.settings.idleDisconnectTimeoutMinutes}
+                      options={IDLE_DISCONNECT_TIMEOUT_OPTIONS}
+                      className="settings-timeout-select"
+                      showSelectedCheck={false}
+                      ariaLabel="Idle disconnect timeout"
+                      disabled={!connected || !snapshot.settings.idleDisconnectEnabled}
+                      onChange={(value) => {
+                        void runAction('idle-timeout', () => window.bridge.setIdleDisconnectTimeoutMinutes(value));
+                      }}
+                    />
+                    <button
+                      type="button"
+                      role="switch"
+                      aria-checked={snapshot.settings.idleDisconnectEnabled}
+                      className={`switch ${snapshot.settings.idleDisconnectEnabled ? 'on' : ''}`}
+                      disabled={!connected}
+                      onClick={() => void runAction('idle', () => (
+                        window.bridge.setIdleDisconnectEnabled(!snapshot.settings.idleDisconnectEnabled)
+                      ))}
+                    >
+                      <span />
+                    </button>
+                  </div>
+                </div>
+                <div className="settings-menu-row">
+                  <div className="settings-menu-copy">
+                    <strong>PC Sleep Disconnect</strong>
+                  </div>
+                  <button
+                    type="button"
+                    role="switch"
+                    aria-checked={snapshot.settings.usbSuspendDisconnectEnabled}
+                    className={`switch ${snapshot.settings.usbSuspendDisconnectEnabled ? 'on' : ''}`}
+                    disabled={!connected || !usbSuspendDisconnectSupported}
+                    onClick={() => void runAction('usb-suspend', () => (
+                      window.bridge.setUsbSuspendDisconnectEnabled(!snapshot.settings.usbSuspendDisconnectEnabled)
+                    ))}
+                  >
+                    <span />
+                  </button>
                 </div>
               </div>
-              <button
-                type="button"
-                role="switch"
-                aria-checked={snapshot.settings.sleepKeybindEnabled}
-                className={`switch ${snapshot.settings.sleepKeybindEnabled ? 'on' : ''}`}
-                disabled={!connected || !sleepControllerSupported || pendingAction !== null}
-                onClick={() => void runAction('sleep-keybind', () => (
-                  window.bridge.setSleepKeybindEnabled(!snapshot.settings.sleepKeybindEnabled)
-                ))}
-              >
-                <span />
-              </button>
-            </div>
-            <div className="settings-menu-row">
-              <div className="settings-menu-copy settings-menu-copy-tooltip">
-                <strong>Volume Shortcut</strong>
-                <div className="settings-shortcut-tooltip shortcut-glyph-tooltip" role="tooltip">
-                  <span>Controller volume up/down with</span>
-                  <span className="shortcut-glyph-row" aria-label="PlayStation Home and D-pad Up or D-pad Down">
-                    <span className="shortcut-glyph-key">
-                      <img src={psHomeGlyphUrl} alt="PlayStation Home" />
-                    </span>
-                    <span className="shortcut-plus" aria-hidden="true">+</span>
-                    <span className="shortcut-glyph-pair">
-                      <span className="shortcut-glyph-key">
-                        <img src={dpadUpGlyphUrl} alt="D-pad Up" />
+              <div className="bridge-settings-column">
+                <div className="settings-menu-section-label">Power & Controller</div>
+                <div className="settings-menu-row">
+                  <div className="settings-menu-copy">
+                    <strong>Controller Power Saving</strong>
+                    <span>Caps haptics, triggers, and lightbar brightness at 60% while headphones are plugged in</span>
+                  </div>
+                  <button
+                    type="button"
+                    role="switch"
+                    aria-checked={snapshot.settings.controllerPowerSavingEnabled}
+                    className={`switch ${snapshot.settings.controllerPowerSavingEnabled ? 'on' : ''}`}
+                    disabled={pendingAction !== null}
+                    onClick={() => void runAction('controller-power-saving', () => (
+                      window.bridge.setControllerPowerSavingEnabled(!snapshot.settings.controllerPowerSavingEnabled)
+                    ))}
+                  >
+                    <span />
+                  </button>
+                </div>
+                <div className="settings-menu-section-label">Shortcuts</div>
+                <div className="settings-menu-row">
+                  <div className="settings-menu-copy settings-menu-copy-tooltip">
+                    <strong>Sleep Shortcut</strong>
+                    <div className="settings-shortcut-tooltip shortcut-glyph-tooltip" role="tooltip">
+                      <span>Put controller to sleep with</span>
+                      <span className="shortcut-glyph-row" aria-label="PlayStation Home and Triangle">
+                        <span className="shortcut-glyph-key">
+                          <img src={psHomeGlyphUrl} alt="PlayStation Home" />
+                        </span>
+                        <span className="shortcut-plus" aria-hidden="true">+</span>
+                        <span className="shortcut-glyph-key">
+                          <img src={triangleGlyphUrl} alt="Triangle" />
+                        </span>
                       </span>
-                      <span className="shortcut-glyph-key">
-                        <img src={dpadDownGlyphUrl} alt="D-pad Down" />
+                    </div>
+                  </div>
+                  <button
+                    type="button"
+                    role="switch"
+                    aria-checked={snapshot.settings.sleepKeybindEnabled}
+                    className={`switch ${snapshot.settings.sleepKeybindEnabled ? 'on' : ''}`}
+                    disabled={!connected || !sleepControllerSupported || pendingAction !== null}
+                    onClick={() => void runAction('sleep-keybind', () => (
+                      window.bridge.setSleepKeybindEnabled(!snapshot.settings.sleepKeybindEnabled)
+                    ))}
+                  >
+                    <span />
+                  </button>
+                </div>
+                <div className="settings-menu-row">
+                  <div className="settings-menu-copy settings-menu-copy-tooltip">
+                    <strong>Volume Shortcut</strong>
+                    <div className="settings-shortcut-tooltip shortcut-glyph-tooltip" role="tooltip">
+                      <span>Controller volume up/down with</span>
+                      <span className="shortcut-glyph-row" aria-label="PlayStation Home and D-pad Up or D-pad Down">
+                        <span className="shortcut-glyph-key">
+                          <img src={psHomeGlyphUrl} alt="PlayStation Home" />
+                        </span>
+                        <span className="shortcut-plus" aria-hidden="true">+</span>
+                        <span className="shortcut-glyph-pair">
+                          <span className="shortcut-glyph-key">
+                            <img src={dpadUpGlyphUrl} alt="D-pad Up" />
+                          </span>
+                          <span className="shortcut-glyph-key">
+                            <img src={dpadDownGlyphUrl} alt="D-pad Down" />
+                          </span>
+                        </span>
                       </span>
-                    </span>
-                  </span>
+                    </div>
+                  </div>
+                  <button
+                    type="button"
+                    role="switch"
+                    aria-checked={snapshot.settings.speakerVolumeShortcutEnabled}
+                    className={`switch ${snapshot.settings.speakerVolumeShortcutEnabled ? 'on' : ''}`}
+                    disabled={!connected}
+                    onClick={() => void runAction('volume-shortcut', () => (
+                      window.bridge.setSpeakerVolumeShortcutEnabled(!snapshot.settings.speakerVolumeShortcutEnabled)
+                    ))}
+                  >
+                    <span />
+                  </button>
                 </div>
               </div>
-              <button
-                type="button"
-                role="switch"
-                aria-checked={snapshot.settings.speakerVolumeShortcutEnabled}
-                className={`switch ${snapshot.settings.speakerVolumeShortcutEnabled ? 'on' : ''}`}
-                disabled={!connected}
-                onClick={() => void runAction('volume-shortcut', () => (
-                  window.bridge.setSpeakerVolumeShortcutEnabled(!snapshot.settings.speakerVolumeShortcutEnabled)
-                ))}
-              >
-                <span />
-              </button>
             </div>
           </div>
         </div>

@@ -17,6 +17,7 @@ export type UiScalePercent = 75 | 100 | 125 | 150;
 export interface CompanionSettings {
   selectedPresetId: BridgePresetId;
   uiScalePercent: UiScalePercent;
+  launchAtStartupEnabled: boolean;
   hapticsEnabled: boolean;
   hapticsGainPercent: number;
   hapticsBufferLength: number;

@@ -647,7 +647,7 @@ button {
   position: relative;
   top: auto;
   right: auto;
-  width: min(386px, calc(100vw - 48px));
+  width: min(760px, calc(100vw - 48px));
   max-height: min(560px, calc(100vh - 48px));
   overflow: visible;
   animation: modal-panel-in 160ms ease-out;
@@ -662,8 +662,26 @@ button {
   font-weight: 560;
 }
 
+.bridge-settings-columns {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+  gap: 14px;
+}
+
+.bridge-settings-column {
+  min-width: 0;
+  border: 1px solid rgba(142, 164, 194, 0.16);
+  border-radius: var(--control-radius);
+  background: rgba(3, 9, 16, 0.22);
+  overflow: visible;
+}
+
+.bridge-settings-column .settings-menu-section-label:first-child {
+  border-top: 0;
+}
+
 .settings-menu-section-label {
-  padding: 10px 10px 4px;
+  padding: 10px 10px 3px;
   border-top: 1px solid rgba(142, 164, 194, 0.16);
   color: #9fb1c9;
   font-size: 11px;
@@ -840,7 +858,7 @@ button {
 .settings-menu-row {
   justify-content: space-between;
   gap: 16px;
-  min-height: 45px;
+  min-height: 42px;
   padding: 7px 10px;
   border-top: 1px solid rgba(142, 164, 194, 0.16);
 }

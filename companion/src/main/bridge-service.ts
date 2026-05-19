@@ -1103,6 +1103,14 @@ export class BridgeService extends EventEmitter {
     return this.getSnapshot();
   }
 
+  setLaunchAtStartupEnabled(enabled: boolean): BridgeSnapshot {
+    this.snapshot.settings = this.settingsStore.update({
+      launchAtStartupEnabled: enabled
+    });
+    this.emitSnapshot();
+    return this.getSnapshot();
+  }
+
   async setPollingRateMode(mode: PollingRateMode): Promise<BridgeSnapshot> {
     const normalizedMode = normalizePollingRateMode(mode);
     await this.sendSettingCommand(

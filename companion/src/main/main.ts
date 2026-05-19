@@ -15,6 +15,7 @@ const APP_MARK_PNG = path.join('assets', 'controllers', 'ds5-bridge_mark.png');
 const APP_ICON_ICO = path.join('assets', 'controllers', 'ds5-bridge_app-icon-tile.ico');
 const BASE_WINDOW_WIDTH = 1120;
 const BASE_WINDOW_HEIGHT = 630;
+const START_IN_TRAY_ARG = '--start-in-tray';
 let mainWindow: BrowserWindow | null = null;
 let tray: Tray | null = null;
 let bridgeService: BridgeService | null = null;
@@ -99,6 +100,33 @@ function applyWindowScale(window: BrowserWindow, uiScalePercent: UiScalePercent,
 function applySnapshotWindowScale(snapshot: { settings: { uiScalePercent: UiScalePercent } }): void {
   if (mainWindow) {
     applyWindowScale(mainWindow, snapshot.settings.uiScalePercent, true);
+  }
+}
+
+function shouldStartInTray(argv = process.argv): boolean {
+  return argv.includes(START_IN_TRAY_ARG);
+}
+
+function loginItemArgs(): string[] {
+  return process.defaultApp
+    ? [app.getAppPath(), START_IN_TRAY_ARG]
+    : [START_IN_TRAY_ARG];
+}
+
+function applyLaunchAtStartup(enabled: boolean): void {
+  if (process.platform !== 'win32') {
+    return;
+  }
+
+  try {
+    app.setLoginItemSettings({
+      openAtLogin: enabled,
+      openAsHidden: enabled,
+      path: process.execPath,
+      args: loginItemArgs()
+    });
+  } catch (error) {
+    console.warn('Failed to update launch at startup setting:', error);
   }
 }
 
@@ -495,6 +523,11 @@ function registerIpc(service: BridgeService): void {
     applySnapshotWindowScale(snapshot);
     return snapshot;
   });
+  ipcMain.handle('bridge:setLaunchAtStartupEnabled', (_event, value: boolean) => {
+    const snapshot = service.setLaunchAtStartupEnabled(Boolean(value));
+    applyLaunchAtStartup(snapshot.settings.launchAtStartupEnabled);
+    return snapshot;
+  });
   ipcMain.handle('bridge:setPollingRateMode', (_event, value: PollingRateMode) => (
     service.setPollingRateMode(value)
   ));
@@ -516,6 +549,7 @@ function registerIpc(service: BridgeService): void {
   ipcMain.handle('bridge:restoreDefaults', async () => {
     const snapshot = await service.restoreDefaults();
     applySnapshotWindowScale(snapshot);
+    applyLaunchAtStartup(snapshot.settings.launchAtStartupEnabled);
     return snapshot;
   });
   ipcMain.handle('bridge:setButtonRemap', (_event, buttonId: RemapButtonId, targetId: RemapButtonId) => (
@@ -566,13 +600,18 @@ app.whenReady().then(async () => {
   ensureWindowsNotificationShortcut();
   Menu.setApplicationMenu(null);
   const settingsStore = new SettingsStore(app.getPath('userData'));
+  applyLaunchAtStartup(settingsStore.get().launchAtStartupEnabled);
   bridgeService = new BridgeService(settingsStore);
   registerIpc(bridgeService);
 
   mainWindow = createWindow(settingsStore.get().uiScalePercent);
   mainWindow.on('maximize', sendWindowMaximizedState);
   mainWindow.on('unmaximize', sendWindowMaximizedState);
-  mainWindow.once('ready-to-show', showWindowCentered);
+  mainWindow.once('ready-to-show', () => {
+    if (!shouldStartInTray()) {
+      showWindowCentered();
+    }
+  });
 
   tray = new Tray(await createTrayIcon());
   tray.setToolTip(APP_NAME);
@@ -592,8 +631,10 @@ app.whenReady().then(async () => {
   bridgeService.start();
 });
 
-app.on('second-instance', () => {
-  showWindowCentered();
+app.on('second-instance', (_event, argv) => {
+  if (!shouldStartInTray(argv)) {
+    showWindowCentered();
+  }
 });
 
 app.on('window-all-closed', () => {

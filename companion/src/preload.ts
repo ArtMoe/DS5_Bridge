@@ -68,6 +68,9 @@ const api = {
   setControllerPowerSavingEnabled: (value: boolean): Promise<BridgeSnapshot> => (
     ipcRenderer.invoke('bridge:setControllerPowerSavingEnabled', value)
   ),
+  setLaunchAtStartupEnabled: (value: boolean): Promise<BridgeSnapshot> => (
+    ipcRenderer.invoke('bridge:setLaunchAtStartupEnabled', value)
+  ),
   setUiScalePercent: (value: number): Promise<BridgeSnapshot> => ipcRenderer.invoke('bridge:setUiScalePercent', value),
   setPollingRateMode: (value: PollingRateMode): Promise<BridgeSnapshot> => (
     ipcRenderer.invoke('bridge:setPollingRateMode', value)

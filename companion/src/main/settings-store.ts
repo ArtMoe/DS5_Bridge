@@ -13,6 +13,7 @@ import type { CompanionSettings, UiScalePercent } from '../shared/types';
 export const DEFAULT_SETTINGS: CompanionSettings = {
   selectedPresetId: 'balanced',
   uiScalePercent: 100,
+  launchAtStartupEnabled: false,
   hapticsEnabled: true,
   hapticsGainPercent: 100,
   hapticsBufferLength: 64,
@@ -156,6 +157,9 @@ function normalizeSettings(value: Partial<CompanionSettings> | null | undefined)
   return {
     selectedPresetId,
     uiScalePercent: normalizeUiScalePercent(value?.uiScalePercent),
+    launchAtStartupEnabled: typeof value?.launchAtStartupEnabled === 'boolean'
+      ? value.launchAtStartupEnabled
+      : DEFAULT_SETTINGS.launchAtStartupEnabled,
     hapticsEnabled: typeof value?.hapticsEnabled === 'boolean'
       ? value.hapticsEnabled
       : DEFAULT_SETTINGS.hapticsEnabled,
