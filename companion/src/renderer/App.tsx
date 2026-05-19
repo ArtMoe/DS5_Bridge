@@ -1090,7 +1090,6 @@ export function App() {
   const [speakerVolumeCommitPending, setSpeakerVolumeCommitPending] = useState(false);
   const [micVolumeCommitPending, setMicVolumeCommitPending] = useState(false);
   const [lightbarCommitPending, setLightbarCommitPending] = useState(false);
-  const [sleepConfirmVisible, setSleepConfirmVisible] = useState(false);
   const [overviewSleepConfirmVisible, setOverviewSleepConfirmVisible] = useState(false);
   const [hostEncodingDisableConfirmVisible, setHostEncodingDisableConfirmVisible] = useState(false);
   const hapticsEditingRef = useRef(false);
@@ -1106,14 +1105,11 @@ export function App() {
   const remappingArtRef = useRef<HTMLImageElement>(null);
   const customColorPickerRef = useRef<HTMLDivElement>(null);
   const customSwatchPrimeTimerRef = useRef<number | null>(null);
-  const sleepConfirmTimerRef = useRef<number | null>(null);
   const overviewSleepConfirmTimerRef = useRef<number | null>(null);
   const windowDraggingRef = useRef(false);
   const windowDragReleaseTimerRef = useRef<number | null>(null);
   const deferredSnapshotRef = useRef<BridgeSnapshot | null>(null);
-  const sleepConfirmArmedRef = useRef(false);
   const overviewSleepConfirmArmedRef = useRef(false);
-  const sleepTogglePromiseRef = useRef<Promise<void> | null>(null);
   const appOpenedAtRef = useRef(Date.now());
   const connected = snapshot?.state === 'connected';
   const remapModifiedCount = useMemo(() => (
@@ -1206,9 +1202,6 @@ export function App() {
       unsubscribe();
       if (customSwatchPrimeTimerRef.current !== null) {
         window.clearTimeout(customSwatchPrimeTimerRef.current);
-      }
-      if (sleepConfirmTimerRef.current !== null) {
-        window.clearTimeout(sleepConfirmTimerRef.current);
       }
       if (overviewSleepConfirmTimerRef.current !== null) {
         window.clearTimeout(overviewSleepConfirmTimerRef.current);
@@ -1416,7 +1409,6 @@ export function App() {
   const lowBatteryToastEnabled = Boolean(snapshot?.settings.notifyLowBattery);
   const notificationsEnabled = controllerToastEnabled || lowBatteryToastEnabled;
   const controllerConnected = Boolean(snapshot?.status?.controllerConnected);
-  const sleepButtonBusy = pendingAction !== null && pendingAction !== 'sleep-keybind';
   const gameStreamActive = Boolean(snapshot?.status?.hostOutputRecent);
   const audioStreamActive = Boolean(snapshot?.status?.audioRecent && pendingAction !== 'speaker' && !speakerTestLocked);
   const hostAudioStatus = snapshot?.diagnostics.hostAudioStatus;
@@ -2425,28 +2417,6 @@ export function App() {
     );
   }
 
-  function clearSleepConfirmation() {
-    sleepConfirmArmedRef.current = false;
-    setSleepConfirmVisible(false);
-    if (sleepConfirmTimerRef.current !== null) {
-      window.clearTimeout(sleepConfirmTimerRef.current);
-      sleepConfirmTimerRef.current = null;
-    }
-  }
-
-  function armSleepConfirmation() {
-    sleepConfirmArmedRef.current = true;
-    setSleepConfirmVisible(true);
-    if (sleepConfirmTimerRef.current !== null) {
-      window.clearTimeout(sleepConfirmTimerRef.current);
-    }
-    sleepConfirmTimerRef.current = window.setTimeout(() => {
-      sleepConfirmArmedRef.current = false;
-      setSleepConfirmVisible(false);
-      sleepConfirmTimerRef.current = null;
-    }, SLEEP_CONFIRM_MS);
-  }
-
   function clearOverviewSleepConfirmation() {
     overviewSleepConfirmArmedRef.current = false;
     setOverviewSleepConfirmVisible(false);
@@ -2479,46 +2449,6 @@ export function App() {
     }
     clearOverviewSleepConfirmation();
     void runAction('overview-sleep-controller', () => window.bridge.sleepController());
-  }
-
-  function handleSleepButtonClick(detail: number) {
-    if (!snapshot || detail > 1 || sleepButtonBusy || !connected || !sleepControllerSupported) {
-      return;
-    }
-
-    armSleepConfirmation();
-    const togglePromise = runAction('sleep-keybind', () => (
-      window.bridge.setSleepKeybindEnabled(!snapshot.settings.sleepKeybindEnabled)
-    ));
-    const trackedPromise = togglePromise.finally(() => {
-      if (sleepTogglePromiseRef.current === trackedPromise) {
-        sleepTogglePromiseRef.current = null;
-      }
-    });
-    sleepTogglePromiseRef.current = trackedPromise;
-  }
-
-  function handleSleepButtonDoubleClick() {
-    if (!snapshot || sleepButtonBusy || !connected || !sleepControllerSupported || !controllerConnected) {
-      return;
-    }
-    if (!sleepConfirmArmedRef.current) {
-      armSleepConfirmation();
-      return;
-    }
-
-    clearSleepConfirmation();
-    const waitForToggle = sleepTogglePromiseRef.current ?? Promise.resolve();
-    void waitForToggle.then(async () => {
-      setPendingAction('sleep-controller');
-      try {
-        setSnapshot(await window.bridge.sleepController());
-      } catch {
-        setSnapshot(await window.bridge.getStatus());
-      } finally {
-        setPendingAction(null);
-      }
-    });
   }
 
   function toggleControllerNotifications() {
@@ -2578,38 +2508,6 @@ export function App() {
         </span>
         <div className="topbar-right">
           <div className="bridge-tools">
-            <div className="sleep-control">
-              <button
-                className={`topbar-sleep-button ${sleepKeybindEnabled ? 'active' : ''} ${sleepConfirmVisible ? 'confirm' : ''}`}
-                type="button"
-                aria-label="Sleep controller"
-                aria-pressed={sleepKeybindEnabled}
-                disabled={!connected || !sleepControllerSupported || sleepButtonBusy}
-                onClick={(event) => handleSleepButtonClick(event.detail)}
-                onDoubleClick={handleSleepButtonDoubleClick}
-              >
-                <Moon size={16} />
-                <span>Sleep</span>
-              </button>
-              <div className="sleep-keybind-tooltip shortcut-glyph-tooltip" role="tooltip">
-                <span>Put controller to sleep with</span>
-                <span className="shortcut-glyph-row" aria-label="PlayStation Home and Triangle">
-                  <span className="shortcut-glyph-key">
-                    <img src={psHomeGlyphUrl} alt="PlayStation Home" />
-                  </span>
-                  <span className="shortcut-plus" aria-hidden="true">+</span>
-                  <span className="shortcut-glyph-key">
-                    <img src={triangleGlyphUrl} alt="Triangle" />
-                  </span>
-                </span>
-              </div>
-              {sleepConfirmVisible && (
-                <div className="sleep-confirm" role="status">
-                  Double-click to sleep now
-                </div>
-              )}
-            </div>
-            <span className="bridge-tool-divider" aria-hidden="true" />
             <div className="notifications-control" ref={notificationsRef}>
               <button
                 className={`topbar-tool notification-tool ${showNotificationsMenu ? 'active' : ''} ${notificationsEnabled ? 'armed' : ''}`}
@@ -4489,6 +4387,7 @@ export function App() {
                 <X size={16} />
               </button>
             </div>
+            <div className="settings-menu-section-label">General</div>
             <div className="settings-menu-row">
               <div className="settings-menu-copy">
                 <strong>UI Scale</strong>
@@ -4520,6 +4419,7 @@ export function App() {
                 <span />
               </button>
             </div>
+            <div className="settings-menu-section-label">Connection Behavior</div>
             <div className="settings-menu-row">
               <div className="settings-menu-copy">
                 <strong>Idle Disconnect</strong>
@@ -4567,6 +4467,7 @@ export function App() {
                 <span />
               </button>
             </div>
+            <div className="settings-menu-section-label">Power & Controller</div>
             <div className="settings-menu-row">
               <div className="settings-menu-copy">
                 <strong>Controller Power Saving</strong>
@@ -4580,6 +4481,36 @@ export function App() {
                 disabled={pendingAction !== null}
                 onClick={() => void runAction('controller-power-saving', () => (
                   window.bridge.setControllerPowerSavingEnabled(!snapshot.settings.controllerPowerSavingEnabled)
+                ))}
+              >
+                <span />
+              </button>
+            </div>
+            <div className="settings-menu-section-label">Shortcuts</div>
+            <div className="settings-menu-row">
+              <div className="settings-menu-copy settings-menu-copy-tooltip">
+                <strong>Sleep Shortcut</strong>
+                <div className="settings-shortcut-tooltip shortcut-glyph-tooltip" role="tooltip">
+                  <span>Put controller to sleep with</span>
+                  <span className="shortcut-glyph-row" aria-label="PlayStation Home and Triangle">
+                    <span className="shortcut-glyph-key">
+                      <img src={psHomeGlyphUrl} alt="PlayStation Home" />
+                    </span>
+                    <span className="shortcut-plus" aria-hidden="true">+</span>
+                    <span className="shortcut-glyph-key">
+                      <img src={triangleGlyphUrl} alt="Triangle" />
+                    </span>
+                  </span>
+                </div>
+              </div>
+              <button
+                type="button"
+                role="switch"
+                aria-checked={snapshot.settings.sleepKeybindEnabled}
+                className={`switch ${snapshot.settings.sleepKeybindEnabled ? 'on' : ''}`}
+                disabled={!connected || !sleepControllerSupported || pendingAction !== null}
+                onClick={() => void runAction('sleep-keybind', () => (
+                  window.bridge.setSleepKeybindEnabled(!snapshot.settings.sleepKeybindEnabled)
                 ))}
               >
                 <span />
