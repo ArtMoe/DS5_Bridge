@@ -81,6 +81,39 @@ button {
   -webkit-app-region: drag;
 }
 
+.shell.window-dragging,
+.shell.window-dragging * {
+  transition: none !important;
+  animation: none !important;
+}
+
+.shell.window-dragging {
+  background: #070b12;
+}
+
+.shell.window-dragging .window-bar {
+  background: #050b13;
+}
+
+.shell.window-dragging .hero-card,
+.shell.window-dragging .hero-card::before,
+.shell.window-dragging .feature-card,
+.shell.window-dragging .overview-card,
+.shell.window-dragging .overview-control-panel,
+.shell.window-dragging .overview-status-panel,
+.shell.window-dragging .remapping-area,
+.shell.window-dragging .remapping-profile-bar {
+  background-image: none !important;
+  box-shadow: none !important;
+}
+
+.shell.window-dragging .controller-art,
+.shell.window-dragging .remapping-controller-art,
+.shell.window-dragging .remapping-callout-line,
+.shell.window-dragging .remapping-callout-layer g.active .remapping-callout-line {
+  filter: none !important;
+}
+
 .bridge-wordmark {
   display: inline-flex;
   align-items: center;

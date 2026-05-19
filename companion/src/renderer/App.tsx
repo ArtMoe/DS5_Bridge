@@ -1072,6 +1072,7 @@ export function App() {
   const [showClassicRumbleControl, setShowClassicRumbleControl] = useState(false);
   const [showMicrophoneControl, setShowMicrophoneControl] = useState(false);
   const [windowMaximized, setWindowMaximized] = useState(false);
+  const [windowDragging, setWindowDragging] = useState(false);
   const [testLocked, setTestLocked] = useState(false);
   const [speakerTestLocked, setSpeakerTestLocked] = useState(false);
   const [speakerOutputAvailable, setSpeakerOutputAvailable] = useState<boolean | null>(null);
@@ -1102,6 +1103,9 @@ export function App() {
   const customSwatchPrimeTimerRef = useRef<number | null>(null);
   const sleepConfirmTimerRef = useRef<number | null>(null);
   const overviewSleepConfirmTimerRef = useRef<number | null>(null);
+  const windowDraggingRef = useRef(false);
+  const windowDragReleaseTimerRef = useRef<number | null>(null);
+  const deferredSnapshotRef = useRef<BridgeSnapshot | null>(null);
   const sleepConfirmArmedRef = useRef(false);
   const overviewSleepConfirmArmedRef = useRef(false);
   const sleepTogglePromiseRef = useRef<Promise<void> | null>(null);
@@ -1123,6 +1127,61 @@ export function App() {
   }, [remapDraft, selectedRemapProfile]);
   const selectedRemapProfileIsDefault = selectedRemapProfileId === DEFAULT_BUTTON_REMAP_PROFILE_ID;
 
+  function applySnapshot(next: BridgeSnapshot) {
+    setSnapshot(next);
+    setRemapDraft(next.settings.buttonRemappingDraft);
+    if (!hapticsEditingRef.current) {
+      setHapticsValue(displayHapticsValue(next));
+    }
+    if (!classicRumbleEditingRef.current) {
+      setClassicRumbleValue(displayClassicRumbleValue(next));
+    }
+    if (!speakerVolumeEditingRef.current) {
+      setSpeakerVolumeValue(snapSpeakerVolume(next.settings.speakerVolumePercent));
+    }
+    if (!micVolumeEditingRef.current) {
+      setMicVolumeValue(snapMicVolume(next.settings.micVolumePercent));
+    }
+    const nextLightbarColor = lightbarColorFromSnapshot(next);
+    setLightbarColor(nextLightbarColor);
+    if (!isLightbarPresetColor(nextLightbarColor)) {
+      setCustomLightbarColor(nextLightbarColor);
+      setCustomColorDraft(nextLightbarColor);
+      window.localStorage.setItem('ds5bridge.customLightbarColor', nextLightbarColor);
+    }
+    if (!lightbarBrightnessEditingRef.current) {
+      setLightbarBrightnessValue(displayLightbarBrightnessValue(next));
+    }
+    if (!triggerEffectEditingRef.current) {
+      setTriggerEffectIntensityValue(displayTriggerEffectIntensityValue(next));
+    }
+  }
+
+  function finishWindowDrag() {
+    windowDraggingRef.current = false;
+    setWindowDragging(false);
+    if (windowDragReleaseTimerRef.current !== null) {
+      window.clearTimeout(windowDragReleaseTimerRef.current);
+      windowDragReleaseTimerRef.current = null;
+    }
+    const deferredSnapshot = deferredSnapshotRef.current;
+    deferredSnapshotRef.current = null;
+    if (deferredSnapshot) {
+      applySnapshot(deferredSnapshot);
+    }
+  }
+
+  function beginWindowDrag() {
+    windowDraggingRef.current = true;
+    setWindowDragging(true);
+    if (windowDragReleaseTimerRef.current !== null) {
+      window.clearTimeout(windowDragReleaseTimerRef.current);
+    }
+    windowDragReleaseTimerRef.current = window.setTimeout(finishWindowDrag, 1600);
+    window.addEventListener('mouseup', finishWindowDrag, { once: true });
+    window.addEventListener('blur', finishWindowDrag, { once: true });
+  }
+
   useEffect(() => {
     let cancelled = false;
     window.bridge.isWindowMaximized().then((maximized) => {
@@ -1141,51 +1200,15 @@ export function App() {
     let cancelled = false;
     window.bridge.getStatus().then((next) => {
       if (!cancelled) {
-        setSnapshot(next);
-        setHapticsValue(displayHapticsValue(next));
-        setClassicRumbleValue(displayClassicRumbleValue(next));
-        setSpeakerVolumeValue(snapSpeakerVolume(next.settings.speakerVolumePercent));
-        setMicVolumeValue(snapMicVolume(next.settings.micVolumePercent));
-        setRemapDraft(next.settings.buttonRemappingDraft);
-        const nextLightbarColor = lightbarColorFromSnapshot(next);
-        setLightbarColor(nextLightbarColor);
-        if (!isLightbarPresetColor(nextLightbarColor)) {
-          setCustomLightbarColor(nextLightbarColor);
-          setCustomColorDraft(nextLightbarColor);
-          window.localStorage.setItem('ds5bridge.customLightbarColor', nextLightbarColor);
-        }
-        setLightbarBrightnessValue(displayLightbarBrightnessValue(next));
-        setTriggerEffectIntensityValue(displayTriggerEffectIntensityValue(next));
+        applySnapshot(next);
       }
     });
     const unsubscribe = window.bridge.onSnapshot((next) => {
-      setSnapshot(next);
-      setRemapDraft(next.settings.buttonRemappingDraft);
-      if (!hapticsEditingRef.current) {
-        setHapticsValue(displayHapticsValue(next));
+      if (windowDraggingRef.current) {
+        deferredSnapshotRef.current = next;
+        return;
       }
-      if (!classicRumbleEditingRef.current) {
-        setClassicRumbleValue(displayClassicRumbleValue(next));
-      }
-      if (!speakerVolumeEditingRef.current) {
-        setSpeakerVolumeValue(snapSpeakerVolume(next.settings.speakerVolumePercent));
-      }
-      if (!micVolumeEditingRef.current) {
-        setMicVolumeValue(snapMicVolume(next.settings.micVolumePercent));
-      }
-      const nextLightbarColor = lightbarColorFromSnapshot(next);
-      setLightbarColor(nextLightbarColor);
-      if (!isLightbarPresetColor(nextLightbarColor)) {
-        setCustomLightbarColor(nextLightbarColor);
-        setCustomColorDraft(nextLightbarColor);
-        window.localStorage.setItem('ds5bridge.customLightbarColor', nextLightbarColor);
-      }
-      if (!lightbarBrightnessEditingRef.current) {
-        setLightbarBrightnessValue(displayLightbarBrightnessValue(next));
-      }
-      if (!triggerEffectEditingRef.current) {
-        setTriggerEffectIntensityValue(displayTriggerEffectIntensityValue(next));
-      }
+      applySnapshot(next);
     });
     return () => {
       cancelled = true;
@@ -1199,6 +1222,11 @@ export function App() {
       if (overviewSleepConfirmTimerRef.current !== null) {
         window.clearTimeout(overviewSleepConfirmTimerRef.current);
       }
+      if (windowDragReleaseTimerRef.current !== null) {
+        window.clearTimeout(windowDragReleaseTimerRef.current);
+      }
+      window.removeEventListener('mouseup', finishWindowDrag);
+      window.removeEventListener('blur', finishWindowDrag);
     };
   }, []);
 
@@ -2515,7 +2543,7 @@ export function App() {
   }
 
   return (
-    <div className="shell">
+    <div className={`shell ${windowDragging ? 'window-dragging' : ''}`}>
       <div
         className="window-bar"
         onMouseDown={(event) => {
@@ -2525,6 +2553,9 @@ export function App() {
           }
           setShowBridgeSettings(false);
           setShowNotificationsMenu(false);
+          if (event.button === 0) {
+            beginWindowDrag();
+          }
         }}
       >
         <span className="bridge-wordmark" aria-label="DS5 Bridge">
