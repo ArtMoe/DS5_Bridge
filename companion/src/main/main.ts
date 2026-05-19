@@ -584,7 +584,10 @@ function registerIpc(service: BridgeService): void {
   ipcMain.handle('window:isMaximized', () => Boolean(mainWindow?.isMaximized()));
   ipcMain.handle('window:hide', () => mainWindow?.hide());
   ipcMain.handle('window:openExternal', (_event, url: string) => {
-    if (!/^https:\/\/ko-fi\.com\/sundaymoments\/?$/i.test(url)) {
+    if (
+      !/^https:\/\/ko-fi\.com\/sundaymoments\/?$/i.test(url)
+      && !/^https:\/\/github\.com\/SundayMoments\/?$/i.test(url)
+    ) {
       return;
     }
     void shell.openExternal(url);

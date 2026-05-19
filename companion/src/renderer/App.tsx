@@ -17,6 +17,7 @@ import {
   IconDeviceFloppy as Save,
   IconDeviceGamepad2,
   IconDeviceGamepad3,
+  IconBrandGithub,
   IconDeviceMobileVibration as Vibrate,
   IconHeadphones as Headphones,
   IconKeyboard as Keyboard,
@@ -1641,9 +1642,9 @@ export function App() {
     ? overviewSignalQuality
     : '--';
   const overviewShortcutItems = [
-    snapshot?.settings.sleepKeybindEnabled ? 'Sleep Shortcut' : null,
-    snapshot?.settings.speakerVolumeShortcutEnabled ? 'Volume Shortcut' : null
-  ].filter((item): item is string => Boolean(item));
+    snapshot?.settings.sleepKeybindEnabled ? { id: 'sleep', label: 'Sleep Shortcut' } : null,
+    snapshot?.settings.speakerVolumeShortcutEnabled ? { id: 'volume', label: 'Volume Shortcut' } : null
+  ].filter((item): item is { id: 'sleep' | 'volume'; label: string } => Boolean(item));
   const overviewNotificationItems = [
     controllerToastEnabled ? 'Controller Status' : null,
     lowBatteryToastEnabled ? 'Low Battery' : null
@@ -2970,7 +2971,41 @@ export function App() {
                 <div className="overview-chip-row">
                   {overviewShortcutItems.length > 0 ? (
                     overviewShortcutItems.map((item) => (
-                      <span className="overview-chip active" key={item}>{item}</span>
+                      <span className="overview-chip overview-shortcut-chip active" key={item.id} tabIndex={0}>
+                        {item.label}
+                        {item.id === 'sleep' ? (
+                          <span className="settings-shortcut-tooltip shortcut-glyph-tooltip overview-shortcut-tooltip" role="tooltip">
+                            <span>Put controller to sleep with</span>
+                            <span className="shortcut-glyph-row" aria-label="PlayStation Home and Triangle">
+                              <span className="shortcut-glyph-key">
+                                <img src={psHomeGlyphUrl} alt="PlayStation Home" />
+                              </span>
+                              <span className="shortcut-plus" aria-hidden="true">+</span>
+                              <span className="shortcut-glyph-key">
+                                <img src={triangleGlyphUrl} alt="Triangle" />
+                              </span>
+                            </span>
+                          </span>
+                        ) : (
+                          <span className="settings-shortcut-tooltip shortcut-glyph-tooltip overview-shortcut-tooltip" role="tooltip">
+                            <span>Controller volume up/down with</span>
+                            <span className="shortcut-glyph-row" aria-label="PlayStation Home and D-pad Up or D-pad Down">
+                              <span className="shortcut-glyph-key">
+                                <img src={psHomeGlyphUrl} alt="PlayStation Home" />
+                              </span>
+                              <span className="shortcut-plus" aria-hidden="true">+</span>
+                              <span className="shortcut-glyph-pair">
+                                <span className="shortcut-glyph-key">
+                                  <img src={dpadUpGlyphUrl} alt="D-pad Up" />
+                                </span>
+                                <span className="shortcut-glyph-key">
+                                  <img src={dpadDownGlyphUrl} alt="D-pad Down" />
+                                </span>
+                              </span>
+                            </span>
+                          </span>
+                        )}
+                      </span>
                     ))
                   ) : (
                     <span className="overview-chip muted">None enabled</span>
@@ -4572,6 +4607,20 @@ export function App() {
                     <span />
                   </button>
                 </div>
+                <div className="settings-menu-section-label">About</div>
+                <button
+                  type="button"
+                  className="settings-menu-link-row"
+                  onClick={() => void window.bridge.openExternal('https://github.com/SundayMoments')}
+                >
+                  <span className="settings-menu-link-icon" aria-hidden="true">
+                    <IconBrandGithub size={18} />
+                  </span>
+                  <span className="settings-menu-link-copy">
+                    <strong>GitHub</strong>
+                    <span>SundayMoments</span>
+                  </span>
+                </button>
               </div>
             </div>
           </div>

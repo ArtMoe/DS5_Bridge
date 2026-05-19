@@ -655,7 +655,7 @@ button {
 
 .bridge-settings-modal-heading {
   justify-content: space-between;
-  padding: 7px 6px 8px 10px;
+  padding: 4px 4px 6px 8px;
 }
 
 .bridge-settings-modal .settings-menu-row strong {
@@ -680,6 +680,17 @@ button {
   border-top: 0;
 }
 
+.bridge-settings-column .settings-menu-row {
+  border-top: 0;
+  min-height: 36px;
+  padding-top: 4px;
+  padding-bottom: 4px;
+}
+
+.bridge-settings-column .settings-menu-section-label:not(:first-child) {
+  margin-top: 2px;
+}
+
 .settings-menu-section-label {
   padding: 10px 10px 3px;
   border-top: 1px solid rgba(142, 164, 194, 0.16);
@@ -691,10 +702,6 @@ button {
   text-transform: uppercase;
 }
 
-.settings-menu-section-label + .settings-menu-row {
-  border-top: 0;
-}
-
 .modal-heading-copy {
   min-width: 0;
   display: inline-flex;
@@ -703,12 +710,14 @@ button {
 }
 
 .modal-close-button {
-  width: 30px;
-  height: 30px;
+  width: 26px;
+  height: 26px;
   border: 1px solid transparent;
   border-radius: var(--control-radius);
-  display: grid;
+  padding: 0;
+  display: inline-grid;
   place-items: center;
+  line-height: 0;
   color: #b8c5d8;
   background: transparent;
 }
@@ -1014,11 +1023,11 @@ button {
 }
 
 .settings-scale-select .custom-select-button {
-  height: 32px;
-  padding: 0 8px 0 10px;
+  height: 26px;
+  padding: 0 7px 0 9px;
   grid-template-columns: minmax(0, 1fr) 16px;
   gap: 4px;
-  font-size: 13px;
+  font-size: 12px;
   font-weight: 750;
 }
 
@@ -1032,10 +1041,10 @@ button {
 }
 
 .settings-scale-select .custom-select-menu button {
-  min-height: 30px;
-  padding: 0 10px;
+  min-height: 26px;
+  padding: 0 8px;
   grid-template-columns: minmax(0, 1fr);
-  font-size: 13px;
+  font-size: 12px;
   font-weight: 750;
 }
 
@@ -1048,6 +1057,54 @@ button {
 .settings-menu-action .secondary-action {
   min-height: 38px;
   padding: 0 14px;
+}
+
+.settings-menu-link-row {
+  width: 100%;
+  min-height: 38px;
+  padding: 4px 10px;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  border: 0;
+  color: #eaf2ff;
+  background: transparent;
+  text-align: left;
+}
+
+.settings-menu-link-row:hover {
+  background: rgba(41, 145, 255, 0.08);
+}
+
+.settings-menu-link-row:focus-visible {
+  outline: 2px solid rgba(41, 145, 255, 0.9);
+  outline-offset: -2px;
+}
+
+.settings-menu-link-icon {
+  width: 26px;
+  height: 26px;
+  display: inline-grid;
+  place-items: center;
+  flex: 0 0 auto;
+  color: #2d9cff;
+}
+
+.settings-menu-link-copy {
+  min-width: 0;
+  display: grid;
+  gap: 1px;
+}
+
+.settings-menu-link-copy strong {
+  font-size: 14px;
+  font-weight: 760;
+}
+
+.settings-menu-link-copy span {
+  color: #9fb1c9;
+  font-size: 12px;
+  font-weight: 560;
 }
 
 .sidebar-section-label {
@@ -1618,6 +1675,7 @@ button {
 }
 
 .overview-chip {
+  position: relative;
   min-height: 28px;
   border: 1px solid rgba(142, 164, 194, 0.22);
   border-radius: var(--control-radius);
@@ -1646,6 +1704,31 @@ button {
 .overview-chip.muted {
   color: #8fa1b8;
   background: rgba(255, 255, 255, 0.02);
+}
+
+.overview-shortcut-chip {
+  cursor: help;
+}
+
+.overview-shortcut-tooltip {
+  top: auto;
+  bottom: calc(100% + 10px);
+}
+
+.overview-shortcut-chip:first-child .overview-shortcut-tooltip {
+  left: 0;
+  transform: translate(0, -4px);
+}
+
+.overview-shortcut-chip:hover .overview-shortcut-tooltip,
+.overview-shortcut-chip:focus-visible .overview-shortcut-tooltip {
+  opacity: 1;
+  transform: translate(-50%, 0);
+}
+
+.overview-shortcut-chip:first-child:hover .overview-shortcut-tooltip,
+.overview-shortcut-chip:first-child:focus-visible .overview-shortcut-tooltip {
+  transform: translate(0, 0);
 }
 
 .lighting-page .toggle-row {
