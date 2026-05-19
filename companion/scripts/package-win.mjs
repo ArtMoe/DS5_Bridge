@@ -1,5 +1,6 @@
 import fs from 'node:fs';
 import path from 'node:path';
+import { execSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { rcedit } from 'rcedit';
 
@@ -23,6 +24,34 @@ const appAssets = [
 const runtimePackages = [
   'node-hid'
 ];
+
+function gitValue(args, fallback = 'unknown') {
+  try {
+    return execSync(`git ${args}`, {
+      cwd: repoDir,
+      encoding: 'utf8',
+      stdio: ['ignore', 'pipe', 'ignore']
+    }).trim() || fallback;
+  } catch {
+    return fallback;
+  }
+}
+
+function sourceNotice() {
+  const commit = gitValue('rev-parse HEAD');
+  const dirty = gitValue('status --porcelain', '') ? 'yes' : 'no';
+  return [
+    'DS5 Bridge source code:',
+    'https://github.com/SundayMoments/DS5_Bridge',
+    '',
+    `This binary release corresponds to commit: ${commit}`,
+    `Working tree dirty at build time: ${dirty}`,
+    '',
+    'License:',
+    'GNU Affero General Public License v3.0 only',
+    'See LICENSE and NOTICE.'
+  ].join('\n') + '\n';
+}
 
 function copyRecursive(src, dest, filter = () => true) {
   if (!filter(src)) {
@@ -70,6 +99,9 @@ if (!fs.existsSync(path.join(hostAudioHelperDir, 'HostAudioHelper.exe'))) {
 }
 
 copyRecursive(electronDist, outDir);
+copyRecursive(path.join(repoDir, 'LICENSE'), path.join(outDir, 'LICENSE'));
+copyRecursive(path.join(repoDir, 'NOTICE'), path.join(outDir, 'NOTICE'));
+fs.writeFileSync(path.join(outDir, 'SOURCE.txt'), sourceNotice(), 'utf8');
 
 const electronExe = path.join(outDir, 'electron.exe');
 const bridgeExe = path.join(outDir, 'DS5 Bridge.exe');

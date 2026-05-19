@@ -44,6 +44,34 @@ function Copy-Directory([string] $Source, [string] $Destination) {
   Copy-Item -LiteralPath $Source -Destination $Destination -Recurse -Force
 }
 
+function Get-GitValue([string] $Arguments, [string] $Fallback = 'unknown') {
+  try {
+    $value = (git -C $repoRoot $Arguments.Split(' ') 2>$null | Out-String).Trim()
+    if ([string]::IsNullOrWhiteSpace($value)) {
+      return $Fallback
+    }
+    return $value
+  } catch {
+    return $Fallback
+  }
+}
+
+function Write-SourceNotice([string] $Path) {
+  $commit = Get-GitValue 'rev-parse HEAD'
+  $dirty = if ([string]::IsNullOrWhiteSpace((Get-GitValue 'status --porcelain' ''))) { 'no' } else { 'yes' }
+  @(
+    'DS5 Bridge source code:',
+    'https://github.com/SundayMoments/DS5_Bridge',
+    '',
+    "This binary release corresponds to commit: $commit",
+    "Working tree dirty at build time: $dirty",
+    '',
+    'License:',
+    'GNU Affero General Public License v3.0 only',
+    'See LICENSE and NOTICE.'
+  ) | Set-Content -LiteralPath $Path -Encoding UTF8
+}
+
 $repoRoot = Resolve-RepoRoot
 $companionRoot = Join-Path $repoRoot 'companion'
 $firmwareBuildDir = Join-Path $repoRoot 'build\companion'
@@ -125,6 +153,9 @@ Invoke-Step 'Collect artifacts' {
 
   Copy-Item -LiteralPath $firmwareOutput -Destination (Join-Path $releaseDir $firmwareName) -Force
   Copy-Item -LiteralPath $installer.FullName -Destination (Join-Path $releaseDir $installerName) -Force
+  Copy-Item -LiteralPath (Join-Path $repoRoot 'LICENSE') -Destination (Join-Path $releaseDir 'LICENSE') -Force
+  Copy-Item -LiteralPath (Join-Path $repoRoot 'NOTICE') -Destination (Join-Path $releaseDir 'NOTICE') -Force
+  Write-SourceNotice (Join-Path $releaseDir 'SOURCE.txt')
   Copy-Directory $portable.FullName $portableDestination
 
   if (-not $NoZip) {
