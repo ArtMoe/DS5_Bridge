@@ -596,11 +596,14 @@ button {
 .sleep-control {
   position: relative;
   z-index: 30;
+  width: 76px;
+  display: grid;
+  place-items: center;
 }
 
 .topbar-sleep-button {
   height: 30px;
-  padding: 0 2px;
+  padding: 0;
   border: 0;
   display: inline-flex;
   align-items: center;
@@ -1460,19 +1463,33 @@ button {
 }
 
 .overview-action-grid button {
+  --overview-action-icon-size: 20px;
+  --overview-action-icon-gap: 7px;
+  --overview-action-label-width: 86px;
+  --overview-action-content-width: calc(var(--overview-action-icon-size) + var(--overview-action-icon-gap) + var(--overview-action-label-width));
   min-height: 34px;
   border: 1px solid rgba(142, 164, 194, 0.24);
   border-radius: var(--control-radius);
-  display: inline-flex;
+  display: grid;
+  grid-template-columns: var(--overview-action-icon-size) minmax(0, 1fr);
   align-items: center;
-  justify-content: center;
-  gap: 7px;
-  padding: 0 10px;
+  justify-content: stretch;
+  justify-items: start;
+  column-gap: var(--overview-action-icon-gap);
+  padding-left: max(8px, calc((100% - var(--overview-action-content-width)) / 2));
+  padding-right: 8px;
   color: #edf3ff;
   background: rgba(255, 255, 255, 0.035);
   font-size: 12px;
   font-weight: 750;
+  text-align: left;
   white-space: nowrap;
+}
+
+.overview-action-grid button svg {
+  width: var(--overview-action-icon-size);
+  height: var(--overview-action-icon-size);
+  justify-self: center;
 }
 
 .overview-action-grid button:hover {

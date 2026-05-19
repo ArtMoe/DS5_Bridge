@@ -1632,7 +1632,7 @@ export function App() {
         : hostAudioEnabled
           ? `Fallback: ${hostAudioStatus?.fallbackReason?.replaceAll('-', ' ') ?? 'pending'}`
           : 'Pico Local';
-  const overviewAudioOutputLabel = headsetOutputDetected ? 'Headphones' : 'Speaker';
+  const overviewAudioOutputLabel = connected ? (headsetOutputDetected ? 'Headphones' : 'Speaker') : '--';
   const overviewSpeakerVolumeValue = `${speakerVolumeValue}%`;
   const overviewFirmwareLabel = snapshot?.status?.firmwareVersion ?? '--';
   const overviewShortcutItems = [
@@ -2802,7 +2802,7 @@ export function App() {
 
               <button className="overview-card" type="button" onClick={() => selectControlTab('audio')}>
                 <div className="overview-card-title">
-                  <span className="feature-icon overview-icon"><IconBinary size={19} /></span>
+                  <span className="feature-icon overview-icon"><IconBinary size={20} /></span>
                   <h3>Encoder</h3>
                 </div>
                 <div className="overview-fields">
