@@ -6,12 +6,15 @@ import { BridgeService } from './bridge-service';
 import { SettingsStore } from './settings-store';
 import type { BridgePresetId, MuteButtonMode, MuteKeyboardBehavior, PollingRateMode, RemapButtonId, TriggerTestMode, TriggerTestTarget } from '../shared/protocol';
 import type { BridgeToast } from './bridge-service';
+import type { UiScalePercent } from '../shared/types';
 
 const APP_NAME = 'DS5 Bridge';
 const WINDOWS_APP_USER_MODEL_ID = 'io.github.sundaymoments.ds5bridge';
 const WINDOWS_TOAST_ACTIVATOR_CLSID = '{A8B3700D-4BB5-4E22-BF57-0C43B7C2FDF6}';
 const APP_MARK_PNG = path.join('assets', 'controllers', 'ds5-bridge_mark.png');
 const APP_ICON_ICO = path.join('assets', 'controllers', 'ds5-bridge_app-icon-tile.ico');
+const BASE_WINDOW_WIDTH = 1120;
+const BASE_WINDOW_HEIGHT = 630;
 let mainWindow: BrowserWindow | null = null;
 let tray: Tray | null = null;
 let bridgeService: BridgeService | null = null;
@@ -62,16 +65,58 @@ async function createTrayIcon(): Promise<Electron.NativeImage> {
   }
 }
 
-function createWindow(): BrowserWindow {
+function scaledWindowSize(uiScalePercent: UiScalePercent): { width: number; height: number } {
+  const scale = uiScalePercent / 100;
+  return {
+    width: Math.round(BASE_WINDOW_WIDTH * scale),
+    height: Math.round(BASE_WINDOW_HEIGHT * scale)
+  };
+}
+
+function applyWindowScale(window: BrowserWindow, uiScalePercent: UiScalePercent, recenter: boolean): void {
+  const { width, height } = scaledWindowSize(uiScalePercent);
+  const currentBounds = window.getBounds();
+  const display = screen.getDisplayMatching(currentBounds);
+  const workArea = display.workArea;
+  const centerX = currentBounds.x + (currentBounds.width / 2);
+  const centerY = currentBounds.y + (currentBounds.height / 2);
+  const x = recenter
+    ? Math.round(Math.max(workArea.x, Math.min(centerX - (width / 2), workArea.x + workArea.width - width)))
+    : currentBounds.x;
+  const y = recenter
+    ? Math.round(Math.max(workArea.y, Math.min(centerY - (height / 2), workArea.y + workArea.height - height)))
+    : currentBounds.y;
+
+  window.webContents.setZoomFactor(uiScalePercent / 100);
+  window.setMinimumSize(width, height);
+  window.setMaximumSize(width, height);
+  window.setBounds({ x, y, width, height }, false);
+  window.setResizable(false);
+  window.setMaximizable(false);
+  window.setFullScreenable(false);
+}
+
+function applySnapshotWindowScale(snapshot: { settings: { uiScalePercent: UiScalePercent } }): void {
+  if (mainWindow) {
+    applyWindowScale(mainWindow, snapshot.settings.uiScalePercent, true);
+  }
+}
+
+function createWindow(uiScalePercent: UiScalePercent): BrowserWindow {
+  const { width, height } = scaledWindowSize(uiScalePercent);
   const window = new BrowserWindow({
-    width: 1120,
-    height: 630,
-    minWidth: 1120,
-    minHeight: 630,
+    width,
+    height,
+    minWidth: width,
+    minHeight: height,
+    maxWidth: width,
+    maxHeight: height,
     show: false,
     title: 'DS5 Bridge',
     frame: false,
-    resizable: true,
+    resizable: false,
+    maximizable: false,
+    fullscreenable: false,
     transparent: false,
     backgroundColor: '#0b1017',
     skipTaskbar: false,
@@ -101,6 +146,9 @@ function createWindow(): BrowserWindow {
   window.on('move', () => bridgeService?.pausePollingFor(700));
 
   window.loadFile(path.join(__dirname, '..', '..', 'renderer', 'index.html'));
+  window.webContents.once('did-finish-load', () => {
+    applyWindowScale(window, uiScalePercent, false);
+  });
   return window;
 }
 
@@ -442,6 +490,11 @@ function registerIpc(service: BridgeService): void {
   ipcMain.handle('bridge:setControllerPowerSavingEnabled', (_event, value: boolean) => (
     service.setControllerPowerSavingEnabled(value)
   ));
+  ipcMain.handle('bridge:setUiScalePercent', (_event, value: UiScalePercent) => {
+    const snapshot = service.setUiScalePercent(value);
+    applySnapshotWindowScale(snapshot);
+    return snapshot;
+  });
   ipcMain.handle('bridge:setPollingRateMode', (_event, value: PollingRateMode) => (
     service.setPollingRateMode(value)
   ));
@@ -460,7 +513,11 @@ function registerIpc(service: BridgeService): void {
     service.testAdaptiveTriggers(value, target)
   ));
   ipcMain.handle('bridge:resetAdaptiveTriggers', () => service.resetAdaptiveTriggers());
-  ipcMain.handle('bridge:restoreDefaults', () => service.restoreDefaults());
+  ipcMain.handle('bridge:restoreDefaults', async () => {
+    const snapshot = await service.restoreDefaults();
+    applySnapshotWindowScale(snapshot);
+    return snapshot;
+  });
   ipcMain.handle('bridge:setButtonRemap', (_event, buttonId: RemapButtonId, targetId: RemapButtonId) => (
     service.setButtonRemap(buttonId, targetId)
   ));
@@ -483,7 +540,7 @@ function registerIpc(service: BridgeService): void {
   ipcMain.handle('bridge:getDiagnostics', () => service.getSnapshot().diagnostics);
   ipcMain.handle('window:minimize', () => mainWindow?.minimize());
   ipcMain.handle('window:toggleMaximize', () => {
-    if (!mainWindow) return;
+    if (!mainWindow || !mainWindow.isMaximizable()) return;
     if (mainWindow.isMaximized()) {
       mainWindow.unmaximize();
     } else {
@@ -508,10 +565,11 @@ app.whenReady().then(async () => {
   app.setName(APP_NAME);
   ensureWindowsNotificationShortcut();
   Menu.setApplicationMenu(null);
-  bridgeService = new BridgeService(new SettingsStore(app.getPath('userData')));
+  const settingsStore = new SettingsStore(app.getPath('userData'));
+  bridgeService = new BridgeService(settingsStore);
   registerIpc(bridgeService);
 
-  mainWindow = createWindow();
+  mainWindow = createWindow(settingsStore.get().uiScalePercent);
   mainWindow.on('maximize', sendWindowMaximizedState);
   mainWindow.on('unmaximize', sendWindowMaximizedState);
   mainWindow.once('ready-to-show', showWindowCentered);

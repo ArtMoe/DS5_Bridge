@@ -1073,6 +1073,36 @@ button {
   font-weight: 750;
 }
 
+.settings-scale-select {
+  flex: 0 0 86px;
+}
+
+.settings-scale-select .custom-select-button {
+  height: 32px;
+  padding: 0 8px 0 10px;
+  grid-template-columns: minmax(0, 1fr) 16px;
+  gap: 4px;
+  font-size: 13px;
+  font-weight: 750;
+}
+
+.settings-scale-select .custom-select-button svg {
+  width: 14px;
+  height: 14px;
+}
+
+.settings-scale-select .custom-select-menu {
+  min-width: 86px;
+}
+
+.settings-scale-select .custom-select-menu button {
+  min-height: 30px;
+  padding: 0 10px;
+  grid-template-columns: minmax(0, 1fr);
+  font-size: 13px;
+  font-weight: 750;
+}
+
 
 .settings-menu-action {
   padding: 12px 10px 4px;

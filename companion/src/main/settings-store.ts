@@ -8,10 +8,11 @@ import {
   normalizeBridgePresetId
 } from '../shared/protocol';
 import type { BridgePresetId, ButtonRemapMap, ButtonRemapProfile, RemapButtonId } from '../shared/protocol';
-import type { CompanionSettings } from '../shared/types';
+import type { CompanionSettings, UiScalePercent } from '../shared/types';
 
 export const DEFAULT_SETTINGS: CompanionSettings = {
   selectedPresetId: 'balanced',
+  uiScalePercent: 100,
   hapticsEnabled: true,
   hapticsGainPercent: 100,
   hapticsBufferLength: 64,
@@ -69,6 +70,10 @@ function normalizePollingRateMode(value: unknown): CompanionSettings['pollingRat
     default:
       return DEFAULT_SETTINGS.pollingRateMode;
   }
+}
+
+export function normalizeUiScalePercent(value: unknown): UiScalePercent {
+  return value === 75 || value === 125 || value === 150 ? value : 100;
 }
 
 function cloneRemapMap(map: ButtonRemapMap): ButtonRemapMap {
@@ -150,6 +155,7 @@ function normalizeSettings(value: Partial<CompanionSettings> | null | undefined)
 
   return {
     selectedPresetId,
+    uiScalePercent: normalizeUiScalePercent(value?.uiScalePercent),
     hapticsEnabled: typeof value?.hapticsEnabled === 'boolean'
       ? value.hapticsEnabled
       : DEFAULT_SETTINGS.hapticsEnabled,

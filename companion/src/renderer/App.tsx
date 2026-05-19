@@ -13,7 +13,6 @@ import {
   IconBulb,
   IconCheck as Check,
   IconChevronDown as ChevronDown,
-  IconCopy as Copy,
   IconCpu,
   IconDeviceFloppy as Save,
   IconDeviceGamepad2,
@@ -33,7 +32,6 @@ import {
   IconSettings as SettingsIcon,
   IconBluetooth,
   IconSparkles as Sparkles,
-  IconSquare as SquareIcon,
   IconTestPipe,
   IconTrash as Trash2,
   IconVolume,
@@ -65,7 +63,7 @@ import triangleGlyphUrl from '../../../assets/glyphs/ps5-buttons-outline-white/s
 import testSpeakerToneUrl from './assets/test-speaker-tone-silence-tail.mp3';
 import { DEFAULT_BUTTON_REMAP_PROFILE_ID, ackResultName } from '../shared/protocol';
 import type { BridgePresetId, MuteButtonMode, MuteKeyboardBehavior, PollingRateMode, RemapButtonId, TriggerTestMode, TriggerTestTarget } from '../shared/protocol';
-import type { BridgeSnapshot } from '../shared/types';
+import type { BridgeSnapshot, UiScalePercent } from '../shared/types';
 
 type ControlTab = 'overview' | 'haptics' | 'audio' | 'triggers' | 'lighting' | 'remapping' | 'system';
 type RemapButtonDefinition = {
@@ -201,6 +199,12 @@ const IDLE_DISCONNECT_TIMEOUT_OPTIONS: Array<[string, number]> = [
   ['5 min', 5],
   ['15 min', 15],
   ['30 min', 30]
+];
+const UI_SCALE_OPTIONS: Array<[string, UiScalePercent]> = [
+  ['75%', 75],
+  ['100%', 100],
+  ['125%', 125],
+  ['150%', 150]
 ];
 const REMAP_BUTTONS: Record<RemapButtonId, RemapButtonDefinition> = {
   l2: { id: 'l2', label: 'L2', glyphUrl: l2GlyphUrl },
@@ -1073,7 +1077,6 @@ export function App() {
   const [showNotificationsMenu, setShowNotificationsMenu] = useState(false);
   const [showClassicRumbleControl, setShowClassicRumbleControl] = useState(false);
   const [showMicrophoneControl, setShowMicrophoneControl] = useState(false);
-  const [windowMaximized, setWindowMaximized] = useState(false);
   const [windowDragging, setWindowDragging] = useState(false);
   const [testLocked, setTestLocked] = useState(false);
   const [speakerTestLocked, setSpeakerTestLocked] = useState(false);
@@ -1183,20 +1186,6 @@ export function App() {
     window.addEventListener('mouseup', finishWindowDrag, { once: true });
     window.addEventListener('blur', finishWindowDrag, { once: true });
   }
-
-  useEffect(() => {
-    let cancelled = false;
-    window.bridge.isWindowMaximized().then((maximized) => {
-      if (!cancelled) {
-        setWindowMaximized(maximized);
-      }
-    });
-    const unsubscribe = window.bridge.onWindowMaximizedChange(setWindowMaximized);
-    return () => {
-      cancelled = true;
-      unsubscribe();
-    };
-  }, []);
 
   useEffect(() => {
     let cancelled = false;
@@ -2688,13 +2677,6 @@ export function App() {
           <div className="window-actions">
             <button type="button" title="Minimize" onClick={() => void window.bridge.minimizeWindow()}>
               <Minus size={16} />
-            </button>
-            <button
-              type="button"
-              title={windowMaximized ? 'Restore down' : 'Maximize'}
-              onClick={() => void window.bridge.toggleMaximizeWindow()}
-            >
-              {windowMaximized ? <Copy size={13} /> : <SquareIcon size={13} />}
             </button>
             <button type="button" title="Hide to tray" onClick={() => void window.bridge.hideWindow()}>
               <X size={16} />
@@ -4506,6 +4488,22 @@ export function App() {
               >
                 <X size={16} />
               </button>
+            </div>
+            <div className="settings-menu-row">
+              <div className="settings-menu-copy">
+                <strong>UI Scale</strong>
+              </div>
+              <CustomSelect
+                value={snapshot.settings.uiScalePercent}
+                options={UI_SCALE_OPTIONS}
+                className="settings-scale-select"
+                showSelectedCheck={false}
+                ariaLabel="UI scale"
+                disabled={pendingAction !== null}
+                onChange={(value) => {
+                  void runAction('ui-scale', () => window.bridge.setUiScalePercent(value));
+                }}
+              />
             </div>
             <div className="settings-menu-row">
               <div className="settings-menu-copy">

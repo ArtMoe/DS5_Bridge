@@ -44,7 +44,8 @@ import type {
   BridgeDiagnostics,
   BridgeSnapshot,
   CompanionSettings,
-  HidDeviceSummary
+  HidDeviceSummary,
+  UiScalePercent
 } from '../shared/types';
 import {
   HostAudioEngine,
@@ -53,7 +54,7 @@ import {
   type HostAudioFramePayload
 } from './host-audio-engine';
 import { HidDiscoveryClient } from './hid-discovery-client';
-import { SettingsStore } from './settings-store';
+import { SettingsStore, normalizeUiScalePercent } from './settings-store';
 
 const POLL_INTERVAL_MS = 500;
 const HOST_AUDIO_HEARTBEAT_MS = 250;
@@ -1090,6 +1091,14 @@ export class BridgeService extends EventEmitter {
         await this.applyControllerPowerSavingSensitiveSettings(this.snapshot.settings, true);
       }
     }
+    this.emitSnapshot();
+    return this.getSnapshot();
+  }
+
+  setUiScalePercent(value: UiScalePercent): BridgeSnapshot {
+    this.snapshot.settings = this.settingsStore.update({
+      uiScalePercent: normalizeUiScalePercent(value)
+    });
     this.emitSnapshot();
     return this.getSnapshot();
   }
