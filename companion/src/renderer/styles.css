@@ -1537,6 +1537,24 @@ button {
   font-weight: 750;
 }
 
+.overview-slider-row.disabled {
+  color: #778397;
+}
+
+.overview-slider-row.disabled span,
+.overview-slider-row.disabled strong {
+  color: #778397;
+}
+
+.overview-slider-row.disabled .overview-range-ticks span {
+  background: rgba(142, 164, 194, 0.14);
+}
+
+.overview-slider-row.disabled .overview-range-ticks span.milestone,
+.overview-slider-row.disabled .overview-range-ticks span.endpoint {
+  background: rgba(142, 164, 194, 0.22);
+}
+
 .overview-range-control {
   min-width: 0;
   display: grid;

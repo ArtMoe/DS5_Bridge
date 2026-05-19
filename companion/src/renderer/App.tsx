@@ -1,6 +1,7 @@
 import { type CSSProperties, type ReactNode, useEffect, useMemo, useRef, useState } from 'react';
 import {
   type TablerIcon,
+  IconAdjustmentsSpark,
   IconActivity as Activity,
   IconAdjustmentsHorizontal as Settings2,
   IconAdjustmentsHorizontal as SlidersHorizontal,
@@ -19,6 +20,7 @@ import {
   IconDeviceGamepad3,
   IconDeviceMobileVibration as Vibrate,
   IconHeadphones as Headphones,
+  IconInfoOctagon,
   IconKeyboard as Keyboard,
   IconLayoutDashboard,
   IconMicrophone as Mic,
@@ -2838,7 +2840,7 @@ export function App() {
 
               <button className="overview-card" type="button" onClick={() => selectControlTab('system')}>
                 <div className="overview-card-title">
-                  <span className="feature-icon overview-icon"><Settings2 size={19} /></span>
+                  <span className="feature-icon overview-icon"><IconInfoOctagon size={19} /></span>
                   <h3>Device Status</h3>
                 </div>
                 <div className="overview-fields">
@@ -2860,7 +2862,6 @@ export function App() {
                   <span className="feature-icon overview-icon"><Zap size={18} /></span>
                   <div>
                     <h3>Quick Actions</h3>
-                    <p>Run common checks without leaving Overview.</p>
                   </div>
                 </div>
                 <div className="overview-action-grid">
@@ -2902,14 +2903,13 @@ export function App() {
 
               <section className="overview-control-panel overview-sliders" aria-label="Quick controls">
                 <div className="overview-panel-heading">
-                  <span className="feature-icon overview-icon"><SlidersHorizontal size={18} /></span>
+                  <span className="feature-icon overview-icon"><IconAdjustmentsSpark size={18} /></span>
                   <div>
                     <h3>Quick Controls</h3>
-                    <p>Adjust active settings directly.</p>
                   </div>
                 </div>
                 <div className="overview-slider-list">
-                  <label className="overview-slider-row">
+                  <label className={`overview-slider-row ${(!connected || !snapshot.settings.hapticsEnabled) ? 'disabled' : ''}`}>
                     <span>Haptics</span>
                     <div className="overview-range-control">
                       <input
@@ -2945,7 +2945,7 @@ export function App() {
                     </div>
                     <strong>{hapticsValue}%</strong>
                   </label>
-                  <label className="overview-slider-row">
+                  <label className={`overview-slider-row ${(!connected || !speakerVolumeSupported || !snapshot.settings.speakerEnabled || speakerVolumeCommitPending) ? 'disabled' : ''}`}>
                     <span>Speaker</span>
                     <div className="overview-range-control">
                       <input
@@ -2981,7 +2981,7 @@ export function App() {
                     </div>
                     <strong>{speakerVolumeValue}%</strong>
                   </label>
-                  <label className="overview-slider-row">
+                  <label className={`overview-slider-row ${(!connected || !hostAudioEnabled || !duplexMicEnabled || micVolumeCommitPending) ? 'disabled' : ''}`}>
                     <span>Mic</span>
                     <div className="overview-range-control">
                       <input
@@ -3017,7 +3017,7 @@ export function App() {
                     </div>
                     <strong>{micVolumeValue}%</strong>
                   </label>
-                  <label className="overview-slider-row">
+                  <label className={`overview-slider-row ${(!connected || !lightbarSupported || !snapshot.settings.lightbarEnabled || lightbarCommitPending) ? 'disabled' : ''}`}>
                     <span>Lightbar</span>
                     <div className="overview-range-control">
                       <input
