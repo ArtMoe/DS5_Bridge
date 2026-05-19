@@ -1340,15 +1340,15 @@ button {
 
 .overview-fields {
   display: grid;
-  gap: 14px;
+  gap: 12px;
   align-content: end;
 }
 
 .overview-fields > div {
-  display: flex;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) max-content;
   align-items: center;
-  justify-content: space-between;
-  gap: 16px;
+  gap: 10px;
   min-width: 0;
 }
 
@@ -1356,15 +1356,21 @@ button {
   min-width: 0;
   color: #b8c5d8;
   font-size: 13px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 .overview-fields strong {
   min-width: 0;
+  max-width: 100%;
   color: #eef4ff;
   font-size: 13px;
   font-weight: 750;
   text-align: right;
-  overflow-wrap: anywhere;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 .overview-fields .success-value {

@@ -1591,7 +1591,7 @@ export function App() {
       ? 'Waiting'
       : 'Offline';
   const overviewEncoderState = !connected
-    ? 'Unavailable'
+    ? '--'
     : hostAudioEnabled
       ? 'On'
       : 'Off';
