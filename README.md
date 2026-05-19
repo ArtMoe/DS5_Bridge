@@ -12,6 +12,10 @@
   <img src="https://img.shields.io/badge/platform-Windows%20companion%20app%20%7C%20Pico%202%20W%20firmware-287cff" alt="Platform: Windows companion app and Raspberry Pi Pico 2 W firmware">
 </p>
 
+<p align="center">
+  <a href="https://ko-fi.com/sundaymoments"><img src="assets/readme/support_me_on_kofi_blue.png" width="220" alt="Support me on Ko-fi"></a>
+</p>
+
 DS5 Bridge lets a Raspberry Pi Pico 2 W act as a wireless bridge for a real
 Sony DualSense or DualSense Edge controller. The controller pairs to the Pico
 over Bluetooth, and your PC sees a standard DualSense-compatible USB controller.
