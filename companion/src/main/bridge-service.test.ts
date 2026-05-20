@@ -9,6 +9,7 @@ import {
   COMMAND_ID,
   COMPANION_USAGE,
   COMPANION_USAGE_PAGE,
+  DEFAULT_CONTROLLER_PROFILE_ID,
   MAGIC,
   PROTOCOL_MAJOR,
   PROTOCOL_MINOR,
@@ -1037,6 +1038,67 @@ describe('BridgeService', () => {
 
     const restartedService = new BridgeService(new SettingsStore(fixture.tempDir));
     expect(restartedService.getSnapshot().settings.selectedPresetId).toBe('balanced');
+  });
+
+  it('adds the protected default controller profile without changing the selected profile', () => {
+    const fixture = createService();
+    tempDirs.push(fixture.tempDir);
+    const settingsPath = path.join(fixture.tempDir, 'settings.json');
+    mkdirSync(path.dirname(settingsPath), { recursive: true });
+    writeFileSync(settingsPath, JSON.stringify({
+      selectedControllerProfileId: 'profile-personalized',
+      controllerProfiles: [{
+        id: 'profile-personalized',
+        name: 'Personalized',
+        settings: {
+          speakerVolumePercent: 30,
+          micMuted: true
+        }
+      }]
+    }), 'utf8');
+
+    const restartedService = new BridgeService(new SettingsStore(fixture.tempDir));
+    const profiles = restartedService.getSnapshot().settings.controllerProfiles;
+    expect(profiles.find((profile) => profile.id === DEFAULT_CONTROLLER_PROFILE_ID)?.name).toBe('Default');
+    expect(profiles.find((profile) => profile.id === 'profile-personalized')?.name).toBe('Personalized');
+    expect(restartedService.getSnapshot().settings.selectedControllerProfileId).toBe('profile-personalized');
+  });
+
+  it('forks default controller settings into an auto-saved custom profile', () => {
+    const fixture = createService();
+    tempDirs.push(fixture.tempDir);
+    const store = new SettingsStore(fixture.tempDir);
+
+    const updated = store.update({ speakerVolumePercent: 30 });
+
+    expect(updated.selectedControllerProfileId).toBe('custom');
+    expect(updated.controllerProfiles.map((profile) => profile.name)).toEqual(['Default', 'Custom']);
+    expect(updated.controllerProfiles.find((profile) => profile.id === DEFAULT_CONTROLLER_PROFILE_ID)?.settings.speakerVolumePercent).toBe(100);
+    expect(updated.controllerProfiles.find((profile) => profile.id === 'custom')?.settings.speakerVolumePercent).toBe(30);
+  });
+
+  it('keeps default protected and restores it when requested', async () => {
+    const fixture = createService();
+    tempDirs.push(fixture.tempDir);
+
+    const initialProfiles = fixture.service.getSnapshot().settings.controllerProfiles;
+    expect(initialProfiles.map((profile) => profile.name)).toEqual(['Default']);
+
+    const afterBlockedDelete = await fixture.service.deleteControllerProfile(DEFAULT_CONTROLLER_PROFILE_ID);
+    expect(afterBlockedDelete.settings.controllerProfiles).toHaveLength(1);
+    expect(afterBlockedDelete.settings.controllerProfiles[0]?.name).toBe('Default');
+
+    const device = new MockHidDevice();
+    device.status = statusReport({ controllerConnected: true, firmwareFlags: 0xff });
+    hidMock.state.devicesList = [companionDeviceInfo()];
+    hidMock.state.openDevices.set('companion-path', device);
+    await poll(fixture.service);
+
+    const restored = await fixture.service.restoreDefaults();
+    expect(restored.settings.controllerProfiles[0]?.id).toBe(DEFAULT_CONTROLLER_PROFILE_ID);
+    expect(restored.settings.controllerProfiles[0]?.name).toBe('Default');
+    expect(restored.settings.controllerProfiles[0]?.settings.speakerVolumePercent).toBe(100);
+    expect(restored.settings.selectedControllerProfileId).toBe(DEFAULT_CONTROLLER_PROFILE_ID);
   });
 
   it('persists button remapping drafts and profiles without a connected device', async () => {

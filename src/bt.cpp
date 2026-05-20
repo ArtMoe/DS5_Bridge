@@ -1301,7 +1301,7 @@ static void l2cap_packet_handler(uint8_t packet_type, uint16_t channel, uint8_t 
 
                     init_feature();
                     reset_lightbar_setup();
-                    bt_set_lightbar_color(0x00, 0x6f, 0xcd, 100);
+                    bt_set_lightbar_color(0x00, 0x00, 0xff, 100);
                     bt_schedule_lightbar_restore(250);
 
                     usb_handle_controller_transport_ready();

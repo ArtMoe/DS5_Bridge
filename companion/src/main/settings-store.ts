@@ -31,7 +31,7 @@ const DEFAULT_CONTROLLER_PROFILE_SETTINGS: ControllerProfileSettings = {
   micVolumePercent: 100,
   micMuted: false,
   lightbarEnabled: true,
-  lightbarColor: '#006fcd',
+  lightbarColor: '#0000ff',
   lightbarBrightnessPercent: 100,
   lightbarOverrideEnabled: false,
   muteButtonMode: 'normal',
@@ -48,6 +48,13 @@ const DEFAULT_CONTROLLER_PROFILE_SETTINGS: ControllerProfileSettings = {
 
 const DEFAULT_CONTROLLER_PROFILE: ControllerProfile = {
   id: DEFAULT_CONTROLLER_PROFILE_ID,
+  name: 'Default',
+  settings: { ...DEFAULT_CONTROLLER_PROFILE_SETTINGS }
+};
+
+const CUSTOM_CONTROLLER_PROFILE_ID = 'custom';
+const CUSTOM_CONTROLLER_PROFILE: ControllerProfile = {
+  id: CUSTOM_CONTROLLER_PROFILE_ID,
   name: 'Custom',
   settings: { ...DEFAULT_CONTROLLER_PROFILE_SETTINGS }
 };
@@ -285,26 +292,66 @@ function normalizeControllerProfiles(value: unknown): ControllerProfile[] {
     ? value.map(normalizeControllerProfile).filter((profile): profile is ControllerProfile => profile !== null)
     : [];
   const uniqueProfiles = new Map<string, ControllerProfile>();
+  uniqueProfiles.set(DEFAULT_CONTROLLER_PROFILE_ID, {
+    ...DEFAULT_CONTROLLER_PROFILE,
+    settings: cloneControllerProfileSettings(DEFAULT_CONTROLLER_PROFILE.settings)
+  });
   for (const profile of profiles) {
+    if (profile.id === DEFAULT_CONTROLLER_PROFILE_ID) {
+      continue;
+    }
     uniqueProfiles.set(profile.id, profile);
   }
-  if (uniqueProfiles.size === 0) {
-    uniqueProfiles.set(DEFAULT_CONTROLLER_PROFILE_ID, {
-      ...DEFAULT_CONTROLLER_PROFILE,
-      settings: cloneControllerProfileSettings(DEFAULT_CONTROLLER_PROFILE.settings)
-    });
-  }
-  return Array.from(uniqueProfiles.values()).map((profile) => (
-    profile.id === DEFAULT_CONTROLLER_PROFILE_ID && profile.name === 'Default'
-      ? { ...profile, name: 'Custom' }
-      : profile
-  ));
+  return Array.from(uniqueProfiles.values());
 }
 
 function normalizeSelectedControllerProfileId(value: unknown, profiles: ControllerProfile[]): string {
   return typeof value === 'string' && profiles.some((profile) => profile.id === value)
     ? value
     : profiles[0]?.id ?? DEFAULT_CONTROLLER_PROFILE_ID;
+}
+
+function restoreDefaultControllerProfile(profiles: ControllerProfile[]): ControllerProfile[] {
+  const restoredDefault: ControllerProfile = {
+    ...DEFAULT_CONTROLLER_PROFILE,
+    settings: cloneControllerProfileSettings(DEFAULT_CONTROLLER_PROFILE.settings)
+  };
+  const defaultIndex = profiles.findIndex((profile) => profile.id === DEFAULT_CONTROLLER_PROFILE_ID);
+  if (defaultIndex === -1) {
+    return [restoredDefault, ...profiles];
+  }
+  return profiles.map((profile, index) => (
+    index === defaultIndex ? restoredDefault : profile
+  ));
+}
+
+function syncSelectedControllerProfile(settings: CompanionSettings): CompanionSettings {
+  const profileSettings = controllerProfileSettingsFrom(settings);
+  if (settings.selectedControllerProfileId === DEFAULT_CONTROLLER_PROFILE_ID) {
+    const customProfile = settings.controllerProfiles.find((profile) => profile.id === CUSTOM_CONTROLLER_PROFILE_ID);
+    const nextCustomProfile: ControllerProfile = {
+      ...(customProfile ?? CUSTOM_CONTROLLER_PROFILE),
+      settings: profileSettings
+    };
+    const controllerProfiles = customProfile
+      ? settings.controllerProfiles.map((profile) => (
+        profile.id === CUSTOM_CONTROLLER_PROFILE_ID ? nextCustomProfile : profile
+      ))
+      : [...settings.controllerProfiles, nextCustomProfile];
+    return normalizeSettings({
+      ...settings,
+      selectedControllerProfileId: CUSTOM_CONTROLLER_PROFILE_ID,
+      controllerProfiles
+    });
+  }
+  return normalizeSettings({
+    ...settings,
+    controllerProfiles: settings.controllerProfiles.map((profile) => (
+      profile.id === settings.selectedControllerProfileId
+        ? { ...profile, settings: profileSettings }
+        : profile
+    ))
+  });
 }
 
 function includesControllerProfileSettingUpdate(update: Partial<CompanionSettings>): boolean {
@@ -519,16 +566,8 @@ export class SettingsStore {
 
   update(next: Partial<CompanionSettings>): CompanionSettings {
     this.settings = normalizeSettings({ ...this.settings, ...next });
-    if (includesControllerProfileSettingUpdate(next)) {
-      const profileSettings = controllerProfileSettingsFrom(this.settings);
-      this.settings = normalizeSettings({
-        ...this.settings,
-        controllerProfiles: this.settings.controllerProfiles.map((profile) => (
-          profile.id === this.settings.selectedControllerProfileId
-            ? { ...profile, settings: profileSettings }
-            : profile
-        ))
-      });
+    if (includesControllerProfileSettingUpdate(next) && next.selectedControllerProfileId === undefined) {
+      this.settings = syncSelectedControllerProfile(this.settings);
     }
     if (this.settings.selectedPresetId === 'custom') {
       this.customSettings = { ...this.settings };
@@ -557,8 +596,13 @@ export class SettingsStore {
   }
 
   restoreDefaults(): CompanionSettings {
-    this.settings = cloneSettings(DEFAULT_SETTINGS);
-    this.customSettings = customSettingsFrom(DEFAULT_SETTINGS);
+    const controllerProfiles = restoreDefaultControllerProfile(this.settings.controllerProfiles);
+    this.settings = normalizeSettings({
+      ...DEFAULT_SETTINGS,
+      selectedControllerProfileId: DEFAULT_CONTROLLER_PROFILE_ID,
+      controllerProfiles
+    });
+    this.customSettings = customSettingsFrom(this.settings);
     this.write();
     return this.get();
   }
@@ -589,6 +633,9 @@ export class SettingsStore {
   }
 
   updateControllerProfile(profileId: string): CompanionSettings {
+    if (profileId === DEFAULT_CONTROLLER_PROFILE_ID) {
+      return this.get();
+    }
     const profileExists = this.settings.controllerProfiles.some((profile) => profile.id === profileId);
     if (!profileExists) {
       return this.get();
@@ -603,7 +650,7 @@ export class SettingsStore {
 
   renameControllerProfile(profileId: string, name: string): CompanionSettings {
     const nextName = name.trim().slice(0, 48);
-    if (nextName.length === 0) {
+    if (profileId === DEFAULT_CONTROLLER_PROFILE_ID || nextName.length === 0) {
       return this.get();
     }
     return this.update({
@@ -614,7 +661,7 @@ export class SettingsStore {
   }
 
   deleteControllerProfile(profileId: string): CompanionSettings {
-    if (this.settings.controllerProfiles.length <= 1) {
+    if (profileId === DEFAULT_CONTROLLER_PROFILE_ID) {
       return this.get();
     }
     const profiles = this.settings.controllerProfiles.filter((profile) => profile.id !== profileId);
@@ -744,6 +791,9 @@ export class SettingsStore {
 
   private nextControllerProfileName(): string {
     const names = new Set(this.settings.controllerProfiles.map((profile) => profile.name));
+    if (!names.has('Custom')) {
+      return 'Custom';
+    }
     let index = 1;
     while (names.has(`Custom Profile ${index}`)) {
       index += 1;

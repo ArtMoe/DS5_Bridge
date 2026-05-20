@@ -1397,9 +1397,10 @@ export function App() {
   ));
   const selectedControllerProfileId = selectedControllerProfile?.id ?? DEFAULT_CONTROLLER_PROFILE_ID;
   const controllerProfileOptions = useMemo<Array<[string, string]>>(() => (
-    snapshot?.settings.controllerProfiles.map((profile) => [profile.name, profile.id]) ?? [['Custom', DEFAULT_CONTROLLER_PROFILE_ID]]
+    snapshot?.settings.controllerProfiles.map((profile) => [profile.name, profile.id]) ?? [['Default', DEFAULT_CONTROLLER_PROFILE_ID]]
   ), [snapshot?.settings.controllerProfiles]);
-  const canDeleteControllerProfile = (snapshot?.settings.controllerProfiles.length ?? 0) > 1;
+  const selectedControllerProfileIsDefault = selectedControllerProfileId === DEFAULT_CONTROLLER_PROFILE_ID;
+  const canDeleteControllerProfile = !selectedControllerProfileIsDefault;
   const selectedRemapProfile = snapshot?.settings.buttonRemappingProfiles.find((profile) => (
     profile.id === snapshot.settings.selectedButtonRemappingProfileId
   ));
@@ -2527,7 +2528,7 @@ export function App() {
   }
 
   function renameControllerProfile() {
-    if (!selectedControllerProfile) {
+    if (!selectedControllerProfile || selectedControllerProfileIsDefault) {
       return;
     }
     setControllerProfileNameDraft(selectedControllerProfile.name);
@@ -2564,7 +2565,7 @@ export function App() {
       void runAction('controller-save-profile', () => window.bridge.saveControllerProfile(nextName));
       return;
     }
-    if (controllerProfileDialogMode === 'rename' && selectedControllerProfile) {
+    if (controllerProfileDialogMode === 'rename' && selectedControllerProfile && !selectedControllerProfileIsDefault) {
       const nextName = controllerProfileNameDraft.trim();
       if (!nextName || nextName === selectedControllerProfile.name) {
         closeControllerProfileDialog();
@@ -4710,7 +4711,7 @@ export function App() {
                   <div className="remapping-profile-actions">
                     <button
                       type="button"
-                      disabled={pendingAction !== null}
+                      disabled={selectedControllerProfileIsDefault || pendingAction !== null}
                       onClick={renameControllerProfile}
                     >
                       <Pencil size={15} />

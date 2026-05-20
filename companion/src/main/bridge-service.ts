@@ -104,7 +104,7 @@ const PRESET_SETTINGS: Record<Exclude<BridgePresetId, 'custom'>, Partial<Compani
     adaptiveTriggersEnabled: true,
     triggerEffectIntensityPercent: 100,
     lightbarEnabled: true,
-    lightbarColor: '#006fcd',
+    lightbarColor: '#0000ff',
     lightbarBrightnessPercent: 100,
     lightbarOverrideEnabled: false,
     muteButtonMode: 'normal',
@@ -179,7 +179,7 @@ function emptyDiagnostics(rawDevices: HidDeviceSummary[]): BridgeDiagnostics {
 }
 
 function parseHexColor(color: string): { hex: string; red: number; green: number; blue: number } {
-  const hex = /^#[0-9a-fA-F]{6}$/.test(color) ? color.toLowerCase() : '#006fcd';
+  const hex = /^#[0-9a-fA-F]{6}$/.test(color) ? color.toLowerCase() : '#0000ff';
   return {
     hex,
     red: Number.parseInt(hex.slice(1, 3), 16),
