@@ -164,12 +164,47 @@ export interface ButtonRemapProfile {
   mappings: ButtonRemapMap;
 }
 
+export interface ControllerProfileSettings {
+  hapticsEnabled: boolean;
+  hapticsGainPercent: number;
+  classicRumbleEnabled: boolean;
+  classicRumbleGainPercent: number;
+  adaptiveTriggersEnabled: boolean;
+  triggerEffectIntensityPercent: number;
+  triggerTestMode: TriggerTestMode;
+  speakerEnabled: boolean;
+  speakerVolumePercent: number;
+  micVolumePercent: number;
+  micMuted: boolean;
+  lightbarEnabled: boolean;
+  lightbarColor: string;
+  lightbarBrightnessPercent: number;
+  lightbarOverrideEnabled: boolean;
+  muteButtonMode: MuteButtonMode;
+  muteKeyboardUsage: number;
+  muteKeyboardModifiers: number;
+  muteKeyboardBehavior: MuteKeyboardBehavior;
+  sleepKeybindEnabled: boolean;
+  speakerVolumeShortcutEnabled: boolean;
+  pollingRateMode: PollingRateMode;
+  hostEncodedAudioEnabled: boolean;
+  duplexMicEnabled: boolean;
+  controllerPowerSavingEnabled: boolean;
+}
+
+export interface ControllerProfile {
+  id: string;
+  name: string;
+  settings: ControllerProfileSettings;
+}
+
 export const DEFAULT_BUTTON_REMAP_PROFILE_ID = 'default';
 export const DEFAULT_BUTTON_REMAP_PROFILE: ButtonRemapProfile = {
   id: DEFAULT_BUTTON_REMAP_PROFILE_ID,
   name: 'Default',
   mappings: Object.fromEntries(REMAP_BUTTON_IDS.map((id) => [id, id])) as ButtonRemapMap
 };
+export const DEFAULT_CONTROLLER_PROFILE_ID = 'default';
 
 export function normalizeBridgePresetId(
   value: unknown,

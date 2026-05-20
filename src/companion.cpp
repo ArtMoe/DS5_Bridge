@@ -323,7 +323,7 @@ void restore_defaults() {
     reset_button_remap();
     bt_set_mute_led(false);
     lightbar_override_enabled = false;
-    set_lightbar_color(0xff, 0xd7, 0x00, 100);
+    set_lightbar_color(0x00, 0x6f, 0xcd, 100);
     set_led_enabled(true);
     set_idle_disconnect_enabled(true);
     bt_set_idle_disconnect_timeout_minutes(15);

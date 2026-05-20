@@ -4,6 +4,7 @@ import type {
   BridgeStatusPayload,
   ButtonRemapMap,
   ButtonRemapProfile,
+  ControllerProfile,
   HostAudioStatusPayload,
   BridgePresetId,
   MuteButtonMode,
@@ -50,6 +51,8 @@ export interface CompanionSettings {
   hostEncodedAudioEnabled: boolean;
   duplexMicEnabled: boolean;
   controllerPowerSavingEnabled: boolean;
+  selectedControllerProfileId: string;
+  controllerProfiles: ControllerProfile[];
   selectedButtonRemappingProfileId: string;
   buttonRemappingProfiles: ButtonRemapProfile[];
   buttonRemappingDraft: ButtonRemapMap;

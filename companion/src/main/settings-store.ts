@@ -3,49 +3,121 @@ import path from 'node:path';
 import {
   DEFAULT_BUTTON_REMAP_PROFILE,
   DEFAULT_BUTTON_REMAP_PROFILE_ID,
+  DEFAULT_CONTROLLER_PROFILE_ID,
   REMAP_BUTTON_IDS,
   isRemapButtonId,
   normalizeBridgePresetId
 } from '../shared/protocol';
-import type { BridgePresetId, ButtonRemapMap, ButtonRemapProfile, RemapButtonId } from '../shared/protocol';
+import type {
+  BridgePresetId,
+  ButtonRemapMap,
+  ButtonRemapProfile,
+  ControllerProfile,
+  ControllerProfileSettings,
+  RemapButtonId
+} from '../shared/protocol';
 import type { CompanionSettings, UiScalePercent } from '../shared/types';
 
-export const DEFAULT_SETTINGS: CompanionSettings = {
-  selectedPresetId: 'balanced',
-  uiScalePercent: 100,
-  launchAtStartupEnabled: false,
+const DEFAULT_CONTROLLER_PROFILE_SETTINGS: ControllerProfileSettings = {
   hapticsEnabled: true,
   hapticsGainPercent: 100,
-  hapticsBufferLength: 64,
   classicRumbleEnabled: true,
   classicRumbleGainPercent: 100,
   adaptiveTriggersEnabled: true,
   triggerEffectIntensityPercent: 100,
   triggerTestMode: 'feedback',
   speakerEnabled: true,
-  speakerVolumePercent: 30,
+  speakerVolumePercent: 100,
   micVolumePercent: 100,
   micMuted: false,
   lightbarEnabled: true,
-  lightbarColor: '#ffd700',
+  lightbarColor: '#006fcd',
   lightbarBrightnessPercent: 100,
   lightbarOverrideEnabled: false,
   muteButtonMode: 'normal',
   muteKeyboardUsage: 0x68,
   muteKeyboardModifiers: 0,
   muteKeyboardBehavior: 'tap',
+  sleepKeybindEnabled: false,
+  speakerVolumeShortcutEnabled: false,
+  pollingRateMode: '1000',
+  hostEncodedAudioEnabled: true,
+  duplexMicEnabled: false,
+  controllerPowerSavingEnabled: false
+};
+
+const DEFAULT_CONTROLLER_PROFILE: ControllerProfile = {
+  id: DEFAULT_CONTROLLER_PROFILE_ID,
+  name: 'Custom',
+  settings: { ...DEFAULT_CONTROLLER_PROFILE_SETTINGS }
+};
+
+const CONTROLLER_PROFILE_SETTING_KEYS = new Set<keyof ControllerProfileSettings>([
+  'hapticsEnabled',
+  'hapticsGainPercent',
+  'classicRumbleEnabled',
+  'classicRumbleGainPercent',
+  'adaptiveTriggersEnabled',
+  'triggerEffectIntensityPercent',
+  'triggerTestMode',
+  'speakerEnabled',
+  'speakerVolumePercent',
+  'micVolumePercent',
+  'micMuted',
+  'lightbarEnabled',
+  'lightbarColor',
+  'lightbarBrightnessPercent',
+  'lightbarOverrideEnabled',
+  'muteButtonMode',
+  'muteKeyboardUsage',
+  'muteKeyboardModifiers',
+  'muteKeyboardBehavior',
+  'sleepKeybindEnabled',
+  'speakerVolumeShortcutEnabled',
+  'pollingRateMode',
+  'hostEncodedAudioEnabled',
+  'duplexMicEnabled',
+  'controllerPowerSavingEnabled'
+]);
+
+export const DEFAULT_SETTINGS: CompanionSettings = {
+  selectedPresetId: 'balanced',
+  uiScalePercent: 100,
+  launchAtStartupEnabled: false,
+  hapticsEnabled: DEFAULT_CONTROLLER_PROFILE_SETTINGS.hapticsEnabled,
+  hapticsGainPercent: DEFAULT_CONTROLLER_PROFILE_SETTINGS.hapticsGainPercent,
+  hapticsBufferLength: 64,
+  classicRumbleEnabled: DEFAULT_CONTROLLER_PROFILE_SETTINGS.classicRumbleEnabled,
+  classicRumbleGainPercent: DEFAULT_CONTROLLER_PROFILE_SETTINGS.classicRumbleGainPercent,
+  adaptiveTriggersEnabled: DEFAULT_CONTROLLER_PROFILE_SETTINGS.adaptiveTriggersEnabled,
+  triggerEffectIntensityPercent: DEFAULT_CONTROLLER_PROFILE_SETTINGS.triggerEffectIntensityPercent,
+  triggerTestMode: DEFAULT_CONTROLLER_PROFILE_SETTINGS.triggerTestMode,
+  speakerEnabled: DEFAULT_CONTROLLER_PROFILE_SETTINGS.speakerEnabled,
+  speakerVolumePercent: DEFAULT_CONTROLLER_PROFILE_SETTINGS.speakerVolumePercent,
+  micVolumePercent: DEFAULT_CONTROLLER_PROFILE_SETTINGS.micVolumePercent,
+  micMuted: DEFAULT_CONTROLLER_PROFILE_SETTINGS.micMuted,
+  lightbarEnabled: DEFAULT_CONTROLLER_PROFILE_SETTINGS.lightbarEnabled,
+  lightbarColor: DEFAULT_CONTROLLER_PROFILE_SETTINGS.lightbarColor,
+  lightbarBrightnessPercent: DEFAULT_CONTROLLER_PROFILE_SETTINGS.lightbarBrightnessPercent,
+  lightbarOverrideEnabled: DEFAULT_CONTROLLER_PROFILE_SETTINGS.lightbarOverrideEnabled,
+  muteButtonMode: DEFAULT_CONTROLLER_PROFILE_SETTINGS.muteButtonMode,
+  muteKeyboardUsage: DEFAULT_CONTROLLER_PROFILE_SETTINGS.muteKeyboardUsage,
+  muteKeyboardModifiers: DEFAULT_CONTROLLER_PROFILE_SETTINGS.muteKeyboardModifiers,
+  muteKeyboardBehavior: DEFAULT_CONTROLLER_PROFILE_SETTINGS.muteKeyboardBehavior,
   ledEnabled: true,
   idleDisconnectEnabled: true,
   idleDisconnectTimeoutMinutes: 15,
   usbSuspendDisconnectEnabled: true,
-  sleepKeybindEnabled: false,
-  speakerVolumeShortcutEnabled: false,
-  pollingRateMode: '1000',
+  sleepKeybindEnabled: DEFAULT_CONTROLLER_PROFILE_SETTINGS.sleepKeybindEnabled,
+  speakerVolumeShortcutEnabled: DEFAULT_CONTROLLER_PROFILE_SETTINGS.speakerVolumeShortcutEnabled,
+  pollingRateMode: DEFAULT_CONTROLLER_PROFILE_SETTINGS.pollingRateMode,
   notifyControllerConnection: false,
   notifyLowBattery: false,
-  hostEncodedAudioEnabled: true,
-  duplexMicEnabled: false,
-  controllerPowerSavingEnabled: false,
+  hostEncodedAudioEnabled: DEFAULT_CONTROLLER_PROFILE_SETTINGS.hostEncodedAudioEnabled,
+  duplexMicEnabled: DEFAULT_CONTROLLER_PROFILE_SETTINGS.duplexMicEnabled,
+  controllerPowerSavingEnabled: DEFAULT_CONTROLLER_PROFILE_SETTINGS.controllerPowerSavingEnabled,
+  selectedControllerProfileId: DEFAULT_CONTROLLER_PROFILE_ID,
+  controllerProfiles: [DEFAULT_CONTROLLER_PROFILE],
   selectedButtonRemappingProfileId: DEFAULT_BUTTON_REMAP_PROFILE_ID,
   buttonRemappingProfiles: [DEFAULT_BUTTON_REMAP_PROFILE],
   buttonRemappingDraft: { ...DEFAULT_BUTTON_REMAP_PROFILE.mappings }
@@ -79,6 +151,164 @@ export function normalizeUiScalePercent(value: unknown): UiScalePercent {
 
 function cloneRemapMap(map: ButtonRemapMap): ButtonRemapMap {
   return { ...map };
+}
+
+function cloneControllerProfileSettings(settings: ControllerProfileSettings): ControllerProfileSettings {
+  return { ...settings };
+}
+
+export function controllerProfileSettingsFrom(settings: CompanionSettings): ControllerProfileSettings {
+  return {
+    hapticsEnabled: settings.hapticsEnabled,
+    hapticsGainPercent: settings.hapticsGainPercent,
+    classicRumbleEnabled: settings.classicRumbleEnabled,
+    classicRumbleGainPercent: settings.classicRumbleGainPercent,
+    adaptiveTriggersEnabled: settings.adaptiveTriggersEnabled,
+    triggerEffectIntensityPercent: settings.triggerEffectIntensityPercent,
+    triggerTestMode: settings.triggerTestMode,
+    speakerEnabled: settings.speakerEnabled,
+    speakerVolumePercent: settings.speakerVolumePercent,
+    micVolumePercent: settings.micVolumePercent,
+    micMuted: settings.micMuted,
+    lightbarEnabled: settings.lightbarEnabled,
+    lightbarColor: settings.lightbarColor,
+    lightbarBrightnessPercent: settings.lightbarBrightnessPercent,
+    lightbarOverrideEnabled: settings.lightbarOverrideEnabled,
+    muteButtonMode: settings.muteButtonMode,
+    muteKeyboardUsage: settings.muteKeyboardUsage,
+    muteKeyboardModifiers: settings.muteKeyboardModifiers,
+    muteKeyboardBehavior: settings.muteKeyboardBehavior,
+    sleepKeybindEnabled: settings.sleepKeybindEnabled,
+    speakerVolumeShortcutEnabled: settings.speakerVolumeShortcutEnabled,
+    pollingRateMode: settings.pollingRateMode,
+    hostEncodedAudioEnabled: settings.hostEncodedAudioEnabled,
+    duplexMicEnabled: settings.duplexMicEnabled,
+    controllerPowerSavingEnabled: settings.controllerPowerSavingEnabled
+  };
+}
+
+function normalizeControllerProfileSettings(value: unknown): ControllerProfileSettings {
+  const candidate = value && typeof value === 'object' ? value as Partial<ControllerProfileSettings> : {};
+  return {
+    hapticsEnabled: typeof candidate.hapticsEnabled === 'boolean'
+      ? candidate.hapticsEnabled
+      : DEFAULT_CONTROLLER_PROFILE_SETTINGS.hapticsEnabled,
+    hapticsGainPercent: Number.isFinite(candidate.hapticsGainPercent)
+      ? Math.max(0, Math.min(200, Math.round(candidate.hapticsGainPercent!)))
+      : DEFAULT_CONTROLLER_PROFILE_SETTINGS.hapticsGainPercent,
+    classicRumbleEnabled: typeof candidate.classicRumbleEnabled === 'boolean'
+      ? candidate.classicRumbleEnabled
+      : DEFAULT_CONTROLLER_PROFILE_SETTINGS.classicRumbleEnabled,
+    classicRumbleGainPercent: Number.isFinite(candidate.classicRumbleGainPercent)
+      ? Math.max(0, Math.min(200, Math.round(candidate.classicRumbleGainPercent!)))
+      : DEFAULT_CONTROLLER_PROFILE_SETTINGS.classicRumbleGainPercent,
+    adaptiveTriggersEnabled: typeof candidate.adaptiveTriggersEnabled === 'boolean'
+      ? candidate.adaptiveTriggersEnabled
+      : DEFAULT_CONTROLLER_PROFILE_SETTINGS.adaptiveTriggersEnabled,
+    triggerEffectIntensityPercent: Number.isFinite(candidate.triggerEffectIntensityPercent)
+      ? Math.max(0, Math.min(100, Math.round(candidate.triggerEffectIntensityPercent!)))
+      : DEFAULT_CONTROLLER_PROFILE_SETTINGS.triggerEffectIntensityPercent,
+    triggerTestMode: candidate.triggerTestMode === 'weapon' || candidate.triggerTestMode === 'vibration' || candidate.triggerTestMode === 'feedback'
+      ? candidate.triggerTestMode
+      : DEFAULT_CONTROLLER_PROFILE_SETTINGS.triggerTestMode,
+    speakerEnabled: typeof candidate.speakerEnabled === 'boolean'
+      ? candidate.speakerEnabled
+      : DEFAULT_CONTROLLER_PROFILE_SETTINGS.speakerEnabled,
+    speakerVolumePercent: Number.isFinite(candidate.speakerVolumePercent)
+      ? Math.max(0, Math.min(100, Math.round(candidate.speakerVolumePercent!)))
+      : DEFAULT_CONTROLLER_PROFILE_SETTINGS.speakerVolumePercent,
+    micVolumePercent: Number.isFinite(candidate.micVolumePercent)
+      ? Math.max(0, Math.min(100, Math.round(candidate.micVolumePercent!)))
+      : DEFAULT_CONTROLLER_PROFILE_SETTINGS.micVolumePercent,
+    micMuted: typeof candidate.micMuted === 'boolean' ? candidate.micMuted : DEFAULT_CONTROLLER_PROFILE_SETTINGS.micMuted,
+    lightbarEnabled: typeof candidate.lightbarEnabled === 'boolean'
+      ? candidate.lightbarEnabled
+      : DEFAULT_CONTROLLER_PROFILE_SETTINGS.lightbarEnabled,
+    lightbarColor: normalizeColor(candidate.lightbarColor),
+    lightbarBrightnessPercent: Number.isFinite(candidate.lightbarBrightnessPercent)
+      ? Math.max(0, Math.min(100, Math.round(candidate.lightbarBrightnessPercent!)))
+      : DEFAULT_CONTROLLER_PROFILE_SETTINGS.lightbarBrightnessPercent,
+    lightbarOverrideEnabled: typeof candidate.lightbarOverrideEnabled === 'boolean'
+      ? candidate.lightbarOverrideEnabled
+      : DEFAULT_CONTROLLER_PROFILE_SETTINGS.lightbarOverrideEnabled,
+    muteButtonMode: candidate.muteButtonMode === 'keyboard' || candidate.muteButtonMode === 'quiet' || candidate.muteButtonMode === 'normal'
+      ? candidate.muteButtonMode
+      : DEFAULT_CONTROLLER_PROFILE_SETTINGS.muteButtonMode,
+    muteKeyboardUsage: Number.isFinite(candidate.muteKeyboardUsage)
+      ? Math.max(1, Math.min(0x73, Math.round(candidate.muteKeyboardUsage!)))
+      : DEFAULT_CONTROLLER_PROFILE_SETTINGS.muteKeyboardUsage,
+    muteKeyboardModifiers: Number.isFinite(candidate.muteKeyboardModifiers)
+      ? Math.max(0, Math.min(0x0f, Math.round(candidate.muteKeyboardModifiers!)))
+      : DEFAULT_CONTROLLER_PROFILE_SETTINGS.muteKeyboardModifiers,
+    muteKeyboardBehavior: candidate.muteKeyboardBehavior === 'hold' || candidate.muteKeyboardBehavior === 'tap'
+      ? candidate.muteKeyboardBehavior
+      : DEFAULT_CONTROLLER_PROFILE_SETTINGS.muteKeyboardBehavior,
+    sleepKeybindEnabled: typeof candidate.sleepKeybindEnabled === 'boolean'
+      ? candidate.sleepKeybindEnabled
+      : DEFAULT_CONTROLLER_PROFILE_SETTINGS.sleepKeybindEnabled,
+    speakerVolumeShortcutEnabled: typeof candidate.speakerVolumeShortcutEnabled === 'boolean'
+      ? candidate.speakerVolumeShortcutEnabled
+      : DEFAULT_CONTROLLER_PROFILE_SETTINGS.speakerVolumeShortcutEnabled,
+    pollingRateMode: normalizePollingRateMode(candidate.pollingRateMode),
+    hostEncodedAudioEnabled: typeof candidate.hostEncodedAudioEnabled === 'boolean'
+      ? candidate.hostEncodedAudioEnabled
+      : DEFAULT_CONTROLLER_PROFILE_SETTINGS.hostEncodedAudioEnabled,
+    duplexMicEnabled: typeof candidate.duplexMicEnabled === 'boolean'
+      ? candidate.duplexMicEnabled
+      : DEFAULT_CONTROLLER_PROFILE_SETTINGS.duplexMicEnabled,
+    controllerPowerSavingEnabled: typeof candidate.controllerPowerSavingEnabled === 'boolean'
+      ? candidate.controllerPowerSavingEnabled
+      : DEFAULT_CONTROLLER_PROFILE_SETTINGS.controllerPowerSavingEnabled
+  };
+}
+
+function normalizeControllerProfile(value: unknown): ControllerProfile | null {
+  if (!value || typeof value !== 'object') {
+    return null;
+  }
+  const candidate = value as Partial<ControllerProfile>;
+  if (typeof candidate.id !== 'string' || candidate.id.trim().length === 0) {
+    return null;
+  }
+  const name = typeof candidate.name === 'string' && candidate.name.trim().length > 0
+    ? candidate.name.trim().slice(0, 48)
+    : 'Custom Profile';
+  return {
+    id: candidate.id.trim().slice(0, 64),
+    name,
+    settings: normalizeControllerProfileSettings(candidate.settings)
+  };
+}
+
+function normalizeControllerProfiles(value: unknown): ControllerProfile[] {
+  const profiles = Array.isArray(value)
+    ? value.map(normalizeControllerProfile).filter((profile): profile is ControllerProfile => profile !== null)
+    : [];
+  const uniqueProfiles = new Map<string, ControllerProfile>();
+  for (const profile of profiles) {
+    uniqueProfiles.set(profile.id, profile);
+  }
+  if (uniqueProfiles.size === 0) {
+    uniqueProfiles.set(DEFAULT_CONTROLLER_PROFILE_ID, {
+      ...DEFAULT_CONTROLLER_PROFILE,
+      settings: cloneControllerProfileSettings(DEFAULT_CONTROLLER_PROFILE.settings)
+    });
+  }
+  return Array.from(uniqueProfiles.values()).map((profile) => (
+    profile.id === DEFAULT_CONTROLLER_PROFILE_ID && profile.name === 'Default'
+      ? { ...profile, name: 'Custom' }
+      : profile
+  ));
+}
+
+function normalizeSelectedControllerProfileId(value: unknown, profiles: ControllerProfile[]): string {
+  return typeof value === 'string' && profiles.some((profile) => profile.id === value)
+    ? value
+    : profiles[0]?.id ?? DEFAULT_CONTROLLER_PROFILE_ID;
+}
+
+function includesControllerProfileSettingUpdate(update: Partial<CompanionSettings>): boolean {
+  return Object.keys(update).some((key) => CONTROLLER_PROFILE_SETTING_KEYS.has(key as keyof ControllerProfileSettings));
 }
 
 function normalizeRemapMap(value: unknown): ButtonRemapMap {
@@ -134,6 +364,10 @@ function normalizeSelectedRemapProfileId(value: unknown, profiles: ButtonRemapPr
 function cloneSettings(settings: CompanionSettings): CompanionSettings {
   return {
     ...settings,
+    controllerProfiles: settings.controllerProfiles.map((profile) => ({
+      ...profile,
+      settings: cloneControllerProfileSettings(profile.settings)
+    })),
     buttonRemappingProfiles: settings.buttonRemappingProfiles.map((profile) => ({
       ...profile,
       mappings: cloneRemapMap(profile.mappings)
@@ -148,6 +382,11 @@ type PersistedSettings = Partial<CompanionSettings> & {
 
 function normalizeSettings(value: Partial<CompanionSettings> | null | undefined): CompanionSettings {
   const selectedPresetId = normalizePresetId(value?.selectedPresetId);
+  const controllerProfiles = normalizeControllerProfiles(value?.controllerProfiles);
+  const selectedControllerProfileId = normalizeSelectedControllerProfileId(
+    value?.selectedControllerProfileId,
+    controllerProfiles
+  );
   const buttonRemappingProfiles = normalizeRemapProfiles(value?.buttonRemappingProfiles);
   const selectedButtonRemappingProfileId = normalizeSelectedRemapProfileId(
     value?.selectedButtonRemappingProfileId,
@@ -250,6 +489,8 @@ function normalizeSettings(value: Partial<CompanionSettings> | null | undefined)
     controllerPowerSavingEnabled: typeof value?.controllerPowerSavingEnabled === 'boolean'
       ? value.controllerPowerSavingEnabled
       : DEFAULT_SETTINGS.controllerPowerSavingEnabled,
+    selectedControllerProfileId,
+    controllerProfiles,
     selectedButtonRemappingProfileId,
     buttonRemappingProfiles,
     buttonRemappingDraft: normalizeRemapMap(value?.buttonRemappingDraft)
@@ -278,6 +519,17 @@ export class SettingsStore {
 
   update(next: Partial<CompanionSettings>): CompanionSettings {
     this.settings = normalizeSettings({ ...this.settings, ...next });
+    if (includesControllerProfileSettingUpdate(next)) {
+      const profileSettings = controllerProfileSettingsFrom(this.settings);
+      this.settings = normalizeSettings({
+        ...this.settings,
+        controllerProfiles: this.settings.controllerProfiles.map((profile) => (
+          profile.id === this.settings.selectedControllerProfileId
+            ? { ...profile, settings: profileSettings }
+            : profile
+        ))
+      });
+    }
     if (this.settings.selectedPresetId === 'custom') {
       this.customSettings = { ...this.settings };
     }
@@ -309,6 +561,70 @@ export class SettingsStore {
     this.customSettings = customSettingsFrom(DEFAULT_SETTINGS);
     this.write();
     return this.get();
+  }
+
+  selectControllerProfile(profileId: string): CompanionSettings {
+    const profile = this.settings.controllerProfiles.find((candidate) => candidate.id === profileId)
+      ?? this.settings.controllerProfiles[0]
+      ?? DEFAULT_CONTROLLER_PROFILE;
+    return this.update({
+      selectedControllerProfileId: profile.id,
+      ...profile.settings
+    });
+  }
+
+  saveControllerProfile(name?: string): CompanionSettings {
+    const profileName = typeof name === 'string' && name.trim().length > 0
+      ? name.trim().slice(0, 48)
+      : this.nextControllerProfileName();
+    const profile: ControllerProfile = {
+      id: `profile-${Date.now().toString(36)}`,
+      name: profileName,
+      settings: controllerProfileSettingsFrom(this.settings)
+    };
+    return this.update({
+      selectedControllerProfileId: profile.id,
+      controllerProfiles: [...this.settings.controllerProfiles, profile]
+    });
+  }
+
+  updateControllerProfile(profileId: string): CompanionSettings {
+    const profileExists = this.settings.controllerProfiles.some((profile) => profile.id === profileId);
+    if (!profileExists) {
+      return this.get();
+    }
+    const settings = controllerProfileSettingsFrom(this.settings);
+    return this.update({
+      controllerProfiles: this.settings.controllerProfiles.map((profile) => (
+        profile.id === profileId ? { ...profile, settings } : profile
+      ))
+    });
+  }
+
+  renameControllerProfile(profileId: string, name: string): CompanionSettings {
+    const nextName = name.trim().slice(0, 48);
+    if (nextName.length === 0) {
+      return this.get();
+    }
+    return this.update({
+      controllerProfiles: this.settings.controllerProfiles.map((profile) => (
+        profile.id === profileId ? { ...profile, name: nextName } : profile
+      ))
+    });
+  }
+
+  deleteControllerProfile(profileId: string): CompanionSettings {
+    if (this.settings.controllerProfiles.length <= 1) {
+      return this.get();
+    }
+    const profiles = this.settings.controllerProfiles.filter((profile) => profile.id !== profileId);
+    const fallback = profiles[0]
+      ?? DEFAULT_CONTROLLER_PROFILE;
+    return this.update({
+      selectedControllerProfileId: fallback.id,
+      controllerProfiles: profiles,
+      ...fallback.settings
+    });
   }
 
   setButtonRemap(buttonId: RemapButtonId, targetId: RemapButtonId): CompanionSettings {
@@ -419,6 +735,15 @@ export class SettingsStore {
 
   private nextButtonRemappingProfileName(): string {
     const names = new Set(this.settings.buttonRemappingProfiles.map((profile) => profile.name));
+    let index = 1;
+    while (names.has(`Custom Profile ${index}`)) {
+      index += 1;
+    }
+    return `Custom Profile ${index}`;
+  }
+
+  private nextControllerProfileName(): string {
+    const names = new Set(this.settings.controllerProfiles.map((profile) => profile.name));
     let index = 1;
     while (names.has(`Custom Profile ${index}`)) {
       index += 1;

@@ -100,11 +100,11 @@ const PRESET_SETTINGS: Record<Exclude<BridgePresetId, 'custom'>, Partial<Compani
     classicRumbleEnabled: true,
     classicRumbleGainPercent: 100,
     speakerEnabled: true,
-    speakerVolumePercent: 30,
+    speakerVolumePercent: 100,
     adaptiveTriggersEnabled: true,
     triggerEffectIntensityPercent: 100,
     lightbarEnabled: true,
-    lightbarColor: '#ffd700',
+    lightbarColor: '#006fcd',
     lightbarBrightnessPercent: 100,
     lightbarOverrideEnabled: false,
     muteButtonMode: 'normal',
@@ -179,7 +179,7 @@ function emptyDiagnostics(rawDevices: HidDeviceSummary[]): BridgeDiagnostics {
 }
 
 function parseHexColor(color: string): { hex: string; red: number; green: number; blue: number } {
-  const hex = /^#[0-9a-fA-F]{6}$/.test(color) ? color.toLowerCase() : '#ffd700';
+  const hex = /^#[0-9a-fA-F]{6}$/.test(color) ? color.toLowerCase() : '#006fcd';
   return {
     hex,
     red: Number.parseInt(hex.slice(1, 3), 16),
@@ -1195,6 +1195,42 @@ export class BridgeService extends EventEmitter {
       normalizedPresetId,
       normalizedPresetId === 'custom' ? undefined : PRESET_SETTINGS[normalizedPresetId]
     );
+    if (this.snapshot.state === 'connected') {
+      await this.applyCurrentSettings(this.snapshot.settings, false);
+    }
+    this.emitSnapshot();
+    return this.getSnapshot();
+  }
+
+  async selectControllerProfile(profileId: string): Promise<BridgeSnapshot> {
+    this.snapshot.settings = this.settingsStore.selectControllerProfile(profileId);
+    if (this.snapshot.state === 'connected') {
+      await this.applyCurrentSettings(this.snapshot.settings, false);
+    }
+    this.emitSnapshot();
+    return this.getSnapshot();
+  }
+
+  async saveControllerProfile(name?: string): Promise<BridgeSnapshot> {
+    this.snapshot.settings = this.settingsStore.saveControllerProfile(name);
+    this.emitSnapshot();
+    return this.getSnapshot();
+  }
+
+  async updateControllerProfile(profileId: string): Promise<BridgeSnapshot> {
+    this.snapshot.settings = this.settingsStore.updateControllerProfile(profileId);
+    this.emitSnapshot();
+    return this.getSnapshot();
+  }
+
+  async renameControllerProfile(profileId: string, name: string): Promise<BridgeSnapshot> {
+    this.snapshot.settings = this.settingsStore.renameControllerProfile(profileId, name);
+    this.emitSnapshot();
+    return this.getSnapshot();
+  }
+
+  async deleteControllerProfile(profileId: string): Promise<BridgeSnapshot> {
+    this.snapshot.settings = this.settingsStore.deleteControllerProfile(profileId);
     if (this.snapshot.state === 'connected') {
       await this.applyCurrentSettings(this.snapshot.settings, false);
     }

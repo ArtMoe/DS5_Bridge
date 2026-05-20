@@ -465,6 +465,19 @@ function registerIpc(service: BridgeService): void {
   ipcMain.handle('bridge:getStatus', () => service.getSnapshot());
   ipcMain.handle('bridge:listDevices', () => service.listDevices());
   ipcMain.handle('bridge:applyPreset', (_event, value: BridgePresetId) => service.applyPreset(value));
+  ipcMain.handle('bridge:selectControllerProfile', (_event, profileId: string) => (
+    service.selectControllerProfile(profileId)
+  ));
+  ipcMain.handle('bridge:saveControllerProfile', (_event, name?: string) => service.saveControllerProfile(name));
+  ipcMain.handle('bridge:updateControllerProfile', (_event, profileId: string) => (
+    service.updateControllerProfile(profileId)
+  ));
+  ipcMain.handle('bridge:renameControllerProfile', (_event, profileId: string, name: string) => (
+    service.renameControllerProfile(profileId, name)
+  ));
+  ipcMain.handle('bridge:deleteControllerProfile', (_event, profileId: string) => (
+    service.deleteControllerProfile(profileId)
+  ));
   ipcMain.handle('bridge:setHapticsGain', (_event, value: number) => service.setHapticsGain(value));
   ipcMain.handle('bridge:setHapticsEnabled', (_event, value: boolean) => service.setHapticsEnabled(value));
   ipcMain.handle('bridge:setHapticsBufferLength', (_event, value: number) => service.setHapticsBufferLength(value));

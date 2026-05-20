@@ -772,7 +772,7 @@ describe('BridgeService', () => {
   });
 
   it('applies speaker volume shortcut input through the normal volume command path', async () => {
-    const service = serviceFixture();
+    const service = serviceFixture({ speakerVolumePercent: 30 });
     const device = new MockHidDevice();
     device.status = statusReport({
       controllerConnected: false,

@@ -6,6 +6,21 @@ const api = {
   getStatus: (): Promise<BridgeSnapshot> => ipcRenderer.invoke('bridge:getStatus'),
   listDevices: () => ipcRenderer.invoke('bridge:listDevices'),
   applyPreset: (value: BridgePresetId): Promise<BridgeSnapshot> => ipcRenderer.invoke('bridge:applyPreset', value),
+  selectControllerProfile: (profileId: string): Promise<BridgeSnapshot> => (
+    ipcRenderer.invoke('bridge:selectControllerProfile', profileId)
+  ),
+  saveControllerProfile: (name?: string): Promise<BridgeSnapshot> => (
+    ipcRenderer.invoke('bridge:saveControllerProfile', name)
+  ),
+  updateControllerProfile: (profileId: string): Promise<BridgeSnapshot> => (
+    ipcRenderer.invoke('bridge:updateControllerProfile', profileId)
+  ),
+  renameControllerProfile: (profileId: string, name: string): Promise<BridgeSnapshot> => (
+    ipcRenderer.invoke('bridge:renameControllerProfile', profileId, name)
+  ),
+  deleteControllerProfile: (profileId: string): Promise<BridgeSnapshot> => (
+    ipcRenderer.invoke('bridge:deleteControllerProfile', profileId)
+  ),
   setHapticsGain: (value: number): Promise<BridgeSnapshot> => ipcRenderer.invoke('bridge:setHapticsGain', value),
   setHapticsEnabled: (value: boolean): Promise<BridgeSnapshot> => ipcRenderer.invoke('bridge:setHapticsEnabled', value),
   setHapticsBufferLength: (value: number): Promise<BridgeSnapshot> => (

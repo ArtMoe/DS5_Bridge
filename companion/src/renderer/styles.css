@@ -1382,7 +1382,8 @@ button {
 .haptics-page,
 .audio-page,
 .triggers-page,
-.lighting-page {
+.lighting-page,
+.system-page {
   height: 100%;
   min-height: 0;
   gap: 12px;
@@ -2101,19 +2102,15 @@ button.overview-shortcut-chip {
   height: auto;
 }
 
-.system-page .system-card {
-  min-height: var(--feature-card-height);
-}
-
 .system-page .feature-card-grid {
   align-items: stretch;
-  height: var(--feature-card-height);
+  height: auto;
 }
 
 .system-page .system-card {
   align-self: stretch;
   min-height: 0;
-  height: var(--feature-card-height);
+  height: auto;
 }
 
 .feature-card-title {
@@ -2297,6 +2294,109 @@ button.feature-icon {
   opacity: 0.45;
   border-color: rgba(142, 164, 194, 0.14);
   background: rgba(255, 255, 255, 0.02);
+}
+
+.system-profile-panel {
+  align-content: start;
+  gap: 10px;
+  padding: 10px 14px 12px;
+}
+
+.system-profile-strip {
+  min-height: 38px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 14px;
+  margin: -10px -14px 2px;
+  padding: 0 14px;
+  border-bottom: 1px solid rgba(142, 164, 194, 0.16);
+  border-radius: var(--card-radius) var(--card-radius) 0 0;
+  background: #020812;
+}
+
+.system-profile-save-status {
+  min-width: 0;
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  color: #64e47a;
+  font-size: 11px;
+  font-weight: 500;
+  letter-spacing: 0;
+  white-space: nowrap;
+}
+
+.system-profile-save-status svg {
+  flex: 0 0 auto;
+  stroke-width: 2.5;
+}
+
+.system-profile-summary {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 12px;
+}
+
+.system-profile-summary-group {
+  min-width: 0;
+  display: grid;
+  gap: 8px;
+}
+
+.system-profile-summary-heading {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  color: #258cff;
+}
+
+.system-profile-summary-heading h3 {
+  margin: 0;
+  color: #eef4ff;
+  font-size: 12px;
+  line-height: 1.1;
+}
+
+.system-profile-summary dl {
+  min-width: 0;
+  margin: 0;
+  display: grid;
+  gap: 5px;
+}
+
+.system-profile-summary dl > div {
+  min-width: 0;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) max-content;
+  align-items: center;
+  gap: 8px;
+}
+
+.system-profile-summary dt,
+.system-profile-summary dd {
+  min-width: 0;
+  margin: 0;
+  font-size: 11px;
+  line-height: 1.2;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.system-profile-summary dt {
+  color: #aab8cc;
+}
+
+.system-profile-summary dd {
+  max-width: 108px;
+  color: #eef4ff;
+  font-weight: 750;
+  text-align: right;
+}
+
+.system-profile-summary dd.eco-limited {
+  color: #64e47a;
 }
 
 .remapping-layout {

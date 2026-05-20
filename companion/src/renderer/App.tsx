@@ -35,6 +35,7 @@ import {
   IconBluetooth,
   IconSparkleHighlight,
   IconSparkles as Sparkles,
+  IconStethoscope,
   IconTestPipe,
   IconTrash as Trash2,
   IconVolume,
@@ -64,8 +65,16 @@ import rightStickClickGlyphUrl from '../../../assets/glyphs/ps5-buttons-outline-
 import squareGlyphUrl from '../../../assets/glyphs/ps5-buttons-outline-white/svg/Square.svg';
 import triangleGlyphUrl from '../../../assets/glyphs/ps5-buttons-outline-white/svg/Triangle.svg';
 import testSpeakerToneUrl from './assets/test-speaker-tone-silence-tail.mp3';
-import { DEFAULT_BUTTON_REMAP_PROFILE_ID, ackResultName } from '../shared/protocol';
-import type { BridgePresetId, MuteButtonMode, MuteKeyboardBehavior, PollingRateMode, RemapButtonId, TriggerTestMode, TriggerTestTarget } from '../shared/protocol';
+import { DEFAULT_BUTTON_REMAP_PROFILE_ID, DEFAULT_CONTROLLER_PROFILE_ID, ackResultName } from '../shared/protocol';
+import type {
+  ControllerProfileSettings,
+  MuteButtonMode,
+  MuteKeyboardBehavior,
+  PollingRateMode,
+  RemapButtonId,
+  TriggerTestMode,
+  TriggerTestTarget
+} from '../shared/protocol';
 import type { BridgeSnapshot, UiScalePercent } from '../shared/types';
 
 type ControlTab = 'overview' | 'haptics' | 'audio' | 'triggers' | 'lighting' | 'remapping' | 'system';
@@ -75,6 +84,7 @@ type RemapButtonDefinition = {
   glyphUrl: string;
 };
 type RemapProfileDialogMode = 'save' | 'rename' | 'delete';
+type ControllerProfileDialogMode = 'save' | 'rename' | 'delete';
 type RemapCalloutLayout = {
   top: number;
   points: string;
@@ -178,15 +188,6 @@ const TRIGGER_TEST_MODE_OPTIONS: Array<[string, TriggerTestMode]> = [
   ['Feedback', 'feedback'],
   ['Weapon', 'weapon'],
   ['Vibration', 'vibration']
-];
-const BRIDGE_PRESET_OPTIONS: Array<[string, BridgePresetId]> = [
-  ['Custom', 'custom'],
-  ['Balanced', 'balanced'],
-  ['Quiet', 'quiet'],
-  ['No Speaker', 'no-speaker'],
-  ['No Haptics', 'no-haptics'],
-  ['No Triggers', 'no-triggers'],
-  ['Lights Off', 'lights-off']
 ];
 const MUTE_BUTTON_MODE_OPTIONS: Array<[string, MuteButtonMode]> = [
   ['Normal', 'normal'],
@@ -488,6 +489,141 @@ function FeatureTipsPanel({
         ))}
       </div>
     </section>
+  );
+}
+
+function controllerProfileSettingsFromSnapshot(snapshot: BridgeSnapshot): ControllerProfileSettings {
+  return {
+    hapticsEnabled: snapshot.settings.hapticsEnabled,
+    hapticsGainPercent: snapshot.settings.hapticsGainPercent,
+    classicRumbleEnabled: snapshot.settings.classicRumbleEnabled,
+    classicRumbleGainPercent: snapshot.settings.classicRumbleGainPercent,
+    adaptiveTriggersEnabled: snapshot.settings.adaptiveTriggersEnabled,
+    triggerEffectIntensityPercent: snapshot.settings.triggerEffectIntensityPercent,
+    triggerTestMode: snapshot.settings.triggerTestMode,
+    speakerEnabled: snapshot.settings.speakerEnabled,
+    speakerVolumePercent: snapshot.settings.speakerVolumePercent,
+    micVolumePercent: snapshot.settings.micVolumePercent,
+    micMuted: snapshot.settings.micMuted,
+    lightbarEnabled: snapshot.settings.lightbarEnabled,
+    lightbarColor: snapshot.settings.lightbarColor,
+    lightbarBrightnessPercent: snapshot.settings.lightbarBrightnessPercent,
+    lightbarOverrideEnabled: snapshot.settings.lightbarOverrideEnabled,
+    muteButtonMode: snapshot.settings.muteButtonMode,
+    muteKeyboardUsage: snapshot.settings.muteKeyboardUsage,
+    muteKeyboardModifiers: snapshot.settings.muteKeyboardModifiers,
+    muteKeyboardBehavior: snapshot.settings.muteKeyboardBehavior,
+    sleepKeybindEnabled: snapshot.settings.sleepKeybindEnabled,
+    speakerVolumeShortcutEnabled: snapshot.settings.speakerVolumeShortcutEnabled,
+    pollingRateMode: snapshot.settings.pollingRateMode,
+    hostEncodedAudioEnabled: snapshot.settings.hostEncodedAudioEnabled,
+    duplexMicEnabled: snapshot.settings.duplexMicEnabled,
+    controllerPowerSavingEnabled: snapshot.settings.controllerPowerSavingEnabled
+  };
+}
+
+function optionLabel<T extends string | number>(options: Array<[string, T]>, value: T): string {
+  return options.find(([, optionValue]) => optionValue === value)?.[0] ?? String(value);
+}
+
+function enabledLabel(enabled: boolean): string {
+  return enabled ? 'On' : 'Off';
+}
+
+function percentLabel(value: number): string {
+  return `${value}%`;
+}
+
+function lightbarColorLabel(color: string): string {
+  return LIGHTBAR_COLOR_NAMES[color.toLowerCase()] ?? color.toUpperCase();
+}
+
+function muteButtonSummary(settings: ControllerProfileSettings): string {
+  if (settings.muteButtonMode === 'normal') {
+    return 'Normal';
+  }
+  if (settings.muteButtonMode === 'quiet') {
+    return 'Quiet Toggle';
+  }
+  const key = optionLabel(MUTE_KEY_OPTIONS, settings.muteKeyboardUsage);
+  const modifiers = MUTE_MODIFIER_OPTIONS
+    .filter(([, bit]) => (settings.muteKeyboardModifiers & bit) !== 0)
+    .map(([label]) => label);
+  return [...modifiers, key].join(' + ');
+}
+
+function SystemProfileSummary({
+  settings,
+  powerSavingActive
+}: {
+  settings: ControllerProfileSettings;
+  powerSavingActive: boolean;
+}) {
+  const ecoValueClass = (active: boolean) => (active ? ' eco-limited' : '');
+  const effectiveEcoPercent = (value: number) => percentLabel(Math.min(value, CONTROLLER_POWER_SAVING_CAP_PERCENT));
+  const hapticsEcoLimited = powerSavingActive
+    && settings.hapticsEnabled
+    && settings.hapticsGainPercent > 0;
+  const rumbleEcoLimited = powerSavingActive
+    && settings.classicRumbleEnabled
+    && settings.classicRumbleGainPercent > 0;
+  const triggersEcoLimited = powerSavingActive
+    && settings.adaptiveTriggersEnabled
+    && settings.triggerEffectIntensityPercent > 0;
+  const lightbarEcoLimited = powerSavingActive
+    && settings.lightbarEnabled
+    && settings.lightbarBrightnessPercent > 0;
+
+  return (
+    <div className="system-profile-summary" aria-label="Current profile settings">
+      <div className="system-profile-summary-group">
+        <div className="system-profile-summary-heading">
+          <Volume2 size={15} />
+          <h3>Audio</h3>
+        </div>
+        <dl>
+          <div><dt>Speaker</dt><dd>{settings.speakerEnabled ? percentLabel(settings.speakerVolumePercent) : 'Off'}</dd></div>
+          <div><dt>Mic</dt><dd>{settings.micMuted ? 'Muted' : percentLabel(settings.micVolumePercent)}</dd></div>
+          <div><dt>Host Encoding</dt><dd>{enabledLabel(settings.hostEncodedAudioEnabled)}</dd></div>
+        </dl>
+      </div>
+
+      <div className="system-profile-summary-group">
+        <div className="system-profile-summary-heading">
+          <Sparkles size={15} />
+          <h3>Feel</h3>
+        </div>
+        <dl>
+          <div><dt>Haptics</dt><dd className={ecoValueClass(hapticsEcoLimited)}>{settings.hapticsEnabled ? (hapticsEcoLimited ? effectiveEcoPercent(settings.hapticsGainPercent) : percentLabel(settings.hapticsGainPercent)) : 'Off'}</dd></div>
+          <div><dt>Rumble</dt><dd className={ecoValueClass(rumbleEcoLimited)}>{settings.classicRumbleEnabled ? (rumbleEcoLimited ? effectiveEcoPercent(settings.classicRumbleGainPercent) : percentLabel(settings.classicRumbleGainPercent)) : 'Off'}</dd></div>
+          <div><dt>Triggers</dt><dd className={ecoValueClass(triggersEcoLimited)}>{settings.adaptiveTriggersEnabled ? (triggersEcoLimited ? effectiveEcoPercent(settings.triggerEffectIntensityPercent) : percentLabel(settings.triggerEffectIntensityPercent)) : 'Off'}</dd></div>
+        </dl>
+      </div>
+
+      <div className="system-profile-summary-group">
+        <div className="system-profile-summary-heading">
+          <IconBulb size={15} />
+          <h3>Lighting</h3>
+        </div>
+        <dl>
+          <div><dt>Lightbar</dt><dd className={ecoValueClass(lightbarEcoLimited)}>{settings.lightbarEnabled ? (lightbarEcoLimited ? effectiveEcoPercent(settings.lightbarBrightnessPercent) : percentLabel(settings.lightbarBrightnessPercent)) : 'Off'}</dd></div>
+          <div><dt>Color</dt><dd>{lightbarColorLabel(settings.lightbarColor)}</dd></div>
+          <div><dt>Override</dt><dd>{enabledLabel(settings.lightbarOverrideEnabled)}</dd></div>
+        </dl>
+      </div>
+
+      <div className="system-profile-summary-group">
+        <div className="system-profile-summary-heading">
+          <Settings2 size={15} />
+          <h3>System</h3>
+        </div>
+        <dl>
+          <div><dt>Mute</dt><dd>{muteButtonSummary(settings)}</dd></div>
+          <div><dt>Polling</dt><dd>{optionLabel(POLLING_RATE_OPTIONS, settings.pollingRateMode)}</dd></div>
+          <div><dt>Power Save</dt><dd>{enabledLabel(settings.controllerPowerSavingEnabled)}</dd></div>
+        </dl>
+      </div>
+    </div>
   );
 }
 
@@ -1202,6 +1338,8 @@ export function App() {
   const [remapDraft, setRemapDraft] = useState<Record<RemapButtonId, RemapButtonId>>(DEFAULT_REMAP_DRAFT);
   const [remapProfileDialogMode, setRemapProfileDialogMode] = useState<RemapProfileDialogMode | null>(null);
   const [remapProfileNameDraft, setRemapProfileNameDraft] = useState('');
+  const [controllerProfileDialogMode, setControllerProfileDialogMode] = useState<ControllerProfileDialogMode | null>(null);
+  const [controllerProfileNameDraft, setControllerProfileNameDraft] = useState('');
   const [remapCalloutLayout, setRemapCalloutLayout] = useState<Record<RemapButtonId, RemapCalloutLayout> | null>(null);
   const [hoveredRemapButton, setHoveredRemapButton] = useState<RemapButtonId | null>(null);
   const [pendingAction, setPendingAction] = useState<string | null>(null);
@@ -1254,6 +1392,14 @@ export function App() {
   const remapModifiedCount = useMemo(() => (
     REMAP_TARGET_OPTIONS.filter(([, buttonId]) => remapDraft[buttonId] !== buttonId).length
   ), [remapDraft]);
+  const selectedControllerProfile = snapshot?.settings.controllerProfiles.find((profile) => (
+    profile.id === snapshot.settings.selectedControllerProfileId
+  ));
+  const selectedControllerProfileId = selectedControllerProfile?.id ?? DEFAULT_CONTROLLER_PROFILE_ID;
+  const controllerProfileOptions = useMemo<Array<[string, string]>>(() => (
+    snapshot?.settings.controllerProfiles.map((profile) => [profile.name, profile.id]) ?? [['Custom', DEFAULT_CONTROLLER_PROFILE_ID]]
+  ), [snapshot?.settings.controllerProfiles]);
+  const canDeleteControllerProfile = (snapshot?.settings.controllerProfiles.length ?? 0) > 1;
   const selectedRemapProfile = snapshot?.settings.buttonRemappingProfiles.find((profile) => (
     profile.id === snapshot.settings.selectedButtonRemappingProfileId
   ));
@@ -2376,8 +2522,66 @@ export function App() {
     void runAction('triggers-reset', () => window.bridge.resetAdaptiveTriggers());
   }
 
-  function applyPreset(presetId: BridgePresetId) {
-    void runAction('preset', () => window.bridge.applyPreset(presetId));
+  function selectControllerProfile(profileId: string) {
+    void runAction('controller-profile', () => window.bridge.selectControllerProfile(profileId));
+  }
+
+  function renameControllerProfile() {
+    if (!selectedControllerProfile) {
+      return;
+    }
+    setControllerProfileNameDraft(selectedControllerProfile.name);
+    setControllerProfileDialogMode('rename');
+  }
+
+  function saveControllerProfile() {
+    setControllerProfileNameDraft(`Custom Profile ${snapshot?.settings.controllerProfiles.length ?? 1}`);
+    setControllerProfileDialogMode('save');
+  }
+
+  function deleteControllerProfile() {
+    if (!selectedControllerProfile || !canDeleteControllerProfile) {
+      return;
+    }
+    setControllerProfileDialogMode('delete');
+  }
+
+  function closeControllerProfileDialog() {
+    setControllerProfileDialogMode(null);
+    setControllerProfileNameDraft('');
+  }
+
+  function submitControllerProfileDialog() {
+    if (!selectedControllerProfile && controllerProfileDialogMode !== 'save') {
+      return;
+    }
+    if (controllerProfileDialogMode === 'save') {
+      const nextName = controllerProfileNameDraft.trim();
+      if (!nextName) {
+        return;
+      }
+      closeControllerProfileDialog();
+      void runAction('controller-save-profile', () => window.bridge.saveControllerProfile(nextName));
+      return;
+    }
+    if (controllerProfileDialogMode === 'rename' && selectedControllerProfile) {
+      const nextName = controllerProfileNameDraft.trim();
+      if (!nextName || nextName === selectedControllerProfile.name) {
+        closeControllerProfileDialog();
+        return;
+      }
+      closeControllerProfileDialog();
+      void runAction('controller-rename-profile', () => (
+        window.bridge.renameControllerProfile(selectedControllerProfile.id, nextName)
+      ));
+      return;
+    }
+    if (controllerProfileDialogMode === 'delete' && selectedControllerProfile && canDeleteControllerProfile) {
+      closeControllerProfileDialog();
+      void runAction('controller-delete-profile', () => (
+        window.bridge.deleteControllerProfile(selectedControllerProfile.id)
+      ));
+    }
   }
 
   function selectButtonRemappingProfile(profileId: string) {
@@ -4298,11 +4502,11 @@ export function App() {
                 </div>
                 <div className="profile-controls">
                   <CustomSelect
-                    value={snapshot.settings.selectedPresetId}
+                    value={selectedControllerProfileId}
                     disabled={!connected || pendingAction !== null}
-                    options={BRIDGE_PRESET_OPTIONS}
-                    ariaLabel="Bridge profile"
-                    onChange={applyPreset}
+                    options={controllerProfileOptions}
+                    ariaLabel="System profile"
+                    onChange={selectControllerProfile}
                   />
                   <button
                     className="heading-action"
@@ -4391,7 +4595,7 @@ export function App() {
                 <section className={`system-card device-card ${showDiagnostics ? 'expanded' : ''}`}>
                   <div className="feature-card-title system-card-heading">
                     <span className="feature-icon system-icon icon-wide">
-                      {showDiagnostics ? <SlidersHorizontal size={20} /> : <Settings2 size={20} />}
+                      {showDiagnostics ? <IconStethoscope size={20} /> : <Settings2 size={20} />}
                     </span>
                     <div className="title-copy">
                       <h3>{showDiagnostics ? 'Diagnostics' : 'Device'}</h3>
@@ -4497,6 +4701,44 @@ export function App() {
                   )}
                 </section>
               </div>
+              <section className="feature-help-panel system-profile-panel" aria-label="System profiles and tips">
+                <div className="system-profile-strip">
+                  <div className="system-profile-save-status">
+                    <Check size={16} />
+                    <span>Changes Are Automatically Saved</span>
+                  </div>
+                  <div className="remapping-profile-actions">
+                    <button
+                      type="button"
+                      disabled={pendingAction !== null}
+                      onClick={renameControllerProfile}
+                    >
+                      <Pencil size={15} />
+                      Rename Profile
+                    </button>
+                    <button
+                      type="button"
+                      disabled={pendingAction !== null}
+                      onClick={saveControllerProfile}
+                    >
+                      <Save size={15} />
+                      Save New Profile
+                    </button>
+                    <button
+                      type="button"
+                      disabled={!canDeleteControllerProfile || pendingAction !== null}
+                      onClick={deleteControllerProfile}
+                    >
+                      <Trash2 size={15} />
+                      Delete Profile
+                    </button>
+                  </div>
+                </div>
+                <SystemProfileSummary
+                  settings={controllerProfileSettingsFromSnapshot(snapshot)}
+                  powerSavingActive={controllerPowerSavingActive}
+                />
+              </section>
           </div>
         </div>
       </section>
@@ -4614,6 +4856,74 @@ export function App() {
                 disabled={pendingAction !== null || (remapProfileDialogMode !== 'delete' && remapProfileNameDraft.trim().length === 0)}
               >
                 {remapProfileDialogMode === 'delete' ? 'Delete' : 'Save'}
+              </button>
+            </div>
+          </form>
+        </div>
+      )}
+
+      {controllerProfileDialogMode && (
+        <div
+          className="modal-backdrop"
+          role="presentation"
+          onMouseDown={closeControllerProfileDialog}
+        >
+          <form
+            className="settings-menu bridge-settings-modal remap-profile-modal"
+            role="dialog"
+            aria-modal="true"
+            aria-label="System profile"
+            onMouseDown={(event) => event.stopPropagation()}
+            onSubmit={(event) => {
+              event.preventDefault();
+              submitControllerProfileDialog();
+            }}
+          >
+            <div className="settings-menu-heading bridge-settings-modal-heading">
+              <div className="modal-heading-copy">
+                {controllerProfileDialogMode === 'delete' ? <Trash2 size={16} /> : <Save size={16} />}
+                <span>
+                  {controllerProfileDialogMode === 'save'
+                    ? 'Save New Profile'
+                    : controllerProfileDialogMode === 'rename'
+                      ? 'Rename Profile'
+                      : 'Delete Profile'}
+                </span>
+              </div>
+              <button
+                className="modal-close-button"
+                type="button"
+                aria-label="Close system profile dialog"
+                onClick={closeControllerProfileDialog}
+              >
+                <X size={16} />
+              </button>
+            </div>
+            {controllerProfileDialogMode === 'delete' ? (
+              <p className="remap-profile-dialog-copy">
+                Delete {selectedControllerProfile?.name ?? 'this profile'}?
+              </p>
+            ) : (
+              <label className="remap-profile-name-field">
+                <span>Profile Name</span>
+                <input
+                  autoFocus
+                  value={controllerProfileNameDraft}
+                  maxLength={48}
+                  onChange={(event) => setControllerProfileNameDraft(event.target.value)}
+                />
+              </label>
+            )}
+            <div className="remap-profile-dialog-actions">
+              <button type="button" className="secondary-action" onClick={closeControllerProfileDialog}>
+                Cancel
+              </button>
+              <button
+                type="submit"
+                className={`primary-action ${controllerProfileDialogMode === 'delete' ? 'danger' : ''}`}
+                disabled={pendingAction !== null || (controllerProfileDialogMode !== 'delete' && controllerProfileNameDraft.trim().length === 0)}
+              >
+                {controllerProfileDialogMode === 'delete' ? 'Delete' : 'Save'}
               </button>
             </div>
           </form>
