@@ -2,6 +2,7 @@ import { app, BrowserWindow, Menu, Notification, Tray, ipcMain, nativeImage, scr
 import { spawnSync } from 'node:child_process';
 import fs from 'node:fs';
 import path from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { BridgeService } from './bridge-service';
 import { SettingsStore } from './settings-store';
 import type { BridgePresetId, MuteButtonMode, MuteKeyboardBehavior, PollingRateMode, RemapButtonId, TriggerTestMode, TriggerTestTarget } from '../shared/protocol';
@@ -130,8 +131,26 @@ function applyLaunchAtStartup(enabled: boolean): void {
   }
 }
 
+function normalizeFilePath(value: string): string {
+  return path.normalize(value).toLowerCase();
+}
+
+function isAppFileUrl(url: string, appIndexPath: string): boolean {
+  try {
+    return normalizeFilePath(fileURLToPath(url)) === normalizeFilePath(appIndexPath);
+  } catch {
+    return false;
+  }
+}
+
+function isAllowedExternalUrl(url: string): boolean {
+  return /^https:\/\/ko-fi\.com\/sundaymoments\/?$/i.test(url)
+    || /^https:\/\/github\.com\/SundayMoments\/?$/i.test(url);
+}
+
 function createWindow(uiScalePercent: UiScalePercent): BrowserWindow {
   const { width, height } = scaledWindowSize(uiScalePercent);
+  const rendererIndexPath = path.join(__dirname, '..', '..', 'renderer', 'index.html');
   const window = new BrowserWindow({
     width,
     height,
@@ -163,6 +182,18 @@ function createWindow(uiScalePercent: UiScalePercent): BrowserWindow {
       && (permission === 'media' || permission === 'speaker-selection')
     );
   });
+  window.webContents.setWindowOpenHandler(({ url }) => {
+    if (isAllowedExternalUrl(url)) {
+      void shell.openExternal(url);
+    }
+    return { action: 'deny' };
+  });
+  window.webContents.on('will-navigate', (event, url) => {
+    if (isAppFileUrl(url, rendererIndexPath)) {
+      return;
+    }
+    event.preventDefault();
+  });
 
   window.on('close', (event) => {
     if (!isQuitting) {
@@ -173,7 +204,7 @@ function createWindow(uiScalePercent: UiScalePercent): BrowserWindow {
   window.on('will-move', () => bridgeService?.pausePollingFor(1200));
   window.on('move', () => bridgeService?.pausePollingFor(700));
 
-  window.loadFile(path.join(__dirname, '..', '..', 'renderer', 'index.html'));
+  window.loadFile(rendererIndexPath);
   window.webContents.once('did-finish-load', () => {
     applyWindowScale(window, uiScalePercent, false);
   });
@@ -597,10 +628,7 @@ function registerIpc(service: BridgeService): void {
   ipcMain.handle('window:isMaximized', () => Boolean(mainWindow?.isMaximized()));
   ipcMain.handle('window:hide', () => mainWindow?.hide());
   ipcMain.handle('window:openExternal', (_event, url: string) => {
-    if (
-      !/^https:\/\/ko-fi\.com\/sundaymoments\/?$/i.test(url)
-      && !/^https:\/\/github\.com\/SundayMoments\/?$/i.test(url)
-    ) {
+    if (!isAllowedExternalUrl(url)) {
       return;
     }
     void shell.openExternal(url);

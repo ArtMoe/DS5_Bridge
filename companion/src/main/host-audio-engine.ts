@@ -14,6 +14,7 @@ const HOST_AUDIO_FRAME_BYTES = 264;
 const HELPER_RECORDING_STARTED_MESSAGE = 'status: recording-started';
 const HELPER_START_TIMEOUT_MS = 2000;
 const HELPER_TEST_TONE_TIMEOUT_MS = 10000;
+const HELPER_STDERR_MAX_CHARS = 8192;
 const HELPER_RELATIVE_PATH = path.join('native', 'HostAudioHelper', 'HostAudioHelper.exe');
 const HELPER_TEST_AUDIO_FILE = 'test-speaker-tone-silence-tail.mp3';
 const DEV_HELPER_RELATIVE_PATH = path.join(
@@ -176,6 +177,11 @@ export class HostAudioEngine extends EventEmitter {
     this.stdoutBuffer = Buffer.concat([this.stdoutBuffer, chunk]);
     while (this.stdoutBuffer.length >= FRAME_RECORD_PREFIX_BYTES) {
       const frameLength = this.stdoutBuffer.readUInt16LE(0);
+      if (frameLength !== HOST_AUDIO_FRAME_BYTES) {
+        this.stdoutBuffer = Buffer.alloc(0);
+        this.emit('error', new Error(`Unexpected host audio frame length ${frameLength}`));
+        return;
+      }
       const recordLength = FRAME_RECORD_PREFIX_BYTES + frameLength;
       if (this.stdoutBuffer.length < recordLength) {
         return;
@@ -183,10 +189,6 @@ export class HostAudioEngine extends EventEmitter {
 
       const frame = this.stdoutBuffer.subarray(FRAME_RECORD_PREFIX_BYTES, recordLength);
       this.stdoutBuffer = this.stdoutBuffer.subarray(recordLength);
-      if (frame.length !== HOST_AUDIO_FRAME_BYTES) {
-        this.emit('error', new Error(`Unexpected host audio frame length ${frame.length}`));
-        continue;
-      }
 
       this.emit('frame', {
         frame: [...frame],
@@ -252,6 +254,9 @@ export async function playHostAudioTestTone(speakerVolumePercent = 100): Promise
 
     helper.stderr.on('data', (chunk: Buffer) => {
       stderr += chunk.toString('utf8');
+      if (stderr.length > HELPER_STDERR_MAX_CHARS) {
+        stderr = stderr.slice(-HELPER_STDERR_MAX_CHARS);
+      }
     });
     helper.on('error', (error) => finish(error));
     helper.on('exit', (code, signal) => {
@@ -334,10 +339,14 @@ export class MicKeepaliveEngine extends EventEmitter {
 }
 
 function resolveHelperPath(): string {
-  const candidates = [
-    process.resourcesPath ? path.join(process.resourcesPath, HELPER_RELATIVE_PATH) : null,
+  const packagedCandidate = process.resourcesPath ? path.join(process.resourcesPath, HELPER_RELATIVE_PATH) : null;
+  const devCandidates = [
     path.resolve(process.cwd(), DEV_HELPER_RELATIVE_PATH),
     path.resolve(__dirname, '..', '..', '..', DEV_HELPER_RELATIVE_PATH)
+  ];
+  const candidates = [
+    packagedCandidate,
+    ...(isDevelopmentRuntime() ? devCandidates : [])
   ].filter((candidate): candidate is string => Boolean(candidate));
 
   const helperPath = candidates.find((candidate) => existsSync(candidate));
@@ -350,8 +359,12 @@ function resolveHelperPath(): string {
 function resolveHelperTestAudioPath(helperPath: string): string {
   const candidates = [
     path.join(path.dirname(helperPath), HELPER_TEST_AUDIO_FILE),
-    path.resolve(process.cwd(), 'src', 'renderer', 'assets', HELPER_TEST_AUDIO_FILE),
-    path.resolve(__dirname, '..', '..', '..', 'src', 'renderer', 'assets', HELPER_TEST_AUDIO_FILE)
+    ...(isDevelopmentRuntime()
+      ? [
+          path.resolve(process.cwd(), 'src', 'renderer', 'assets', HELPER_TEST_AUDIO_FILE),
+          path.resolve(__dirname, '..', '..', '..', 'src', 'renderer', 'assets', HELPER_TEST_AUDIO_FILE)
+        ]
+      : [])
   ];
 
   const audioPath = candidates.find((candidate) => existsSync(candidate));
@@ -359,4 +372,11 @@ function resolveHelperTestAudioPath(helperPath: string): string {
     throw new Error(`Speaker test audio is missing: ${HELPER_TEST_AUDIO_FILE}`);
   }
   return audioPath;
+}
+
+function isDevelopmentRuntime(): boolean {
+  const processWithElectronFlags = process as NodeJS.Process & { defaultApp?: boolean };
+  return Boolean(processWithElectronFlags.defaultApp)
+    || process.env.NODE_ENV === 'development'
+    || process.env.VITEST === 'true';
 }

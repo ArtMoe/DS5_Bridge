@@ -55,6 +55,21 @@ npm run typecheck
 npm test
 ```
 
+The companion app also keeps a repo-local `.npmrc` that blocks git dependencies
+and avoids newly published packages younger than three days.
+
+For a stricter supply-chain check, install without lifecycle scripts and then
+explicitly rebuild the packages that are expected to need native or tool binary
+setup:
+
+```powershell
+npm ci --ignore-scripts
+npm rebuild electron esbuild node-hid electron-winstaller --ignore-scripts=false
+npm run build:host-audio
+npm run typecheck
+npm test
+```
+
 Build the companion app:
 
 ```powershell
