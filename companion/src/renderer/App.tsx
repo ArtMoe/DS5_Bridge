@@ -28,10 +28,12 @@ import {
   IconPalette as Palette,
   IconPencil as Pencil,
   IconPlayerPlay as Play,
+  IconQuestionMark,
   IconRefresh as RefreshCcw,
   IconRipple,
   IconSettings as SettingsIcon,
   IconBluetooth,
+  IconSparkleHighlight,
   IconSparkles as Sparkles,
   IconTestPipe,
   IconTrash as Trash2,
@@ -81,6 +83,15 @@ type LightbarPaletteCell = {
   color: string;
   name: string;
 };
+type FeatureTipsPanelProps = {
+  tab: 'audio' | 'haptics' | 'triggers' | 'lighting';
+  onSettingsFocusRequest?: (target: SettingsFocusTarget) => void;
+  onFeatureFocusRequest?: (target: FeatureFocusTarget) => void;
+  hostEncodingTipActionable?: boolean;
+};
+type SettingsFocusTarget = 'controller-power-saving' | 'sleep-shortcut' | 'volume-shortcut';
+type NotificationFocusTarget = 'controller-status' | 'low-battery';
+type FeatureFocusTarget = 'host-encoding';
 
 const HAPTICS_STEP = 20;
 const SPEAKER_VOLUME_STEP = 10;
@@ -358,6 +369,126 @@ function sliderTickClass(value: number, max: number): string | undefined {
     return 'milestone';
   }
   return undefined;
+}
+
+function FeatureTipsPanel({
+  tab,
+  onSettingsFocusRequest,
+  onFeatureFocusRequest,
+  hostEncodingTipActionable = false
+}: FeatureTipsPanelProps) {
+  const [featureTileSampleActive, setFeatureTileSampleActive] = useState(false);
+  const tips: Array<{
+    key: string;
+    icon: ReactNode;
+    title: string;
+    text: string;
+    tone?: 'success';
+  }> = [
+    {
+      key: 'toggle',
+      icon: <IconSparkleHighlight size={16} />,
+      title: 'Feature Tiles',
+      text: 'Click the square icon tile to enable or disable that feature.'
+    },
+    {
+      key: 'unavailable',
+      icon: <Settings2 size={16} />,
+      title: 'Unavailable',
+      text: 'Dimmed controls need the bridge, controller, or matching feature enabled.'
+    }
+  ];
+
+  if (tab === 'audio') {
+    tips.push({
+      key: 'host-encoding',
+      icon: <Headphones size={16} />,
+      title: 'Headphones',
+      text: 'Use Host Encoding when listening through the controller headphone jack.'
+    });
+  } else {
+    tips.push({
+      key: 'power-saving',
+      icon: <IconBatteryEco size={16} />,
+      title: 'Green Icon',
+      text: 'Power saving is temporarily capping this setting while headphones are connected.',
+      tone: 'success'
+    });
+  }
+
+  if (tab === 'lighting') {
+    tips.push({
+      key: 'custom-color',
+      icon: <Palette size={16} />,
+      title: 'Custom Color',
+      text: 'Double-click the final color swatch to choose a custom lightbar color.'
+    });
+  } else {
+    tips.push({
+      key: 'tests',
+      icon: <Play size={16} />,
+      title: 'Tests',
+      text: 'Tests may pause while a game or audio stream is actively using the controller.'
+    });
+  }
+
+  return (
+    <section className="feature-help-panel" aria-label={`${tab} tips`}>
+      <div className="feature-help-heading">
+        <IconQuestionMark size={16} />
+        <h3>Tips</h3>
+      </div>
+      <div className="feature-help-grid">
+        {tips.map((tip) => (
+          <div
+            className={[
+              'feature-help-item',
+              tip.key === 'host-encoding' && hostEncodingTipActionable ? 'feature-help-item-attention' : ''
+            ].filter(Boolean).join(' ')}
+            key={tip.key}
+          >
+            {tip.key === 'toggle' ? (
+              <button
+                className={`feature-help-icon feature-help-icon-button ${featureTileSampleActive ? 'active' : ''}`}
+                type="button"
+                aria-pressed={featureTileSampleActive}
+                aria-label="Toggle feature tile example"
+                onClick={() => setFeatureTileSampleActive((active) => !active)}
+              >
+                {tip.icon}
+              </button>
+            ) : tip.key === 'power-saving' ? (
+              <button
+                className={`feature-help-icon feature-help-icon-button ${tip.tone ?? ''}`}
+                type="button"
+                aria-label="Open Controller Power Saving settings"
+                onClick={() => onSettingsFocusRequest?.('controller-power-saving')}
+              >
+                {tip.icon}
+              </button>
+            ) : tip.key === 'host-encoding' && hostEncodingTipActionable ? (
+              <button
+                className="feature-help-icon feature-help-icon-button"
+                type="button"
+                aria-label="Highlight Host Encoding"
+                onClick={() => onFeatureFocusRequest?.('host-encoding')}
+              >
+                {tip.icon}
+              </button>
+            ) : (
+              <span className={`feature-help-icon ${tip.tone ?? ''}`} aria-hidden="true">
+                {tip.icon}
+              </span>
+            )}
+            <span className="feature-help-copy">
+              <strong>{tip.title}</strong>
+              <span>{tip.text}</span>
+            </span>
+          </div>
+        ))}
+      </div>
+    </section>
+  );
 }
 
 function normalizeHexColor(value: string): string {
@@ -1075,6 +1206,10 @@ export function App() {
   const [hoveredRemapButton, setHoveredRemapButton] = useState<RemapButtonId | null>(null);
   const [pendingAction, setPendingAction] = useState<string | null>(null);
   const [showBridgeSettings, setShowBridgeSettings] = useState(false);
+  const [settingsFocusTarget, setSettingsFocusTarget] = useState<SettingsFocusTarget | null>(null);
+  const [notificationFocusTarget, setNotificationFocusTarget] = useState<NotificationFocusTarget | null>(null);
+  const [featureFocusTarget, setFeatureFocusTarget] = useState<FeatureFocusTarget | null>(null);
+  const [featureFocusPulse, setFeatureFocusPulse] = useState(0);
   const [showNotificationsMenu, setShowNotificationsMenu] = useState(false);
   const [showClassicRumbleControl, setShowClassicRumbleControl] = useState(false);
   const [showMicrophoneControl, setShowMicrophoneControl] = useState(false);
@@ -1107,6 +1242,9 @@ export function App() {
   const customColorPickerRef = useRef<HTMLDivElement>(null);
   const customSwatchPrimeTimerRef = useRef<number | null>(null);
   const overviewSleepConfirmTimerRef = useRef<number | null>(null);
+  const settingsFocusTimerRef = useRef<number | null>(null);
+  const notificationFocusTimerRef = useRef<number | null>(null);
+  const featureFocusTimerRef = useRef<number | null>(null);
   const windowDraggingRef = useRef(false);
   const windowDragReleaseTimerRef = useRef<number | null>(null);
   const deferredSnapshotRef = useRef<BridgeSnapshot | null>(null);
@@ -1206,6 +1344,15 @@ export function App() {
       }
       if (overviewSleepConfirmTimerRef.current !== null) {
         window.clearTimeout(overviewSleepConfirmTimerRef.current);
+      }
+      if (settingsFocusTimerRef.current !== null) {
+        window.clearTimeout(settingsFocusTimerRef.current);
+      }
+      if (notificationFocusTimerRef.current !== null) {
+        window.clearTimeout(notificationFocusTimerRef.current);
+      }
+      if (featureFocusTimerRef.current !== null) {
+        window.clearTimeout(featureFocusTimerRef.current);
       }
       if (windowDragReleaseTimerRef.current !== null) {
         window.clearTimeout(windowDragReleaseTimerRef.current);
@@ -1646,9 +1793,9 @@ export function App() {
     snapshot?.settings.speakerVolumeShortcutEnabled ? { id: 'volume', label: 'Volume Shortcut' } : null
   ].filter((item): item is { id: 'sleep' | 'volume'; label: string } => Boolean(item));
   const overviewNotificationItems = [
-    controllerToastEnabled ? 'Controller Status' : null,
-    lowBatteryToastEnabled ? 'Low Battery' : null
-  ].filter((item): item is string => Boolean(item));
+    controllerToastEnabled ? { id: 'controller-status', label: 'Controller Status' } : null,
+    lowBatteryToastEnabled ? { id: 'low-battery', label: 'Low Battery' } : null
+  ].filter((item): item is { id: NotificationFocusTarget; label: string } => Boolean(item));
   const overviewPowerSavingLabel = snapshot?.settings.controllerPowerSavingEnabled
     ? controllerPowerSavingActive
       ? 'Active'
@@ -2388,6 +2535,55 @@ export function App() {
     void runAction('lightbar-enabled', () => window.bridge.setLightbarEnabled(!snapshot.settings.lightbarEnabled));
   }
 
+  function focusBridgeSettings(target: SettingsFocusTarget) {
+    setShowNotificationsMenu(false);
+    setShowBridgeSettings(true);
+    setNotificationFocusTarget(null);
+    setFeatureFocusTarget(null);
+    setSettingsFocusTarget(target);
+    if (settingsFocusTimerRef.current !== null) {
+      window.clearTimeout(settingsFocusTimerRef.current);
+    }
+    settingsFocusTimerRef.current = window.setTimeout(() => {
+      setSettingsFocusTarget(null);
+      settingsFocusTimerRef.current = null;
+    }, 2200);
+  }
+
+  function focusNotificationSettings(target: NotificationFocusTarget) {
+    setShowBridgeSettings(false);
+    setShowNotificationsMenu(true);
+    setSettingsFocusTarget(null);
+    setFeatureFocusTarget(null);
+    setNotificationFocusTarget(target);
+    if (notificationFocusTimerRef.current !== null) {
+      window.clearTimeout(notificationFocusTimerRef.current);
+    }
+    notificationFocusTimerRef.current = window.setTimeout(() => {
+      setNotificationFocusTarget(null);
+      notificationFocusTimerRef.current = null;
+    }, 2200);
+  }
+
+  function focusFeatureControl(target: FeatureFocusTarget) {
+    if (target === 'host-encoding' && hostAudioEnabled) {
+      return;
+    }
+    setShowBridgeSettings(false);
+    setShowNotificationsMenu(false);
+    setSettingsFocusTarget(null);
+    setNotificationFocusTarget(null);
+    setFeatureFocusTarget(target);
+    setFeatureFocusPulse((pulse) => pulse + 1);
+    if (featureFocusTimerRef.current !== null) {
+      window.clearTimeout(featureFocusTimerRef.current);
+    }
+    featureFocusTimerRef.current = window.setTimeout(() => {
+      setFeatureFocusTarget(null);
+      featureFocusTimerRef.current = null;
+    }, 2200);
+  }
+
   function setMuteButtonAction(
     mode: MuteButtonMode,
     usage?: number,
@@ -2526,7 +2722,7 @@ export function App() {
                     <Bell size={16} />
                     <span>Notifications</span>
                   </div>
-                  <div className="settings-menu-row">
+                  <div className={`settings-menu-row ${notificationFocusTarget === 'controller-status' ? 'settings-menu-row-highlight' : ''}`}>
                     <div>
                       <strong>Controller Status</strong>
                       <span>Toast when the controller connects or disconnects</span>
@@ -2542,7 +2738,7 @@ export function App() {
                       <span />
                     </button>
                   </div>
-                  <div className="settings-menu-row">
+                  <div className={`settings-menu-row ${notificationFocusTarget === 'low-battery' ? 'settings-menu-row-highlight' : ''}`}>
                     <div>
                       <strong>Low Battery</strong>
                       <span>Toast when battery reaches 20% or below</span>
@@ -2971,7 +3167,12 @@ export function App() {
                 <div className="overview-chip-row">
                   {overviewShortcutItems.length > 0 ? (
                     overviewShortcutItems.map((item) => (
-                      <span className="overview-chip overview-shortcut-chip active" key={item.id} tabIndex={0}>
+                      <button
+                        className="overview-chip overview-shortcut-chip active"
+                        key={item.id}
+                        type="button"
+                        onClick={() => focusBridgeSettings(item.id === 'sleep' ? 'sleep-shortcut' : 'volume-shortcut')}
+                      >
                         {item.label}
                         {item.id === 'sleep' ? (
                           <span className="settings-shortcut-tooltip shortcut-glyph-tooltip overview-shortcut-tooltip" role="tooltip">
@@ -3005,7 +3206,7 @@ export function App() {
                             </span>
                           </span>
                         )}
-                      </span>
+                      </button>
                     ))
                   ) : (
                     <span className="overview-chip muted">None enabled</span>
@@ -3018,9 +3219,13 @@ export function App() {
                   <span>Power Saving</span>
                 </div>
                 <div className="overview-chip-row">
-                  <span className={`overview-chip ${snapshot.settings.controllerPowerSavingEnabled ? 'active success' : 'muted'}`}>
+                  <button
+                    className={`overview-chip ${snapshot.settings.controllerPowerSavingEnabled ? 'active success' : 'muted'}`}
+                    type="button"
+                    onClick={() => focusBridgeSettings('controller-power-saving')}
+                  >
                     {overviewPowerSavingLabel}
-                  </span>
+                  </button>
                 </div>
               </div>
               <div className="overview-status-group">
@@ -3031,7 +3236,14 @@ export function App() {
                 <div className="overview-chip-row">
                   {overviewNotificationItems.length > 0 ? (
                     overviewNotificationItems.map((item) => (
-                      <span className="overview-chip active" key={item}>{item}</span>
+                      <button
+                        className="overview-chip active"
+                        key={item.id}
+                        type="button"
+                        onClick={() => focusNotificationSettings(item.id)}
+                      >
+                        {item.label}
+                      </button>
                     ))
                   ) : (
                     <span className="overview-chip muted">Off</span>
@@ -3236,6 +3448,7 @@ export function App() {
                   </div>
                 </section>
               </div>
+              <FeatureTipsPanel tab="haptics" onSettingsFocusRequest={focusBridgeSettings} />
           </div>
 
           <div
@@ -3251,7 +3464,12 @@ export function App() {
                   <p>Adjust controller {outputControlLower} and microphone levels.</p>
                 </div>
                 <div className="audio-heading-controls">
-                  <div className="inline-switch">
+                  <div
+                    className={[
+                      'inline-switch',
+                      featureFocusTarget === 'host-encoding' ? `feature-focus-highlight feature-focus-highlight-${featureFocusPulse % 2}` : ''
+                    ].filter(Boolean).join(' ')}
+                  >
                     <span>Host Encoding</span>
                     <button
                       type="button"
@@ -3501,6 +3719,11 @@ export function App() {
                   </div>
                 </section>
               </div>
+              <FeatureTipsPanel
+                tab="audio"
+                hostEncodingTipActionable={!hostAudioEnabled}
+                onFeatureFocusRequest={focusFeatureControl}
+              />
           </div>
 
           <div
@@ -3664,6 +3887,7 @@ export function App() {
                   </div>
                 </section>
               </div>
+              <FeatureTipsPanel tab="triggers" onSettingsFocusRequest={focusBridgeSettings} />
           </div>
 
           <div
@@ -3876,6 +4100,7 @@ export function App() {
                   </div>
                 </section>
               </div>
+              <FeatureTipsPanel tab="lighting" onSettingsFocusRequest={focusBridgeSettings} />
           </div>
 
           <div
@@ -4525,7 +4750,7 @@ export function App() {
               </div>
               <div className="bridge-settings-column">
                 <div className="settings-menu-section-label">Power & Controller</div>
-                <div className="settings-menu-row">
+                <div className={`settings-menu-row ${settingsFocusTarget === 'controller-power-saving' ? 'settings-menu-row-highlight' : ''}`}>
                   <div className="settings-menu-copy">
                     <strong>Controller Power Saving</strong>
                     <span>Caps haptics, triggers, and lightbar brightness at 60% while headphones are plugged in</span>
@@ -4544,7 +4769,7 @@ export function App() {
                   </button>
                 </div>
                 <div className="settings-menu-section-label">Shortcuts</div>
-                <div className="settings-menu-row">
+                <div className={`settings-menu-row ${settingsFocusTarget === 'sleep-shortcut' ? 'settings-menu-row-highlight' : ''}`}>
                   <div className="settings-menu-copy settings-menu-copy-tooltip">
                     <strong>Sleep Shortcut</strong>
                     <div className="settings-shortcut-tooltip shortcut-glyph-tooltip" role="tooltip">
@@ -4573,7 +4798,7 @@ export function App() {
                     <span />
                   </button>
                 </div>
-                <div className="settings-menu-row">
+                <div className={`settings-menu-row ${settingsFocusTarget === 'volume-shortcut' ? 'settings-menu-row-highlight' : ''}`}>
                   <div className="settings-menu-copy settings-menu-copy-tooltip">
                     <strong>Volume Shortcut</strong>
                     <div className="settings-shortcut-tooltip shortcut-glyph-tooltip" role="tooltip">
