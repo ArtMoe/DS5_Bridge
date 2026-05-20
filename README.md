@@ -16,49 +16,45 @@
   <a href="https://ko-fi.com/sundaymoments"><img src="assets/readme/support_me_on_kofi_blue.png" width="220" alt="Support me on Ko-fi"></a>
 </p>
 
-DS5 Bridge lets a Raspberry Pi Pico 2 W act as a wireless bridge for a real
-Sony DualSense or DualSense Edge controller. The controller pairs to the Pico
-over Bluetooth, and your PC sees a standard DualSense-compatible USB controller.
+DS5 Bridge lets you use a real Sony DualSense or DualSense Edge controller
+wirelessly on a Windows PC through a Raspberry Pi Pico 2 W. The controller pairs
+to the Pico over Bluetooth, and the Pico plugs into your PC over USB.
 
-The release includes Pico firmware plus a Windows companion app for tuning
-runtime settings without reflashing.
+The companion app gives you a clean place to adjust audio, haptics, trigger
+strength, lighting, button remaps, shortcuts, and other controller behavior
+without reflashing the Pico.
 
 ## Quick Start
 
-1. Download the firmware UF2 and Windows companion installer from
+1. Download the firmware `.uf2` and Windows companion installer from
    [Releases](https://github.com/SundayMoments/DS5_Bridge/releases/latest).
 2. With the Pico 2 W unplugged, hold `BOOTSEL`, then connect it to your PC.
-3. Copy the release `.uf2` firmware file to the mounted Pico storage device.
+3. Copy the `.uf2` file onto the Pico drive that appears in Windows.
 4. Put the DualSense controller into Bluetooth pairing mode.
-5. Disconnect and reconnect the Pico 2 W, then wait for the controller to pair.
-6. Install and open the companion app, then choose a preset or customize the
-   controller.
+5. After the Pico restarts from flashing, wait for the controller to pair.
+6. Install and open DS5 Bridge to check the connection and adjust your settings.
 
-The controller appears on your PC after the bridge connects to the DualSense
-over Bluetooth.
+Once the controller connects to the Pico, Windows sees it as a normal
+DualSense-compatible USB controller.
 
 ## Features
 
-- Wireless DualSense and DualSense Edge bridge through a Pico 2 W.
-- Windows companion app with Overview, Audio, Haptics, Triggers, Lighting,
-  Button Remapping, and System tabs.
-- Runtime controls for haptics, rumble, adaptive triggers, controller audio,
-  microphone level, lightbar behavior, shortcuts, notifications, and power
-  saving.
-- Bluetooth signal monitoring for a quick read on wireless audio quality.
-- Button remapping with named profiles, unsaved-change tracking, save-as,
-  rename, and delete controls.
-- Host encoded audio support for smoother controller speaker and headphones
-  output.
+- Use a DualSense or DualSense Edge wirelessly through a Pico 2 W.
+- Tune audio, haptics, adaptive triggers, and lighting from the Windows app.
+- Save controller setups as profiles.
+- Remap controller buttons visually.
+- See Bluetooth signal quality at a glance.
+- Use Host Encoding for smoother controller speaker and headphone-jack audio.
 
 ## Companion App Tour
 
-The app talks to the bridge through a companion HID interface, leaving the
-game-facing controller interface alone.
+The companion app is where you check the bridge, adjust the controller, and save
+the setup you actually want to play with.
 
 ### Overview
 
-Status cards, quick actions, quick sliders, and active setting summaries.
+See the connection, battery, audio route, Bluetooth signal quality, active
+profile, and the settings most likely to matter during play.
 
 <p align="center">
   <img src="assets/readme/app-overview.png" width="680" alt="Overview dashboard in the DS5 Bridge companion app">
@@ -66,7 +62,8 @@ Status cards, quick actions, quick sliders, and active setting summaries.
 
 ### Haptics
 
-HD haptics, classic rumble strength, and feedback tests.
+Adjust HD haptics and classic rumble strength, then test the feel before
+opening a game.
 
 <p align="center">
   <img src="assets/readme/app-haptics.png" width="680" alt="Haptics and rumble controls in the DS5 Bridge companion app">
@@ -74,7 +71,8 @@ HD haptics, classic rumble strength, and feedback tests.
 
 ### Audio
 
-Speaker/headphones output, microphone level, host encoding, and audio tests.
+Control the controller speaker, headphone-jack audio, microphone level, and Host
+Encoding.
 
 <p align="center">
   <img src="assets/readme/app-audio.png" width="680" alt="Audio controls in the DS5 Bridge companion app">
@@ -82,7 +80,7 @@ Speaker/headphones output, microphone level, host encoding, and audio tests.
 
 ### Triggers
 
-Adaptive trigger intensity, test effects, and reset controls.
+Set adaptive trigger strength and try sample effects without leaving the app.
 
 <p align="center">
   <img src="assets/readme/app-triggers.png" width="680" alt="Adaptive trigger controls in the DS5 Bridge companion app">
@@ -90,7 +88,8 @@ Adaptive trigger intensity, test effects, and reset controls.
 
 ### Lighting
 
-Lightbar brightness, color, and app-controlled lighting behavior.
+Choose lightbar brightness and color, or let the app manage lighting behavior
+for you.
 
 <p align="center">
   <img src="assets/readme/app-lighting.png" width="680" alt="Lighting controls in the DS5 Bridge companion app">
@@ -98,7 +97,8 @@ Lightbar brightness, color, and app-controlled lighting behavior.
 
 ### Button Remapping
 
-Visual button remapping with profiles and restore defaults.
+Change what each controller button does, then save the remap when you are happy
+with it.
 
 <p align="center">
   <img src="assets/readme/app-button-remapping.png" width="680" alt="Button remapping controls in the DS5 Bridge companion app">
@@ -106,32 +106,32 @@ Visual button remapping with profiles and restore defaults.
 
 ### System
 
-Bridge status, diagnostics, presets, mute button behavior, shortcuts,
-notifications, power saving, idle disconnect, PC sleep disconnect, and Pico LED
-settings.
+Manage profiles, mute button behavior, polling rate, and diagnostics.
 
 <p align="center">
   <img src="assets/readme/app-system.png" width="680" alt="System controls in the DS5 Bridge companion app">
 </p>
 
+### Settings
+
+Set UI scale, startup behavior, power saving, shortcuts, idle disconnect, PC
+sleep disconnect, and the Pico LED.
+
 ## Troubleshooting
 
-- If the speaker test tone plays through any speaker other than the controller,
-  restart the companion app and try the speaker test again.
-- Host Encoding is enabled by default because it helps keep controller audio
-  smooth. Turning it off may cause audio stuttering, especially when headphones
-  are plugged into the controller.
-- Using headphones through the controller is not recommended unless the companion
-  app is open with Host Encoding enabled.
-- If the controller speaker sounds unnaturally loud, doubled, or distorted,
-  reboot the PC, reopen DS5 Bridge, and run the speaker test again.
-- Battery level is not reported accurately while the controller is charging.
+- Keep Host Encoding enabled if you use the controller speaker or plug
+  headphones into the controller. Turning it off can cause stuttering or static.
+- Headphones through the controller headphone jack work best when DS5 Bridge is
+  open and Host Encoding is enabled.
+- If controller audio sounds doubled, distorted, or too loud, restart your PC,
+  reopen DS5 Bridge, and run the speaker test again.
+- Battery level may be inaccurate while the controller is charging.
 
 ## Requirements
 
 - Raspberry Pi Pico 2 W.
-- Sony DualSense controller.
-- USB connection from the Pico 2 W to the PC.
+- Sony DualSense or DualSense Edge controller.
+- USB cable from the Pico 2 W to the PC.
 - Windows for the companion app.
 
 ## For Developers
