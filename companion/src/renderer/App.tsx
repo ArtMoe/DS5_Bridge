@@ -1408,10 +1408,6 @@ export function App() {
   const remapProfileOptions = useMemo<Array<[string, string]>>(() => (
     snapshot?.settings.buttonRemappingProfiles.map((profile) => [profile.name, profile.id]) ?? [['Default', DEFAULT_BUTTON_REMAP_PROFILE_ID]]
   ), [snapshot?.settings.buttonRemappingProfiles]);
-  const remapUnsavedCount = useMemo(() => {
-    const selectedMappings = selectedRemapProfile?.mappings ?? DEFAULT_REMAP_DRAFT;
-    return REMAP_TARGET_OPTIONS.filter(([, buttonId]) => remapDraft[buttonId] !== selectedMappings[buttonId]).length;
-  }, [remapDraft, selectedRemapProfile]);
   const selectedRemapProfileIsDefault = selectedRemapProfileId === DEFAULT_BUTTON_REMAP_PROFILE_ID;
 
   function applySnapshot(next: BridgeSnapshot) {
@@ -2610,13 +2606,6 @@ export function App() {
   function saveButtonRemappingProfile() {
     setRemapProfileNameDraft(`Custom Profile ${snapshot?.settings.buttonRemappingProfiles.length ?? 1}`);
     setRemapProfileDialogMode('save');
-  }
-
-  function updateButtonRemappingProfile() {
-    if (!selectedRemapProfile || selectedRemapProfileIsDefault || remapUnsavedCount === 0) {
-      return;
-    }
-    void runAction('remap-update-profile', () => window.bridge.updateButtonRemappingProfile(selectedRemapProfile.id));
   }
 
   function deleteButtonRemappingProfile() {
@@ -4348,10 +4337,10 @@ export function App() {
               </div>
               <section className="feature-card remapping-card">
                 <div className="remapping-profile-strip">
-                  <span className={`remapping-unsaved-count ${remapUnsavedCount > 0 ? 'active' : ''}`}>
-                    <span className="remapping-unsaved-dot" aria-hidden="true" />
-                    {remapUnsavedCount} unsaved {remapUnsavedCount === 1 ? 'change' : 'changes'}
-                  </span>
+                  <div className="system-profile-save-status">
+                    <Check size={16} />
+                    <span>Changes Are Automatically Saved</span>
+                  </div>
                   <div className="remapping-profile-actions">
                     <button
                       type="button"
@@ -4360,14 +4349,6 @@ export function App() {
                     >
                       <Pencil size={15} />
                       Rename Profile
-                    </button>
-                    <button
-                      type="button"
-                      disabled={pendingAction !== null || selectedRemapProfileIsDefault || remapUnsavedCount === 0}
-                      onClick={updateButtonRemappingProfile}
-                    >
-                      <Save size={15} />
-                      Save Profile
                     </button>
                     <button
                       type="button"

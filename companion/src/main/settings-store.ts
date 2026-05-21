@@ -53,10 +53,16 @@ const DEFAULT_CONTROLLER_PROFILE: ControllerProfile = {
 };
 
 const CUSTOM_CONTROLLER_PROFILE_ID = 'custom';
+const CUSTOM_BUTTON_REMAP_PROFILE_ID = 'custom';
 const CUSTOM_CONTROLLER_PROFILE: ControllerProfile = {
   id: CUSTOM_CONTROLLER_PROFILE_ID,
   name: 'Custom',
   settings: { ...DEFAULT_CONTROLLER_PROFILE_SETTINGS }
+};
+const CUSTOM_BUTTON_REMAP_PROFILE: ButtonRemapProfile = {
+  id: CUSTOM_BUTTON_REMAP_PROFILE_ID,
+  name: 'Custom',
+  mappings: cloneRemapMap(DEFAULT_BUTTON_REMAP_PROFILE.mappings)
 };
 
 const CONTROLLER_PROFILE_SETTING_KEYS = new Set<keyof ControllerProfileSettings>([
@@ -408,6 +414,39 @@ function normalizeSelectedRemapProfileId(value: unknown, profiles: ButtonRemapPr
     : DEFAULT_BUTTON_REMAP_PROFILE_ID;
 }
 
+function syncSelectedButtonRemappingProfile(settings: CompanionSettings): CompanionSettings {
+  const mappings = cloneRemapMap(settings.buttonRemappingDraft);
+  if (settings.selectedButtonRemappingProfileId === DEFAULT_BUTTON_REMAP_PROFILE_ID) {
+    const customProfile = settings.buttonRemappingProfiles.find((profile) => (
+      profile.id === CUSTOM_BUTTON_REMAP_PROFILE_ID
+    ));
+    const nextCustomProfile: ButtonRemapProfile = {
+      ...(customProfile ?? CUSTOM_BUTTON_REMAP_PROFILE),
+      mappings
+    };
+    const buttonRemappingProfiles = customProfile
+      ? settings.buttonRemappingProfiles.map((profile) => (
+        profile.id === CUSTOM_BUTTON_REMAP_PROFILE_ID ? nextCustomProfile : profile
+      ))
+      : [...settings.buttonRemappingProfiles, nextCustomProfile];
+    return normalizeSettings({
+      ...settings,
+      selectedButtonRemappingProfileId: CUSTOM_BUTTON_REMAP_PROFILE_ID,
+      buttonRemappingProfiles,
+      buttonRemappingDraft: mappings
+    });
+  }
+  return normalizeSettings({
+    ...settings,
+    buttonRemappingProfiles: settings.buttonRemappingProfiles.map((profile) => (
+      profile.id === settings.selectedButtonRemappingProfileId
+        ? { ...profile, mappings }
+        : profile
+    )),
+    buttonRemappingDraft: mappings
+  });
+}
+
 function cloneSettings(settings: CompanionSettings): CompanionSettings {
   return {
     ...settings,
@@ -678,12 +717,21 @@ export class SettingsStore {
     if (!isRemapButtonId(buttonId) || !isRemapButtonId(targetId)) {
       return this.get();
     }
-    return this.update({
+    if (this.settings.buttonRemappingDraft[buttonId] === targetId) {
+      return this.get();
+    }
+    this.settings = syncSelectedButtonRemappingProfile(normalizeSettings({
+      ...this.settings,
       buttonRemappingDraft: {
         ...this.settings.buttonRemappingDraft,
         [buttonId]: targetId
       }
-    });
+    }));
+    if (this.settings.selectedPresetId === 'custom') {
+      this.customSettings = { ...this.settings };
+    }
+    this.write();
+    return this.get();
   }
 
   selectButtonRemappingProfile(profileId: string): CompanionSettings {

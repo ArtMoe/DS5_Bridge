@@ -1153,7 +1153,8 @@ describe('BridgeService', () => {
 
     const changedSnapshot = await fixture.service.setButtonRemap('cross', 'circle');
     expect(changedSnapshot.settings.buttonRemappingDraft.cross).toBe('circle');
-    expect(changedSnapshot.settings.selectedButtonRemappingProfileId).toBe('default');
+    expect(changedSnapshot.settings.selectedButtonRemappingProfileId).toBe('custom');
+    expect(changedSnapshot.settings.buttonRemappingProfiles.find((profile) => profile.id === 'custom')?.mappings.cross).toBe('circle');
 
     const savedSnapshot = await fixture.service.saveButtonRemappingProfile('Fighting Game');
     const savedProfile = savedSnapshot.settings.buttonRemappingProfiles.find((profile) => profile.name === 'Fighting Game');
@@ -1161,13 +1162,12 @@ describe('BridgeService', () => {
     expect(savedSnapshot.settings.selectedButtonRemappingProfileId).toBe(savedProfile?.id);
 
     const updatedDraftSnapshot = await fixture.service.setButtonRemap('square', 'triangle');
-    const updatedProfileSnapshot = await fixture.service.updateButtonRemappingProfile(savedProfile?.id ?? '');
-    const updatedProfile = updatedProfileSnapshot.settings.buttonRemappingProfiles.find((profile) => (
+    const updatedProfile = updatedDraftSnapshot.settings.buttonRemappingProfiles.find((profile) => (
       profile.id === savedProfile?.id
     ));
     expect(updatedDraftSnapshot.settings.buttonRemappingDraft.square).toBe('triangle');
     expect(updatedProfile?.mappings.square).toBe('triangle');
-    expect(updatedProfileSnapshot.settings.buttonRemappingProfiles).toHaveLength(2);
+    expect(updatedDraftSnapshot.settings.buttonRemappingProfiles).toHaveLength(3);
 
     const restoredSnapshot = await fixture.service.restoreButtonRemappingDefaults();
     expect(restoredSnapshot.settings.buttonRemappingDraft.cross).toBe('cross');

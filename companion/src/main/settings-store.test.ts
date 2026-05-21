@@ -164,32 +164,36 @@ describe('SettingsStore', () => {
     expect(persistedSettings(userDataPath).selectedControllerProfileId).toBe(DEFAULT_CONTROLLER_PROFILE_ID);
   });
 
-  it('keeps button remapping profile changes manual and protects the default remap profile', () => {
+  it('auto-forks default button remapping changes into a saved custom profile', () => {
     vi.spyOn(Date, 'now').mockReturnValue(0x23456);
     const store = new SettingsStore(tempUserDataPath());
 
     const changedDraft = store.setButtonRemap('cross', 'circle');
-    expect(changedDraft.selectedButtonRemappingProfileId).toBe(DEFAULT_BUTTON_REMAP_PROFILE_ID);
+    expect(changedDraft.selectedButtonRemappingProfileId).toBe('custom');
+    expect(changedDraft.buttonRemappingProfiles.map((profile) => profile.name)).toEqual(['Default', 'Custom']);
     expect(changedDraft.buttonRemappingDraft.cross).toBe('circle');
     expect(changedDraft.buttonRemappingProfiles[0]?.mappings.cross).toBe('cross');
+    expect(changedDraft.buttonRemappingProfiles.find((profile) => profile.id === 'custom')?.mappings.cross).toBe('circle');
 
     const blockedDefaultUpdate = store.updateButtonRemappingProfile(DEFAULT_BUTTON_REMAP_PROFILE_ID);
     expect(blockedDefaultUpdate.buttonRemappingProfiles[0]?.mappings.cross).toBe('cross');
+
+    const updatedCustom = store.setButtonRemap('square', 'triangle');
+    expect(updatedCustom.buttonRemappingProfiles.find((profile) => profile.id === 'custom')?.mappings.square).toBe('triangle');
 
     const saved = store.saveButtonRemappingProfile('FPS');
     const profileId = saved.selectedButtonRemappingProfileId;
     expect(saved.buttonRemappingProfiles.find((profile) => profile.id === profileId)?.mappings.cross).toBe('circle');
 
-    store.setButtonRemap('square', 'triangle');
-    const updated = store.updateButtonRemappingProfile(profileId);
-    expect(updated.buttonRemappingProfiles.find((profile) => profile.id === profileId)?.mappings.square).toBe('triangle');
+    const updated = store.setButtonRemap('square', 'options');
+    expect(updated.buttonRemappingProfiles.find((profile) => profile.id === profileId)?.mappings.square).toBe('options');
 
     const renamedDefault = store.renameButtonRemappingProfile(DEFAULT_BUTTON_REMAP_PROFILE_ID, 'Base');
     expect(renamedDefault.buttonRemappingProfiles[0]?.name).toBe('Default');
 
     const deleted = store.deleteButtonRemappingProfile(profileId);
     expect(deleted.selectedButtonRemappingProfileId).toBe(DEFAULT_BUTTON_REMAP_PROFILE_ID);
-    expect(deleted.buttonRemappingProfiles.map((profile) => profile.id)).toEqual([DEFAULT_BUTTON_REMAP_PROFILE_ID]);
+    expect(deleted.buttonRemappingProfiles.map((profile) => profile.id)).toEqual([DEFAULT_BUTTON_REMAP_PROFILE_ID, 'custom']);
   });
 
   it('normalizes invalid persisted values back to safe defaults', () => {
