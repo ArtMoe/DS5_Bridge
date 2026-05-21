@@ -100,6 +100,7 @@
 #define RSSI_POLL_INTERVAL_US 2000000u
 #define RSSI_REQUEST_TIMEOUT_US 1000000u
 #define HID_CHANNEL_RECOVERY_DELAY_US 2000000u
+#define HID_CHANNEL_RECOVERY_MAX_ATTEMPTS 5
 
 #define HCI_SEND_CMD_LOGGED(cmd, ...) do { \
     const uint8_t err = hci_send_cmd((cmd), ##__VA_ARGS__); \
@@ -203,8 +204,11 @@ static uint16_t hid_interrupt_cid;
 static bt_data_callback_t bt_data_callback = nullptr;
 static uint8_t controller_type = ControllerTypeUnknown;
 static bool controller_type_check_pending = false;
+static bool hid_control_ready = false;
+static bool hid_interrupt_ready = false;
 static bool hid_channel_recovery_pending = false;
 static uint32_t hid_channel_recovery_at_us = 0;
+static uint8_t hid_channel_recovery_attempts = 0;
 static int8_t bt_rssi = 0;
 static bool bt_rssi_known = false;
 static bool bt_rssi_request_pending = false;
@@ -315,7 +319,7 @@ void bt_register_data_callback(bt_data_callback_t callback) {
 }
 
 bool bt_is_controller_connected() {
-    return hid_interrupt_cid != 0;
+    return hid_interrupt_ready;
 }
 
 uint8_t bt_controller_type() {
@@ -834,14 +838,14 @@ static void open_next_hid_channel_if_needed() {
         return;
     }
 
-    if (hid_control_cid == 0) {
+    if (!hid_control_ready && hid_control_cid == 0) {
         DS5_LOG("[L2CAP] Open missing HID Control channel\n");
         l2cap_create_channel(l2cap_packet_handler, current_device_addr, PSM_HID_CONTROL, MTU_CONTROL,
                              &hid_control_cid);
         return;
     }
 
-    if (hid_interrupt_cid == 0) {
+    if (!hid_interrupt_ready && hid_interrupt_cid == 0) {
         DS5_LOG("[L2CAP] Open missing HID Interrupt channel\n");
         l2cap_create_channel(l2cap_packet_handler, current_device_addr, PSM_HID_INTERRUPT, MTU_INTERRUPT,
                              &hid_interrupt_cid);
@@ -854,8 +858,9 @@ static void schedule_hid_channel_recovery() {
 }
 
 static void cancel_hid_channel_recovery_if_ready() {
-    if (hid_control_cid != 0 && hid_interrupt_cid != 0) {
+    if (hid_control_ready && hid_interrupt_ready) {
         hid_channel_recovery_pending = false;
+        hid_channel_recovery_attempts = 0;
     }
 }
 
@@ -866,11 +871,24 @@ void bt_connection_recovery_loop() {
     if (static_cast<int32_t>(time_us_32() - hid_channel_recovery_at_us) < 0) {
         return;
     }
-    hid_channel_recovery_pending = false;
-    if (hid_control_cid == 0 || hid_interrupt_cid == 0) {
-        DS5_LOG("[L2CAP] HID channel recovery opening missing channel(s)\n");
-        open_next_hid_channel_if_needed();
+    if (hid_control_ready && hid_interrupt_ready) {
+        hid_channel_recovery_pending = false;
+        hid_channel_recovery_attempts = 0;
+        return;
     }
+    if (hid_channel_recovery_attempts >= HID_CHANNEL_RECOVERY_MAX_ATTEMPTS) {
+        DS5_LOG("[L2CAP] HID channel recovery failed, disconnecting stale ACL\n");
+        hid_channel_recovery_pending = false;
+        hid_channel_recovery_attempts = 0;
+        bt_disconnect();
+        return;
+    }
+
+    hid_channel_recovery_attempts++;
+    DS5_LOG("[L2CAP] HID channel recovery opening missing channel(s), attempt=%u\n",
+            hid_channel_recovery_attempts);
+    open_next_hid_channel_if_needed();
+    schedule_hid_channel_recovery();
 }
 
 int bt_init() {
@@ -1079,11 +1097,14 @@ static void hci_packet_handler(uint8_t packet_type, uint16_t channel, uint8_t *p
             bt_rssi_last_request_us = 0;
             hid_control_cid = 0;
             hid_interrupt_cid = 0;
+            hid_control_ready = false;
+            hid_interrupt_ready = false;
             audio_handle_controller_disconnect();
             feature_data.clear();
             controller_type = ControllerTypeUnknown;
             controller_type_check_pending = false;
             hid_channel_recovery_pending = false;
+            hid_channel_recovery_attempts = 0;
             critical_section_enter_blocking(&queue_lock);
             reset_controller_output_session_locked();
             critical_section_exit(&queue_lock);
@@ -1325,10 +1346,14 @@ static void l2cap_packet_handler(uint8_t packet_type, uint16_t channel, uint8_t 
                 if (psm == PSM_HID_CONTROL) {
                     DS5_LOG("[L2CAP] HID Control opened cid=0x%04X\n", local_cid);
                     hid_control_cid = local_cid;
+                    hid_control_ready = true;
+                    hid_channel_recovery_attempts = 0;
                     cancel_hid_channel_recovery_if_ready();
                 } else if (psm == PSM_HID_INTERRUPT) {
                     DS5_LOG("[L2CAP] HID Interrupt opened cid=0x%04X\n", local_cid);
                     hid_interrupt_cid = local_cid;
+                    hid_interrupt_ready = true;
+                    hid_channel_recovery_attempts = 0;
                     cancel_hid_channel_recovery_if_ready();
                     critical_section_enter_blocking(&queue_lock);
                     reset_controller_output_session_locked();
@@ -1361,7 +1386,10 @@ static void l2cap_packet_handler(uint8_t packet_type, uint16_t channel, uint8_t 
                 const uint16_t psm = l2cap_event_channel_opened_get_psm(packet);
                 hid_control_cid = 0;
                 hid_interrupt_cid = 0;
+                hid_control_ready = false;
+                hid_interrupt_ready = false;
                 hid_channel_recovery_pending = false;
+                hid_channel_recovery_attempts = 0;
                 device_found = false;
                 DS5_LOG("[L2CAP] Open failed psm=0x%04X status=0x%02X\n", psm, status);
                 bt_disconnect();
@@ -1381,15 +1409,19 @@ static void l2cap_packet_handler(uint8_t packet_type, uint16_t channel, uint8_t 
             const uint16_t local_cid = l2cap_event_channel_closed_get_local_cid(packet);
             if (local_cid == hid_control_cid) {
                 hid_control_cid = 0;
+                hid_control_ready = false;
                 DS5_LOG("[L2CAP] HID Control closed cid=0x%04X\n", local_cid);
             } else if (local_cid == hid_interrupt_cid) {
                 hid_interrupt_cid = 0;
+                hid_interrupt_ready = false;
                 DS5_LOG("[L2CAP] HID Interrupt closed cid=0x%04X\n", local_cid);
             } else {
                 DS5_LOG("[L2CAP] Channel closed cid=0x%04X\n", local_cid);
             }
             if (hid_control_cid == 0 && hid_interrupt_cid == 0) {
                 bt_disconnect();
+            } else {
+                schedule_hid_channel_recovery();
             }
             break;
         }
