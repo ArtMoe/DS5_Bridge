@@ -16,6 +16,12 @@
   <a href="https://ko-fi.com/sundaymoments"><img src="assets/readme/support_me_on_kofi_blue.png" width="220" alt="Support me on Ko-fi"></a>
 </p>
 
+<p align="center">
+  <strong>DS5 Bridge 1.0 is live.</strong><br>
+  The first stable release includes the Windows companion app, Pico 2 W firmware,
+  profiles, visual button remapping, microphone support, and headphone-jack audio.
+</p>
+
 DS5 Bridge lets you use a real Sony DualSense or DualSense Edge controller
 wirelessly on a Windows PC through a Raspberry Pi Pico 2 W. The controller pairs
 to the Pico over Bluetooth, and the Pico plugs into your PC over USB.
