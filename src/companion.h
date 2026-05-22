@@ -7,6 +7,9 @@
 #ifndef DS5_TRIGGER_TRACE_ENABLED
 #define DS5_TRIGGER_TRACE_ENABLED 0
 #endif
+#ifndef DS5_FEEDBACK_TRACE_ENABLED
+#define DS5_FEEDBACK_TRACE_ENABLED 0
+#endif
 
 #define COMPANION_HID_INSTANCE 1
 #define KEYBOARD_HID_INSTANCE 2
@@ -19,6 +22,7 @@
 #define COMPANION_REPORT_HOST_AUDIO_STREAM 0x07
 #define COMPANION_REPORT_HOST_AUDIO_STATUS 0x08
 #define COMPANION_REPORT_TRIGGER_TRACE 0x09
+#define COMPANION_REPORT_FEEDBACK_TRACE 0x0A
 #define COMPANION_PAYLOAD_SIZE 63
 
 enum CompanionTriggerTraceStage : uint8_t {
@@ -27,6 +31,19 @@ enum CompanionTriggerTraceStage : uint8_t {
     CompanionTriggerTraceBridgeOut = 3,
     CompanionTriggerTraceBt = 4,
     CompanionTriggerTraceDrop = 5,
+};
+
+enum CompanionFeedbackTraceStage : uint8_t {
+    CompanionFeedbackTraceHost = 1,
+    CompanionFeedbackTraceBridgeIn = 2,
+    CompanionFeedbackTraceBridgeOut = 3,
+    CompanionFeedbackTraceBt = 4,
+    CompanionFeedbackTraceDrop = 5,
+    CompanionFeedbackTraceHostAudioRx = 6,
+    CompanionFeedbackTraceHostAudioSubmit = 7,
+    CompanionFeedbackTraceAudioEnqueue = 8,
+    CompanionFeedbackTraceAudioDrop = 9,
+    CompanionFeedbackTraceLocalAudio = 10,
 };
 
 void companion_init();
@@ -46,6 +63,41 @@ static inline void companion_note_trigger_trace_report(
     uint8_t,
     uint8_t const *,
     uint16_t,
+    uint8_t = 0
+) {
+}
+#endif
+#if DS5_FEEDBACK_TRACE_ENABLED
+void companion_note_feedback_trace_report(
+    uint8_t stage,
+    uint8_t const *report,
+    uint16_t len,
+    uint8_t decision = 0
+);
+void companion_note_feedback_trace_samples(
+    uint8_t stage,
+    uint8_t const *samples,
+    uint16_t len,
+    uint8_t detail0 = 0,
+    uint8_t detail1 = 0,
+    uint8_t detail2 = 0,
+    uint8_t detail3 = 0
+);
+#else
+static inline void companion_note_feedback_trace_report(
+    uint8_t,
+    uint8_t const *,
+    uint16_t,
+    uint8_t = 0
+) {
+}
+static inline void companion_note_feedback_trace_samples(
+    uint8_t,
+    uint8_t const *,
+    uint16_t,
+    uint8_t = 0,
+    uint8_t = 0,
+    uint8_t = 0,
     uint8_t = 0
 ) {
 }

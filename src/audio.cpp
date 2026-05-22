@@ -5,6 +5,9 @@
 
 #include "audio.h"
 #include "bt.h"
+#ifdef ENABLE_COMPANION
+#include "companion.h"
+#endif
 #include "resample.h"
 #include "tusb.h"
 #include "usb.h"
@@ -38,14 +41,19 @@
 #define STATE_FLAG1_LIGHTBAR_CONTROL_ENABLE 0x04
 #define STATE_FLAG1_RELEASE_LEDS 0x08
 #define STATE_FLAG1_PLAYER_INDICATOR_CONTROL_ENABLE 0x10
+#define STATE_FLAG0_COMPATIBLE_VIBRATION 0x01
+#define STATE_FLAG0_HAPTICS_SELECT 0x02
 #define STATE_FLAG0_SPEAKER_VOLUME_ENABLE 0x20
 #define STATE_FLAG0_AUDIO_CONTROL_ENABLE 0x80
 #define STATE_FLAG1_AUDIO_CONTROL2_ENABLE 0x80
 #define STATE_FLAG0_RIGHT_TRIGGER_EFFECT 0x04
 #define STATE_FLAG0_LEFT_TRIGGER_EFFECT 0x08
 #define STATE_FLAG1_TRIGGER_MOTOR_POWER_ENABLE 0x40
+#define STATE_FLAG2_COMPATIBLE_VIBRATION2 0x04
 #define STATE_PAYLOAD_VALID_FLAG0_OFFSET 0
 #define STATE_PAYLOAD_VALID_FLAG1_OFFSET 1
+#define STATE_PAYLOAD_MOTOR_RIGHT_OFFSET 2
+#define STATE_PAYLOAD_MOTOR_LEFT_OFFSET 3
 #define STATE_PAYLOAD_TRIGGER_RIGHT_OFFSET 10
 #define STATE_PAYLOAD_TRIGGER_LEFT_OFFSET 21
 #define STATE_PAYLOAD_TRIGGER_EFFECT_SIZE 11
@@ -385,6 +393,30 @@ static void clear_trigger_state_for_audio_report(uint8_t *data) {
     data[STATE_PAYLOAD_TRIGGER_POWER_OFFSET] = 0;
 }
 
+static void clear_zero_rumble_state_for_audio_report(uint8_t *data) {
+    if (data == nullptr) {
+        return;
+    }
+
+    const uint8_t rumble_flag0 = data[STATE_PAYLOAD_VALID_FLAG0_OFFSET] & static_cast<uint8_t>(
+        STATE_FLAG0_COMPATIBLE_VIBRATION | STATE_FLAG0_HAPTICS_SELECT
+    );
+    const uint8_t rumble_flag2 = data[STATE_PAYLOAD_VALID_FLAG2_OFFSET] & STATE_FLAG2_COMPATIBLE_VIBRATION2;
+    if ((rumble_flag0 | rumble_flag2) == 0) {
+        return;
+    }
+    if ((data[STATE_PAYLOAD_MOTOR_RIGHT_OFFSET] | data[STATE_PAYLOAD_MOTOR_LEFT_OFFSET]) != 0) {
+        return;
+    }
+
+    data[STATE_PAYLOAD_VALID_FLAG0_OFFSET] = static_cast<uint8_t>(
+        data[STATE_PAYLOAD_VALID_FLAG0_OFFSET] & static_cast<uint8_t>(~rumble_flag0)
+    );
+    data[STATE_PAYLOAD_VALID_FLAG2_OFFSET] = static_cast<uint8_t>(
+        data[STATE_PAYLOAD_VALID_FLAG2_OFFSET] & static_cast<uint8_t>(~rumble_flag2)
+    );
+}
+
 void audio_set_state_data(uint8_t const *data, uint8_t len) {
     if (data == nullptr) {
         return;
@@ -394,6 +426,7 @@ void audio_set_state_data(uint8_t const *data, uint8_t len) {
     if (copy_len < sizeof(state_data)) {
         memset(state_data + copy_len, 0, sizeof(state_data) - copy_len);
     }
+    clear_zero_rumble_state_for_audio_report(state_data);
 
     if (
         (state_data[STATE_PAYLOAD_VALID_FLAG0_OFFSET] & STATE_FLAG0_RIGHT_TRIGGER_EFFECT) != 0
@@ -546,6 +579,7 @@ static void copy_routed_state_data(uint8_t *destination) {
     }
 
     memcpy(destination, state_data, sizeof(state_data));
+    clear_zero_rumble_state_for_audio_report(destination);
     if (plug_headset) {
         destination[STATE_PAYLOAD_VALID_FLAG0_OFFSET] = static_cast<uint8_t>(
             (destination[STATE_PAYLOAD_VALID_FLAG0_OFFSET] | STATE_FLAG0_AUDIO_CONTROL_ENABLE)
@@ -1118,6 +1152,17 @@ static bool send_audio_haptics_packet(const int8_t *haptic_buf, bool include_spe
     pkt[76] = 0x12 | (1 << 7);
     pkt[77] = SAMPLE_SIZE;
     memcpy(pkt + 78, haptic_buf, SAMPLE_SIZE);
+#ifdef ENABLE_COMPANION
+    companion_note_feedback_trace_samples(
+        CompanionFeedbackTraceLocalAudio,
+        reinterpret_cast<uint8_t const *>(haptic_buf),
+        SAMPLE_SIZE,
+        include_speaker ? 1 : 0,
+        clamp_debug_u8(queue_get_level(&audio_fifo)),
+        opus_debug_level(),
+        clamp_debug_u8(static_cast<uint32_t>(volume[1] * 100.0f))
+    );
+#endif
 
     if (include_speaker) {
         uint8_t speaker_data[sizeof(opus_buf)]{};
@@ -1439,11 +1484,25 @@ static bool submit_host_audio_report(uint8_t const *report, uint16_t len) {
 
     uint8_t packet[HOST_AUDIO_REPORT_SIZE];
     if (len == HOST_AUDIO_COMPACT_REPORT_SIZE) {
+#ifdef ENABLE_COMPANION
+        companion_note_feedback_trace_samples(
+            CompanionFeedbackTraceHostAudioRx,
+            report,
+            SAMPLE_SIZE,
+            static_cast<uint8_t>(audio_runtime_mode),
+            static_cast<uint8_t>(audio_fallback_reason),
+            clamp_debug_u8(host_stream_generation),
+            clamp_debug_u8(host_frames_dropped)
+        );
+#endif
         build_host_audio_report_header(packet);
         memcpy(packet + 78, report, SAMPLE_SIZE);
         apply_haptics_gain_to_packet(packet + 78);
         memcpy(packet + 144, report + SAMPLE_SIZE, 200);
     } else if (len == HOST_AUDIO_REPORT_SIZE && report[0] == REPORT_ID) {
+#ifdef ENABLE_COMPANION
+        companion_note_feedback_trace_report(CompanionFeedbackTraceHostAudioRx, report, len);
+#endif
         memcpy(packet, report, sizeof(packet));
         copy_routed_state_data(packet + 13);
         packet[142] = (plug_headset ? 0x16 : 0x13) | (1 << 7);
@@ -1454,6 +1513,14 @@ static bool submit_host_audio_report(uint8_t const *report, uint16_t len) {
         return false;
     }
 
+#ifdef ENABLE_COMPANION
+    companion_note_feedback_trace_report(
+        CompanionFeedbackTraceHostAudioSubmit,
+        packet,
+        sizeof(packet),
+        host_startup_drop_frames_remaining
+    );
+#endif
     (void)prime_host_audio_route_if_needed();
     if (host_startup_drop_frames_remaining != 0) {
         host_startup_drop_frames_remaining--;

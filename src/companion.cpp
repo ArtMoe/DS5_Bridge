@@ -57,6 +57,10 @@ constexpr uint32_t kGameTriggerUpdateRecentUs = 2000000;
 constexpr uint8_t kTriggerTraceRecordSize = 38;
 constexpr uint8_t kTriggerTraceRingSize = 96;
 #endif
+#if DS5_FEEDBACK_TRACE_ENABLED
+constexpr uint8_t kFeedbackTraceRecordSize = 24;
+constexpr uint8_t kFeedbackTraceRingSize = 160;
+#endif
 constexpr uint8_t kTriggerEffectSize = 11;
 constexpr uint8_t kTriggerEffectRightOffset = 10;
 constexpr uint8_t kTriggerEffectLeftOffset = 21;
@@ -217,6 +221,35 @@ uint16_t trigger_trace_dropped_count = 0;
 uint8_t trigger_trace_count = 0;
 uint8_t trigger_trace_head = 0;
 #endif
+#if DS5_FEEDBACK_TRACE_ENABLED
+struct FeedbackTraceEvent {
+    uint32_t sequence;
+    uint32_t timestamp_ms;
+    uint8_t stage;
+    uint8_t report_id;
+    uint8_t length;
+    uint8_t sequence_tag;
+    uint8_t decision;
+    uint8_t flag0;
+    uint8_t flag1;
+    uint8_t flag2;
+    uint8_t motor_right;
+    uint8_t motor_left;
+    uint8_t haptic_peak;
+    uint8_t haptic_mean;
+    uint8_t haptic_nonzero;
+    uint8_t detail0;
+    uint8_t detail1;
+    uint8_t detail2;
+    uint8_t detail3;
+};
+FeedbackTraceEvent feedback_trace_ring[kFeedbackTraceRingSize]{};
+uint32_t feedback_trace_next_sequence = 1;
+uint32_t feedback_trace_read_sequence = 1;
+uint16_t feedback_trace_dropped_count = 0;
+uint8_t feedback_trace_count = 0;
+uint8_t feedback_trace_head = 0;
+#endif
 uint8_t mute_button_mode = MuteButtonNormal;
 uint8_t mute_keyboard_usage = kDefaultMuteKeyboardUsage;
 uint8_t mute_keyboard_modifiers = 0;
@@ -362,6 +395,128 @@ void append_trigger_trace_event(TriggerTraceEvent const &event) {
         const uint32_t oldest_sequence = trigger_trace_next_sequence - trigger_trace_count;
         if (trigger_trace_read_sequence < oldest_sequence) {
             trigger_trace_read_sequence = oldest_sequence;
+        }
+    }
+}
+#endif
+
+#if DS5_FEEDBACK_TRACE_ENABLED
+bool feedback_payload_from_report(
+    uint8_t const *report,
+    uint16_t len,
+    uint8_t const *&payload,
+    uint16_t &payload_len,
+    uint8_t &report_id,
+    uint8_t &sequence_tag
+) {
+    payload = nullptr;
+    payload_len = 0;
+    report_id = len > 0 && report != nullptr ? report[0] : 0;
+    sequence_tag = 0;
+    if (report == nullptr || len == 0) {
+        return false;
+    }
+
+    if (report_id == 0x02 && len > 1) {
+        payload = report + 1;
+        payload_len = len - 1;
+        return true;
+    }
+    if (report_id == 0x31 && len > 3 && report[2] == 0x10) {
+        sequence_tag = report[1];
+        payload = report + 3;
+        payload_len = len - 3;
+        return true;
+    }
+    if (report_id == 0x36 && len > 13) {
+        sequence_tag = report[1];
+        payload = report + 13;
+        payload_len = len - 13;
+        return true;
+    }
+    return false;
+}
+
+void fill_feedback_haptic_stats(
+    uint8_t const *samples,
+    uint16_t len,
+    uint8_t &peak,
+    uint8_t &mean,
+    uint8_t &nonzero
+) {
+    peak = 0;
+    mean = 0;
+    nonzero = 0;
+    if (samples == nullptr || len == 0) {
+        return;
+    }
+
+    uint32_t sum = 0;
+    uint16_t nz = 0;
+    for (uint16_t i = 0; i < len; i++) {
+        const int8_t sample = static_cast<int8_t>(samples[i]);
+        const uint8_t magnitude = static_cast<uint8_t>(sample < 0 ? -static_cast<int>(sample) : sample);
+        peak = std::max<uint8_t>(peak, magnitude);
+        sum += magnitude;
+        if (magnitude != 0) {
+            nz++;
+        }
+    }
+    mean = static_cast<uint8_t>(std::min<uint32_t>(255, (sum + (len / 2)) / len));
+    nonzero = static_cast<uint8_t>(std::min<uint16_t>(255, nz));
+}
+
+bool decode_feedback_trace_report(uint8_t const *report, uint16_t len, FeedbackTraceEvent &event) {
+    uint8_t const *payload = nullptr;
+    uint16_t payload_len = 0;
+    uint8_t report_id = 0;
+    uint8_t sequence_tag = 0;
+    if (!feedback_payload_from_report(report, len, payload, payload_len, report_id, sequence_tag)) {
+        return false;
+    }
+
+    event.report_id = report_id;
+    event.length = static_cast<uint8_t>(std::min<uint16_t>(len, 255));
+    event.sequence_tag = sequence_tag;
+    event.flag0 = payload_len > 0 ? payload[0] : 0;
+    event.flag1 = payload_len > 1 ? payload[1] : 0;
+    event.flag2 = payload_len > 38 ? payload[38] : 0;
+    event.motor_right = payload_len > 2 ? payload[2] : 0;
+    event.motor_left = payload_len > 3 ? payload[3] : 0;
+
+    if (report_id == 0x36) {
+        const uint16_t haptic_offset = 78;
+        if (len > haptic_offset) {
+            fill_feedback_haptic_stats(
+                report + haptic_offset,
+                static_cast<uint16_t>(std::min<uint16_t>(64, len - haptic_offset)),
+                event.haptic_peak,
+                event.haptic_mean,
+                event.haptic_nonzero
+            );
+        }
+        return event.haptic_peak != 0 || event.haptic_nonzero != 0;
+    }
+
+    const bool has_rumble = (event.flag0 & 0x03) != 0 || (event.flag2 & 0x04) != 0;
+    if (!has_rumble && event.motor_right == 0 && event.motor_left == 0) {
+        return false;
+    }
+    return true;
+}
+
+void append_feedback_trace_event(FeedbackTraceEvent const &event) {
+    feedback_trace_ring[feedback_trace_head] = event;
+    feedback_trace_head = static_cast<uint8_t>((feedback_trace_head + 1) % kFeedbackTraceRingSize);
+    if (feedback_trace_count < kFeedbackTraceRingSize) {
+        feedback_trace_count++;
+    } else {
+        if (feedback_trace_dropped_count != 0xffff) {
+            feedback_trace_dropped_count++;
+        }
+        const uint32_t oldest_sequence = feedback_trace_next_sequence - feedback_trace_count;
+        if (feedback_trace_read_sequence < oldest_sequence) {
+            feedback_trace_read_sequence = oldest_sequence;
         }
     }
 }
@@ -1122,6 +1277,69 @@ uint16_t build_trigger_trace(uint8_t *buffer, uint16_t reqlen) {
 }
 #endif
 
+#if DS5_FEEDBACK_TRACE_ENABLED
+uint16_t build_feedback_trace(uint8_t *buffer, uint16_t reqlen) {
+    if (reqlen < COMPANION_PAYLOAD_SIZE) {
+        return 0;
+    }
+
+    memset(buffer, 0, COMPANION_PAYLOAD_SIZE);
+    write_magic_and_version(buffer);
+    buffer[7] = kFeedbackTraceRecordSize;
+
+    critical_section_enter_blocking(&companion_report_cs);
+    const uint32_t latest_sequence = feedback_trace_next_sequence > 1 ? feedback_trace_next_sequence - 1 : 0;
+    write_u32(buffer + 8, latest_sequence);
+    write_u16(buffer + 12, feedback_trace_dropped_count);
+
+    const uint8_t max_records = static_cast<uint8_t>((COMPANION_PAYLOAD_SIZE - 14) / kFeedbackTraceRecordSize);
+    const uint32_t oldest_sequence = feedback_trace_next_sequence - feedback_trace_count;
+    if (feedback_trace_read_sequence < oldest_sequence) {
+        feedback_trace_read_sequence = oldest_sequence;
+    }
+    const uint32_t available_records = feedback_trace_next_sequence > feedback_trace_read_sequence
+        ? feedback_trace_next_sequence - feedback_trace_read_sequence
+        : 0;
+    const uint8_t record_count = static_cast<uint8_t>(std::min<uint32_t>(max_records, available_records));
+    buffer[6] = record_count;
+
+    const uint8_t oldest_index = static_cast<uint8_t>(
+        (feedback_trace_head + kFeedbackTraceRingSize - feedback_trace_count) % kFeedbackTraceRingSize
+    );
+    for (uint8_t i = 0; i < record_count; i++) {
+        const uint32_t sequence = feedback_trace_read_sequence + i;
+        const uint8_t ring_index = static_cast<uint8_t>(
+            (oldest_index + (sequence - oldest_sequence)) % kFeedbackTraceRingSize
+        );
+        const FeedbackTraceEvent &event = feedback_trace_ring[ring_index];
+        uint8_t *record = buffer + 14 + (i * kFeedbackTraceRecordSize);
+        write_u16(record, static_cast<uint16_t>(event.sequence & 0xffff));
+        write_u32(record + 2, event.timestamp_ms);
+        record[6] = event.stage;
+        record[7] = event.report_id;
+        record[8] = event.length;
+        record[9] = event.sequence_tag;
+        record[10] = event.decision;
+        record[11] = event.flag0;
+        record[12] = event.flag1;
+        record[13] = event.flag2;
+        record[14] = event.motor_right;
+        record[15] = event.motor_left;
+        record[16] = event.haptic_peak;
+        record[17] = event.haptic_mean;
+        record[18] = event.haptic_nonzero;
+        record[19] = event.detail0;
+        record[20] = event.detail1;
+        record[21] = event.detail2;
+        record[22] = event.detail3;
+    }
+
+    feedback_trace_read_sequence += record_count;
+    critical_section_exit(&companion_report_cs);
+    return COMPANION_PAYLOAD_SIZE;
+}
+#endif
+
 void handle_command(uint8_t const *buffer, uint16_t bufsize) {
     uint8_t command_id = 0;
     uint8_t sequence = 0;
@@ -1769,6 +1987,57 @@ void companion_note_trigger_trace_report(
 }
 #endif
 
+#if DS5_FEEDBACK_TRACE_ENABLED
+void companion_note_feedback_trace_report(
+    uint8_t stage,
+    uint8_t const *report,
+    uint16_t len,
+    uint8_t decision
+) {
+    FeedbackTraceEvent event{};
+    if (!decode_feedback_trace_report(report, len, event)) {
+        return;
+    }
+
+    critical_section_enter_blocking(&companion_report_cs);
+    event.sequence = feedback_trace_next_sequence++;
+    event.timestamp_ms = to_ms_since_boot(get_absolute_time());
+    event.stage = stage;
+    event.decision = decision;
+    append_feedback_trace_event(event);
+    critical_section_exit(&companion_report_cs);
+}
+
+void companion_note_feedback_trace_samples(
+    uint8_t stage,
+    uint8_t const *samples,
+    uint16_t len,
+    uint8_t detail0,
+    uint8_t detail1,
+    uint8_t detail2,
+    uint8_t detail3
+) {
+    FeedbackTraceEvent event{};
+    event.report_id = 0x36;
+    event.length = static_cast<uint8_t>(std::min<uint16_t>(len, 255));
+    event.detail0 = detail0;
+    event.detail1 = detail1;
+    event.detail2 = detail2;
+    event.detail3 = detail3;
+    fill_feedback_haptic_stats(samples, len, event.haptic_peak, event.haptic_mean, event.haptic_nonzero);
+    if (event.haptic_peak == 0 && event.haptic_nonzero == 0) {
+        return;
+    }
+
+    critical_section_enter_blocking(&companion_report_cs);
+    event.sequence = feedback_trace_next_sequence++;
+    event.timestamp_ms = to_ms_since_boot(get_absolute_time());
+    event.stage = stage;
+    append_feedback_trace_event(event);
+    critical_section_exit(&companion_report_cs);
+}
+#endif
+
 bool companion_apply_trigger_effect_intensity(uint8_t *payload, uint16_t len) {
     if (payload == nullptr) {
         return false;
@@ -1879,6 +2148,10 @@ uint16_t companion_get_report(uint8_t report_id, hid_report_type_t report_type, 
 #if DS5_TRIGGER_TRACE_ENABLED
         case COMPANION_REPORT_TRIGGER_TRACE:
             return build_trigger_trace(buffer, reqlen);
+#endif
+#if DS5_FEEDBACK_TRACE_ENABLED
+        case COMPANION_REPORT_FEEDBACK_TRACE:
+            return build_feedback_trace(buffer, reqlen);
 #endif
         default:
             return 0;

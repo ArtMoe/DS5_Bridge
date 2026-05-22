@@ -91,6 +91,8 @@ export interface BridgeDiagnostics {
   audioDebugStats: AudioDebugStatsPayload | null;
   triggerTraceLines: string[];
   triggerTraceDroppedCount: number;
+  feedbackTraceLines: string[];
+  feedbackTraceDroppedCount: number;
   hostAudioStatus: HostAudioStatusPayload | null;
 }
 

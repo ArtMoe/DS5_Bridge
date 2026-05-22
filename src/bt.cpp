@@ -1526,6 +1526,12 @@ static void l2cap_packet_handler(uint8_t packet_type, uint16_t channel, uint8_t 
                     static_cast<uint16_t>(next_packet.data.size() - 1),
                     next_packet.reason
                 );
+                companion_note_feedback_trace_report(
+                    CompanionFeedbackTraceBt,
+                    next_packet.data.data() + 1,
+                    static_cast<uint16_t>(next_packet.data.size() - 1),
+                    next_packet.reason
+                );
 #endif
             }
             if (has_more) {
@@ -1993,6 +1999,37 @@ static bool output_report_has_feedback_state_flags(uint8_t const *data, uint16_t
     return ((flag0 & feedback_mask0) | (flag1 & feedback_mask1) | (flag2 & feedback_mask2)) != 0;
 }
 
+static bool strip_redundant_zero_rumble_during_audio(uint8_t *data, uint16_t len) {
+    if (!audio_output_route_protected() || classic_rumble_output_active) {
+        return false;
+    }
+    if (data == nullptr || len < 3 + DS_OUTPUT_REPORT_COMMON_SIZE) {
+        return false;
+    }
+    if (data[0] != DS_OUTPUT_REPORT_BT || data[2] != DS_OUTPUT_TAG) {
+        return false;
+    }
+
+    uint8_t *payload = data + 3;
+    const uint8_t flag0 = payload[OUTPUT_PAYLOAD_VALID_FLAG0_OFFSET];
+    const uint8_t flag2 = payload[OUTPUT_PAYLOAD_VALID_FLAG2_OFFSET];
+    const uint8_t rumble_flag0 = flag0 & (
+        DS_OUTPUT_VALID_FLAG0_COMPATIBLE_VIBRATION
+        | DS_OUTPUT_VALID_FLAG0_HAPTICS_SELECT
+    );
+    const uint8_t rumble_flag2 = flag2 & DS_OUTPUT_VALID_FLAG2_COMPATIBLE_VIBRATION2;
+    if ((rumble_flag0 | rumble_flag2) == 0) {
+        return false;
+    }
+    if ((payload[OUTPUT_PAYLOAD_MOTOR_RIGHT_OFFSET] | payload[OUTPUT_PAYLOAD_MOTOR_LEFT_OFFSET]) != 0) {
+        return false;
+    }
+
+    payload[OUTPUT_PAYLOAD_VALID_FLAG0_OFFSET] = static_cast<uint8_t>(flag0 & ~rumble_flag0);
+    payload[OUTPUT_PAYLOAD_VALID_FLAG2_OFFSET] = static_cast<uint8_t>(flag2 & ~rumble_flag2);
+    return true;
+}
+
 static bool split_state_from_mixed_output(uint8_t *data, uint16_t len) {
     if (data == nullptr || len < 3 + DS_OUTPUT_REPORT_COMMON_SIZE) {
         return false;
@@ -2097,6 +2134,7 @@ static bool split_state_from_mixed_output(uint8_t *data, uint16_t len) {
 
 #ifdef ENABLE_COMPANION
     companion_note_trigger_trace_report(CompanionTriggerTraceBridgeOut, state_data, sizeof(state_data), OutputReasonStateOnly);
+    companion_note_feedback_trace_report(CompanionFeedbackTraceBridgeOut, state_data, sizeof(state_data), OutputReasonStateOnly);
 #endif
     return enqueue_feedback_state_output(state_data, sizeof(state_data), OutputReasonStateOnly);
 }
@@ -2243,6 +2281,7 @@ static bool classified_critical_output_is_duplicate(uint8_t *data, uint16_t len)
         output_counters.normal_0x31_duplicate_drop_count++;
 #ifdef ENABLE_COMPANION
         companion_note_trigger_trace_report(CompanionTriggerTraceDrop, data, len, OutputReasonCriticalDirect);
+        companion_note_feedback_trace_report(CompanionFeedbackTraceDrop, data, len, OutputReasonCriticalDirect);
 #endif
         return true;
     }
@@ -2276,11 +2315,14 @@ bool bt_write_classified_output(uint8_t *data, uint16_t len) {
     normalize_classic_rumble_stop_if_needed(data, len);
 #ifdef ENABLE_COMPANION
     companion_note_trigger_trace_report(CompanionTriggerTraceBridgeIn, data, len, 0);
+    companion_note_feedback_trace_report(CompanionFeedbackTraceBridgeIn, data, len, 0);
 #endif
+    strip_redundant_zero_rumble_during_audio(data, len);
     split_state_from_mixed_output(data, len);
     const uint8_t reason = classify_output_report(data, len);
 #ifdef ENABLE_COMPANION
     companion_note_trigger_trace_report(CompanionTriggerTraceBridgeOut, data, len, reason);
+    companion_note_feedback_trace_report(CompanionFeedbackTraceBridgeOut, data, len, reason);
 #endif
     if (reason == OutputReasonStateNoop) {
         return true;
@@ -2310,6 +2352,16 @@ bool bt_write_audio_stream(uint8_t *data, uint16_t len) {
     critical_section_enter_blocking(&queue_lock);
     should_request_send = !output_pending_locked();
     while (audio_queue.size() >= AUDIO_SEND_QUEUE_MAX_DEPTH) {
+#ifdef ENABLE_COMPANION
+        if (!audio_queue.front().data.empty()) {
+            companion_note_feedback_trace_report(
+                CompanionFeedbackTraceAudioDrop,
+                audio_queue.front().data.data() + 1,
+                static_cast<uint16_t>(audio_queue.front().data.size() - 1),
+                OutputReasonAudioStream
+            );
+        }
+#endif
         audio_queue.pop();
         output_counters.audio_drop_oldest_count++;
     }
@@ -2317,6 +2369,14 @@ bool bt_write_audio_stream(uint8_t *data, uint16_t len) {
     output_counters.audio_0x36_enqueued_count++;
     update_queue_depth_counters_locked();
     critical_section_exit(&queue_lock);
+#ifdef ENABLE_COMPANION
+    companion_note_feedback_trace_report(
+        CompanionFeedbackTraceAudioEnqueue,
+        data,
+        len,
+        OutputReasonAudioStream
+    );
+#endif
     request_can_send_if_needed(should_request_send);
     return true;
 }

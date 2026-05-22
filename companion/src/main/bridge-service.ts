@@ -24,6 +24,7 @@ import {
   parseAudioStatsReport,
   parseHostAudioStatusReport,
   parseTriggerTraceReport,
+  parseFeedbackTraceReport,
   parseStatusReport,
   HOST_AUDIO_PACKET_TYPE,
   SHORTCUT_EVENT,
@@ -38,6 +39,7 @@ import type {
   RemapButtonId,
   HostAudioStatusPayload,
   TriggerTraceEventPayload,
+  FeedbackTraceEventPayload,
   BridgeStatusPayload,
   MuteButtonMode,
   MuteKeyboardBehavior,
@@ -70,6 +72,7 @@ const HOST_AUDIO_STATUS_READ_INTERVAL_MS = 500;
 const HOST_AUDIO_HELPER_STATUS_READ_INTERVAL_MS = 5000;
 const AUDIO_DEBUG_READ_INTERVAL_MS = 500;
 const TRIGGER_TRACE_READ_INTERVAL_MS = 250;
+const FEEDBACK_TRACE_READ_INTERVAL_MS = 250;
 const AUDIO_DEBUG_DIAGNOSTICS_ENABLED = false;
 const HOST_AUDIO_MAX_QUEUED_FRAMES = 2;
 const HOST_AUDIO_STOP_FADE_MS = 40;
@@ -78,6 +81,8 @@ const FIRMWARE_UPDATE_REQUIRED_MESSAGE = 'Firmware 1.0.1 update required';
 const AUDIO_DEBUG_LOG_LINE_LIMIT = 300;
 const TRIGGER_TRACE_LOG_LINE_LIMIT = 300;
 const TRIGGER_TRACE_MAX_READS_PER_POLL = 32;
+const FEEDBACK_TRACE_LOG_LINE_LIMIT = 300;
+const FEEDBACK_TRACE_MAX_READS_PER_POLL = 32;
 const STARTUP_REAPPLY_MIN_SETTLE_MS = 0;
 const STARTUP_REAPPLY_RETRY_DELAYS_MS = [250, 650, 1300] as const;
 const MIN_IDLE_DISCONNECT_TIMEOUT_MINUTES = 1;
@@ -97,6 +102,8 @@ type BridgeDiagnosticsWithoutAudioLog = Omit<
   | 'audioDebugStats'
   | 'triggerTraceLines'
   | 'triggerTraceDroppedCount'
+  | 'feedbackTraceLines'
+  | 'feedbackTraceDroppedCount'
   | 'hostAudioStatus'
 >;
 
@@ -195,6 +202,8 @@ function emptyDiagnostics(rawDevices: HidDeviceSummary[]): BridgeDiagnostics {
     audioDebugStats: null,
     triggerTraceLines: [],
     triggerTraceDroppedCount: 0,
+    feedbackTraceLines: [],
+    feedbackTraceDroppedCount: 0,
     hostAudioStatus: null
   };
 }
@@ -510,6 +519,49 @@ function formatTriggerTraceEvent(event: TriggerTraceEventPayload): string {
   ].join(' ');
 }
 
+function feedbackTraceStageLabel(stage: number): string {
+  switch (stage) {
+    case 1:
+      return 'HOST';
+    case 2:
+      return 'BRIDGE-IN';
+    case 3:
+      return 'BRIDGE-OUT';
+    case 4:
+      return 'BT';
+    case 5:
+      return 'DROP';
+    case 6:
+      return 'HOST-AUDIO-RX';
+    case 7:
+      return 'HOST-AUDIO-SUBMIT';
+    case 8:
+      return 'AUDIO-ENQUEUE';
+    case 9:
+      return 'AUDIO-DROP';
+    case 10:
+      return 'LOCAL-AUDIO';
+    default:
+      return `stage-${stage}`;
+  }
+}
+
+function formatFeedbackTraceEvent(event: FeedbackTraceEventPayload): string {
+  return [
+    `#${event.sequence}`,
+    `t=${event.timeMs}ms`,
+    feedbackTraceStageLabel(event.stage),
+    `report=${hexByte(event.reportId)}`,
+    `len=${limitedByte(event.length)}`,
+    `seq=${hexByte(event.sequenceTag)}`,
+    `flags=${hexByte(event.flag0)}/${hexByte(event.flag1)}/${hexByte(event.flag2)}`,
+    `motors=R${hexByte(event.motorRight)} L${hexByte(event.motorLeft)}`,
+    `haptic=peak${event.hapticPeak} mean${event.hapticMean} nz${event.hapticNonZero}`,
+    `decision=${outputDecisionLabel(event.decision)}`,
+    `detail=${event.detail0}/${event.detail1}/${event.detail2}/${event.detail3}`
+  ].join(' ');
+}
+
 function delay(milliseconds: number): Promise<void> {
   return new Promise((resolve) => {
     setTimeout(resolve, milliseconds);
@@ -670,6 +722,9 @@ export class BridgeService extends EventEmitter {
   private triggerTraceLines: string[] = [];
   private triggerTraceDroppedCount = 0;
   private triggerTraceSupported: boolean | null = null;
+  private feedbackTraceLines: string[] = [];
+  private feedbackTraceDroppedCount = 0;
+  private feedbackTraceSupported: boolean | null = null;
   private hostAudioStatus: HostAudioStatusPayload | null = null;
   private lastAudioStatsSignature: string | null = null;
   private hostAudioCommandActive = false;
@@ -683,6 +738,7 @@ export class BridgeService extends EventEmitter {
   private lastHostAudioStatusReadAt = 0;
   private lastAudioDebugReadAt = 0;
   private lastTriggerTraceReadAt = 0;
+  private lastFeedbackTraceReadAt = 0;
   private lastHostAudioActivePollAt = 0;
   private controllerPowerSavingActive: boolean | null = null;
   private previousControllerConnected: boolean | null = null;
@@ -819,6 +875,8 @@ export class BridgeService extends EventEmitter {
       audioDebugStats: this.audioDebugStats ? { ...this.audioDebugStats } : null,
       triggerTraceLines: [...this.triggerTraceLines],
       triggerTraceDroppedCount: this.triggerTraceDroppedCount,
+      feedbackTraceLines: [...this.feedbackTraceLines],
+      feedbackTraceDroppedCount: this.feedbackTraceDroppedCount,
       hostAudioStatus: this.hostAudioStatus ? { ...this.hostAudioStatus } : null
     };
   }
@@ -934,6 +992,51 @@ export class BridgeService extends EventEmitter {
       this.appendTriggerTraceLines(lines);
     } catch {
       this.triggerTraceSupported = false;
+    }
+  }
+
+  private appendFeedbackTraceLines(lines: string[]): void {
+    if (lines.length === 0) {
+      return;
+    }
+
+    this.feedbackTraceLines.push(...lines);
+    if (this.feedbackTraceLines.length > FEEDBACK_TRACE_LOG_LINE_LIMIT) {
+      this.feedbackTraceLines = this.feedbackTraceLines.slice(-FEEDBACK_TRACE_LOG_LINE_LIMIT);
+    }
+    this.snapshot = {
+      ...this.snapshot,
+      diagnostics: this.withAudioDebugDiagnostics(this.snapshot.diagnostics)
+    };
+  }
+
+  private readFeedbackTraceThrottled(force = false): void {
+    if (!this.device) {
+      return;
+    }
+    if (this.feedbackTraceSupported === false) {
+      return;
+    }
+    const now = Date.now();
+    if (!force && now - this.lastFeedbackTraceReadAt < FEEDBACK_TRACE_READ_INTERVAL_MS) {
+      return;
+    }
+    this.lastFeedbackTraceReadAt = now;
+
+    try {
+      const lines: string[] = [];
+      for (let readIndex = 0; readIndex < FEEDBACK_TRACE_MAX_READS_PER_POLL; readIndex += 1) {
+        const trace = parseFeedbackTraceReport(this.device.getFeatureReport(REPORT_ID.FEEDBACK_TRACE, REPORT_LENGTH));
+        this.feedbackTraceSupported = true;
+        this.feedbackTraceDroppedCount = trace.droppedCount;
+        if (trace.events.length === 0) {
+          break;
+        }
+        lines.push(...trace.events.map(formatFeedbackTraceEvent));
+      }
+      this.appendFeedbackTraceLines(lines);
+    } catch {
+      this.feedbackTraceSupported = false;
     }
   }
 
@@ -1898,6 +2001,7 @@ export class BridgeService extends EventEmitter {
     }
 
     this.readTriggerTraceThrottled();
+    this.readFeedbackTraceThrottled();
     if (hostAudioActive) {
       this.readAudioDebugThrottled();
     }
@@ -2219,6 +2323,7 @@ export class BridgeService extends EventEmitter {
     this.hostAudioCommandActive = false;
     this.hostAudioStatus = null;
     this.triggerTraceSupported = null;
+    this.feedbackTraceSupported = null;
     this.controllerPowerSavingActive = null;
     this.hostAudioReportQueue = [];
     this.hostAudioWritePumpActive = false;
@@ -2273,6 +2378,9 @@ export class BridgeService extends EventEmitter {
         triggerTraceLineCount: this.snapshot.diagnostics.triggerTraceLines.length,
         triggerTraceTail: this.snapshot.diagnostics.triggerTraceLines.at(-1) ?? null,
         triggerTraceDroppedCount: this.snapshot.diagnostics.triggerTraceDroppedCount,
+        feedbackTraceLineCount: this.snapshot.diagnostics.feedbackTraceLines.length,
+        feedbackTraceTail: this.snapshot.diagnostics.feedbackTraceLines.at(-1) ?? null,
+        feedbackTraceDroppedCount: this.snapshot.diagnostics.feedbackTraceDroppedCount,
         hostAudioStatus: this.snapshot.diagnostics.hostAudioStatus
       }
     });

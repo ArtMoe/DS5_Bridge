@@ -34,11 +34,17 @@ extern uint8_t usb_hid_polling_interval_ms_value;
 #ifndef DS5_TRIGGER_TRACE_ENABLED
 #define DS5_TRIGGER_TRACE_ENABLED 0
 #endif
+#ifndef DS5_FEEDBACK_TRACE_ENABLED
+#define DS5_FEEDBACK_TRACE_ENABLED 0
+#endif
 
 #define CONFIG_TOTAL_LEN_STANDARD 0x00E3
 #define CONFIG_TOTAL_LEN_COMPANION 0x011C
 #define COMPANION_HID_REPORT_DESC_LEN \
-    (0x0040 + (DS5_TRIGGER_TRACE_ENABLED ? 0x0008 : 0) + (DS5_AUDIO_DEBUG_ENABLED ? 0x0010 : 0))
+    (0x0040 \
+        + (DS5_TRIGGER_TRACE_ENABLED ? 0x0008 : 0) \
+        + (DS5_FEEDBACK_TRACE_ENABLED ? 0x0008 : 0) \
+        + (DS5_AUDIO_DEBUG_ENABLED ? 0x0010 : 0))
 #define KEYBOARD_HID_REPORT_DESC_LEN 0x002D
 
 //--------------------------------------------------------------------+
@@ -618,6 +624,12 @@ uint8_t const desc_hid_report_companion[] = {
 #if DS5_TRIGGER_TRACE_ENABLED
     0x85, 0x09, //   Report ID (9)
     0x09, 0x09, //   Usage (Trigger Trace)
+    0x95, 0x3F, //   Report Count (63)
+    0xB1, 0x02, //   Feature (Data,Var,Abs)
+#endif
+#if DS5_FEEDBACK_TRACE_ENABLED
+    0x85, 0x0A, //   Report ID (10)
+    0x09, 0x0A, //   Usage (Feedback Trace)
     0x95, 0x3F, //   Report Count (63)
     0xB1, 0x02, //   Feature (Data,Var,Abs)
 #endif
