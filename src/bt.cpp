@@ -363,11 +363,27 @@ bool bt_apply_classic_rumble_gain_payload(uint8_t *payload, uint16_t len) {
         return false;
     }
 
+    // Match hid-playstation's modern compatible-rumble mode: haptics select
+    // plus v2 compatible vibration, not legacy and v2 at the same time.
+    if (len > OUTPUT_PAYLOAD_VALID_FLAG2_OFFSET) {
+        payload[OUTPUT_PAYLOAD_VALID_FLAG0_OFFSET] = static_cast<uint8_t>(
+            (flag0 | DS_OUTPUT_VALID_FLAG0_HAPTICS_SELECT)
+            & static_cast<uint8_t>(~DS_OUTPUT_VALID_FLAG0_COMPATIBLE_VIBRATION)
+        );
+        payload[OUTPUT_PAYLOAD_VALID_FLAG2_OFFSET] = static_cast<uint8_t>(
+            flag2 | DS_OUTPUT_VALID_FLAG2_COMPATIBLE_VIBRATION2
+        );
+    } else {
+        payload[OUTPUT_PAYLOAD_VALID_FLAG0_OFFSET] = flag0 | DS_OUTPUT_VALID_FLAG0_HAPTICS_SELECT;
+    }
+
     const uint8_t right = payload[OUTPUT_PAYLOAD_MOTOR_RIGHT_OFFSET];
     const uint8_t left = payload[OUTPUT_PAYLOAD_MOTOR_LEFT_OFFSET];
     payload[OUTPUT_PAYLOAD_MOTOR_RIGHT_OFFSET] = scale_classic_rumble_byte(right);
     payload[OUTPUT_PAYLOAD_MOTOR_LEFT_OFFSET] = scale_classic_rumble_byte(left);
-    return payload[OUTPUT_PAYLOAD_MOTOR_RIGHT_OFFSET] != right
+    return payload[OUTPUT_PAYLOAD_VALID_FLAG0_OFFSET] != flag0
+        || (len > OUTPUT_PAYLOAD_VALID_FLAG2_OFFSET && payload[OUTPUT_PAYLOAD_VALID_FLAG2_OFFSET] != flag2)
+        || payload[OUTPUT_PAYLOAD_MOTOR_RIGHT_OFFSET] != right
         || payload[OUTPUT_PAYLOAD_MOTOR_LEFT_OFFSET] != left;
 }
 
@@ -389,8 +405,7 @@ void bt_set_classic_rumble_output(uint8_t right, uint8_t left) {
 
     uint8_t report[DS_OUTPUT_REPORT_BT_SIZE];
     init_state_report(report);
-    report[3 + OUTPUT_PAYLOAD_VALID_FLAG0_OFFSET] = DS_OUTPUT_VALID_FLAG0_COMPATIBLE_VIBRATION
-        | DS_OUTPUT_VALID_FLAG0_HAPTICS_SELECT;
+    report[3 + OUTPUT_PAYLOAD_VALID_FLAG0_OFFSET] = DS_OUTPUT_VALID_FLAG0_HAPTICS_SELECT;
     report[3 + OUTPUT_PAYLOAD_VALID_FLAG2_OFFSET] = DS_OUTPUT_VALID_FLAG2_COMPATIBLE_VIBRATION2;
     report[3 + OUTPUT_PAYLOAD_MOTOR_RIGHT_OFFSET] = scale_classic_rumble_byte(right);
     report[3 + OUTPUT_PAYLOAD_MOTOR_LEFT_OFFSET] = scale_classic_rumble_byte(left);
