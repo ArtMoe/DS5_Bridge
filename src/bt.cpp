@@ -247,6 +247,7 @@ static bool speaker_output_enabled = false;
 static bool speaker_output_headset_route = false;
 static uint8_t companion_mic_volume_percent = 100;
 static uint8_t classic_rumble_gain_percent = 100;
+static bool classic_rumble_output_active = false;
 
 static void update_max_u32(uint32_t &current, uint32_t candidate) {
     if (candidate > current) {
@@ -279,6 +280,7 @@ static void clear_output_queues_locked() {
     output_counters.consecutive_state_sends = 0;
     output_counters.consecutive_critical_sends = 0;
     last_classified_critical_report_valid = false;
+    classic_rumble_output_active = false;
     memset(last_classified_critical_report, 0, sizeof(last_classified_critical_report));
 }
 
@@ -401,6 +403,57 @@ static bool apply_classic_rumble_gain(uint8_t *data, uint16_t len) {
     return bt_apply_classic_rumble_gain_payload(data + 3, len - 3);
 }
 
+static bool output_report_payload_all_zero(uint8_t const *data, uint16_t len) {
+    if (data == nullptr || len < 3 + DS_OUTPUT_REPORT_COMMON_SIZE) {
+        return false;
+    }
+    if (data[0] != DS_OUTPUT_REPORT_BT || data[2] != DS_OUTPUT_TAG) {
+        return false;
+    }
+
+    uint8_t const *payload = data + 3;
+    for (uint16_t i = 0; i < len - 3; i++) {
+        if (payload[i] != 0) {
+            return false;
+        }
+    }
+    return true;
+}
+
+static bool normalize_classic_rumble_stop_if_needed(uint8_t *data, uint16_t len) {
+    if (!classic_rumble_output_active || !output_report_payload_all_zero(data, len)) {
+        return false;
+    }
+
+    uint8_t *payload = data + 3;
+    payload[OUTPUT_PAYLOAD_VALID_FLAG0_OFFSET] = DS_OUTPUT_VALID_FLAG0_HAPTICS_SELECT;
+    payload[OUTPUT_PAYLOAD_VALID_FLAG2_OFFSET] = DS_OUTPUT_VALID_FLAG2_COMPATIBLE_VIBRATION2;
+    return true;
+}
+
+static void remember_classic_rumble_state_from_output(uint8_t const *data, uint16_t len) {
+    if (data == nullptr || len < 3 + DS_OUTPUT_REPORT_COMMON_SIZE) {
+        return;
+    }
+    if (data[0] != DS_OUTPUT_REPORT_BT || data[2] != DS_OUTPUT_TAG) {
+        return;
+    }
+
+    uint8_t const *payload = data + 3;
+    const uint8_t flag0 = payload[OUTPUT_PAYLOAD_VALID_FLAG0_OFFSET];
+    const uint8_t flag2 = payload[OUTPUT_PAYLOAD_VALID_FLAG2_OFFSET];
+    const bool has_rumble = (flag0 & (
+        DS_OUTPUT_VALID_FLAG0_COMPATIBLE_VIBRATION
+        | DS_OUTPUT_VALID_FLAG0_HAPTICS_SELECT
+    )) != 0 || (flag2 & DS_OUTPUT_VALID_FLAG2_COMPATIBLE_VIBRATION2) != 0;
+    if (!has_rumble) {
+        return;
+    }
+
+    classic_rumble_output_active =
+        (payload[OUTPUT_PAYLOAD_MOTOR_RIGHT_OFFSET] | payload[OUTPUT_PAYLOAD_MOTOR_LEFT_OFFSET]) != 0;
+}
+
 void bt_set_classic_rumble_output(uint8_t right, uint8_t left) {
     if (hid_interrupt_cid == 0) {
         return;
@@ -412,6 +465,10 @@ void bt_set_classic_rumble_output(uint8_t right, uint8_t left) {
     report[3 + OUTPUT_PAYLOAD_VALID_FLAG2_OFFSET] = DS_OUTPUT_VALID_FLAG2_COMPATIBLE_VIBRATION2;
     report[3 + OUTPUT_PAYLOAD_MOTOR_RIGHT_OFFSET] = scale_classic_rumble_byte(right);
     report[3 + OUTPUT_PAYLOAD_MOTOR_LEFT_OFFSET] = scale_classic_rumble_byte(left);
+    classic_rumble_output_active = (
+        report[3 + OUTPUT_PAYLOAD_MOTOR_RIGHT_OFFSET]
+        | report[3 + OUTPUT_PAYLOAD_MOTOR_LEFT_OFFSET]
+    ) != 0;
     bt_write(report, sizeof(report));
 }
 
@@ -2179,11 +2236,13 @@ static bool classified_critical_output_is_duplicate(uint8_t *data, uint16_t len)
 
 static bool enqueue_feedback_state_output(uint8_t *data, uint16_t len, uint8_t reason) {
     if (output_report_has_feedback_state_flags(data, len) && !audio_recent()) {
+        remember_classic_rumble_state_from_output(data, len);
         if (classified_critical_output_is_duplicate(data, len)) {
             return true;
         }
         return enqueue_critical_output(data, len, reason);
     }
+    remember_classic_rumble_state_from_output(data, len);
     return enqueue_state_output(data, len, reason);
 }
 
@@ -2196,6 +2255,7 @@ bool bt_write_classified_output(uint8_t *data, uint16_t len) {
     bt_sanitize_host_speaker_amp_ownership(data, len);
     bt_sanitize_host_mic_ownership(data, len);
     apply_classic_rumble_gain(data, len);
+    normalize_classic_rumble_stop_if_needed(data, len);
     split_state_from_mixed_output(data, len);
     const uint8_t reason = classify_output_report(data, len);
     if (reason == OutputReasonStateNoop) {
