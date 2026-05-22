@@ -15,6 +15,7 @@
     "package:win": "npm run build && node scripts/package-win.mjs",
     "installer:win": "npm run build && electron-builder --win nsis --x64",
     "test": "vitest run src",
+    "analyze:host-audio": "node scripts/analyze-host-audio-capture.mjs",
     "visual:smoke": "npm run build && node scripts/visual-smoke.mjs",
     "layout:check": "npm run build && node scripts/layout-check.mjs"
   },

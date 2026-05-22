@@ -32,6 +32,7 @@ static class AudioConstants
     public const int WasapiBufferMilliseconds = 10;
     public const int MaxQueuedReports = 8;
     public const int MaxBufferedReports = 4;
+    public const int DefaultFrameDumpFrameLimit = 18000;
     public const byte HostAudioStreamReportId = 0x07;
     public const byte FastFrameFragmentType = 0x08;
     public const int FastPayloadBytes = 57;
@@ -96,6 +97,7 @@ sealed class HostAudioHelper : IDisposable
     private readonly byte[] hidReport = new byte[AudioConstants.HidReportBytes];
     private readonly byte[] report = new byte[AudioConstants.CompactFrameBytes];
     private readonly BlockingCollection<byte[]> reportQueue = new(AudioConstants.MaxQueuedReports);
+    private readonly FrameDumpWriter? frameDump;
     private readonly ManualResetEventSlim stopped = new(false);
     private readonly Task writerTask;
     private readonly Task? diagnosticsTask;
@@ -144,6 +146,7 @@ sealed class HostAudioHelper : IDisposable
             Complexity = 0,
             UseVBR = false
         };
+        frameDump = FrameDumpWriter.TryCreate(options.FrameDumpPath, options.FrameDumpFrameLimit);
         writerTask = Task.Run(WriteReports);
         diagnosticsTask = AudioConstants.DiagnosticsEnabled ? Task.Run(WriteDiagnostics) : null;
     }
@@ -193,6 +196,7 @@ sealed class HostAudioHelper : IDisposable
         capture?.Dispose();
         micCapture?.Dispose();
         hidStream?.Dispose();
+        frameDump?.Dispose();
         enumerator?.Dispose();
         reportQueue.CompleteAdding();
         try
@@ -635,6 +639,7 @@ sealed class HostAudioHelper : IDisposable
         BuildReport(report, opusScratch, encodedBytes, hasHaptics, hapticLeftBlock, hapticRightBlock);
         var frame = new byte[AudioConstants.CompactFrameBytes];
         Buffer.BlockCopy(report, 0, frame, 0, frame.Length);
+        frameDump?.WriteFrame(frame);
         while (reportQueue.Count >= AudioConstants.MaxBufferedReports)
         {
             if (!reportQueue.TryTake(out _))
@@ -1053,6 +1058,95 @@ sealed class HostAudioHelper : IDisposable
     }
 }
 
+sealed class FrameDumpWriter : IDisposable
+{
+    private readonly string path;
+    private readonly int frameLimit;
+    private readonly FileStream stream;
+    private readonly byte[] prefix = new byte[2];
+    private int framesWritten;
+    private bool limitLogged;
+    private bool disabled;
+
+    private FrameDumpWriter(string path, int frameLimit, FileStream stream)
+    {
+        this.path = path;
+        this.frameLimit = frameLimit;
+        this.stream = stream;
+    }
+
+    public static FrameDumpWriter? TryCreate(string? path, int frameLimit)
+    {
+        if (string.IsNullOrWhiteSpace(path))
+        {
+            return null;
+        }
+
+        try
+        {
+            var fullPath = Path.GetFullPath(path);
+            var directory = Path.GetDirectoryName(fullPath);
+            if (!string.IsNullOrWhiteSpace(directory))
+            {
+                Directory.CreateDirectory(directory);
+            }
+
+            var normalizedFrameLimit = Math.Max(0, frameLimit);
+            var stream = new FileStream(fullPath, FileMode.Create, FileAccess.Write, FileShare.Read, 65536);
+            Console.Error.WriteLine($"status: frame-dump-started path='{fullPath}' limit={normalizedFrameLimit}");
+            return new FrameDumpWriter(fullPath, normalizedFrameLimit, stream);
+        }
+        catch (Exception error)
+        {
+            Console.Error.WriteLine($"status: frame-dump-unavailable path='{path}' error='{error.Message}'");
+            return null;
+        }
+    }
+
+    public void WriteFrame(byte[] frame)
+    {
+        if (disabled)
+        {
+            return;
+        }
+        if (frameLimit > 0 && framesWritten >= frameLimit)
+        {
+            if (!limitLogged)
+            {
+                limitLogged = true;
+                Console.Error.WriteLine($"status: frame-dump-limit-reached path='{path}' frames={framesWritten}");
+            }
+            return;
+        }
+
+        try
+        {
+            BinaryPrimitives.WriteUInt16LittleEndian(prefix, (ushort)frame.Length);
+            stream.Write(prefix);
+            stream.Write(frame, 0, frame.Length);
+            framesWritten++;
+        }
+        catch (Exception error)
+        {
+            disabled = true;
+            Console.Error.WriteLine($"status: frame-dump-disabled path='{path}' frames={framesWritten} error='{error.Message}'");
+        }
+    }
+
+    public void Dispose()
+    {
+        try
+        {
+            stream.Flush();
+            stream.Dispose();
+        }
+        catch
+        {
+        }
+        Console.Error.WriteLine($"status: frame-dump-stopped path='{path}' frames={framesWritten}");
+    }
+}
+
 sealed record HelperOptions(
     string? DeviceName,
     string? HidPath,
@@ -1061,7 +1155,9 @@ sealed record HelperOptions(
     string? MicDeviceName,
     int SpeakerVolumePercent,
     string? TestAudioPath,
-    bool PlayTestTone)
+    bool PlayTestTone,
+    string? FrameDumpPath,
+    int FrameDumpFrameLimit)
 {
     public static HelperOptions Parse(string[] args)
     {
@@ -1070,6 +1166,10 @@ sealed record HelperOptions(
         string? micDeviceName = null;
         var speakerVolumePercent = 100;
         string? testAudioPath = null;
+        string? frameDumpPath = Environment.GetEnvironmentVariable("DS5_BRIDGE_HOST_AUDIO_FRAME_DUMP");
+        var frameDumpFrameLimit = ParseFrameDumpLimit(
+            Environment.GetEnvironmentVariable("DS5_BRIDGE_HOST_AUDIO_FRAME_DUMP_LIMIT")
+        );
         var listDevices = false;
         var micKeepaliveOnly = false;
         var playTestTone = false;
@@ -1096,6 +1196,12 @@ sealed record HelperOptions(
                 case "--test-audio-path" when index + 1 < args.Length:
                     testAudioPath = args[++index];
                     break;
+                case "--frame-dump-path" when index + 1 < args.Length:
+                    frameDumpPath = args[++index];
+                    break;
+                case "--frame-dump-limit" when index + 1 < args.Length:
+                    frameDumpFrameLimit = ParseFrameDumpLimit(args[++index]);
+                    break;
                 case "--list-devices":
                     listDevices = true;
                     break;
@@ -1116,6 +1222,17 @@ sealed record HelperOptions(
             micDeviceName,
             speakerVolumePercent,
             testAudioPath,
-            playTestTone);
+            playTestTone,
+            frameDumpPath,
+            frameDumpFrameLimit);
+    }
+
+    private static int ParseFrameDumpLimit(string? value)
+    {
+        if (int.TryParse(value, out var parsed))
+        {
+            return Math.Max(0, parsed);
+        }
+        return AudioConstants.DefaultFrameDumpFrameLimit;
     }
 }
