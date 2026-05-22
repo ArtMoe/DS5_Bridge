@@ -24,6 +24,7 @@
 #define SAMPLE_SIZE       64
 #define REPORT_SIZE       398
 #define REPORT_ID         0x36
+#define AUDIO_SECTION_ENABLE_MASK 0b11111110
 #define DEFAULT_HAPTICS_BUFFER_LENGTH 64
 #define MIN_HAPTICS_BUFFER_LENGTH 64
 #define MAX_HAPTICS_BUFFER_LENGTH 255
@@ -1083,7 +1084,7 @@ static bool send_audio_haptics_packet(const int8_t *haptic_buf, bool include_spe
     reportSeqCounter = (reportSeqCounter + 1) & 0x0F;
     pkt[2] = 0x11 | (1 << 7);
     pkt[3] = 7;
-    pkt[4] = 0b11111111;
+    pkt[4] = AUDIO_SECTION_ENABLE_MASK;
     const uint8_t buffer_length = haptics_buffer_length;
     pkt[5] = buffer_length;
     pkt[6] = buffer_length;
@@ -1169,7 +1170,7 @@ static void build_host_audio_report_header(uint8_t *packet) {
     packet[0] = REPORT_ID;
     packet[2] = 0x11 | (1 << 7);
     packet[3] = 7;
-    packet[4] = 0b11111111;
+    packet[4] = AUDIO_SECTION_ENABLE_MASK;
     const uint8_t buffer_length = haptics_buffer_length;
     packet[5] = buffer_length;
     packet[6] = buffer_length;

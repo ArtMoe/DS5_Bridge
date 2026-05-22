@@ -711,8 +711,8 @@ sealed class HostAudioHelper : IDisposable
 
         for (var bucket = 0; bucket < AudioConstants.HapticBuckets; bucket++)
         {
-            var left = hasHaptics ? AverageHapticBucket(hapticLeftBlock, bucket) : 0;
-            var right = hasHaptics ? AverageHapticBucket(hapticRightBlock, bucket) : 0;
+            var left = hasHaptics ? ResampleHapticBucket(hapticLeftBlock, bucket) : 0;
+            var right = hasHaptics ? ResampleHapticBucket(hapticRightBlock, bucket) : 0;
             destination[bucket * 2] = FloatToInt8(left);
             destination[bucket * 2 + 1] = FloatToInt8(right);
         }
@@ -720,16 +720,13 @@ sealed class HostAudioHelper : IDisposable
         Buffer.BlockCopy(opus, 0, destination, 64, Math.Min(encodedBytes, AudioConstants.OpusPacketBytes));
     }
 
-    private static float AverageHapticBucket(float[] samples, int bucket)
+    private static float ResampleHapticBucket(float[] samples, int bucket)
     {
-        var start = bucket * AudioConstants.PicoInputBlockFrames / AudioConstants.HapticBuckets;
-        var end = (bucket + 1) * AudioConstants.PicoInputBlockFrames / AudioConstants.HapticBuckets;
-        var sum = 0.0;
-        for (var index = start; index < end; index++)
-        {
-            sum += samples[index];
-        }
-        return (float)(sum / Math.Max(1, end - start));
+        var sourcePosition = ((bucket + 0.5) * AudioConstants.PicoInputBlockFrames / AudioConstants.HapticBuckets) - 0.5;
+        var sourceIndex = Math.Clamp((int)Math.Floor(sourcePosition), 0, AudioConstants.PicoInputBlockFrames - 1);
+        var nextIndex = Math.Min(sourceIndex + 1, AudioConstants.PicoInputBlockFrames - 1);
+        var fraction = sourcePosition - sourceIndex;
+        return Lerp(samples[sourceIndex], samples[nextIndex], fraction);
     }
 
     private static float Lerp(float a, float b, double amount)
