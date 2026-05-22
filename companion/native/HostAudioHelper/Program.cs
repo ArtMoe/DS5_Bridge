@@ -26,6 +26,9 @@ static class AudioConstants
     public const int OpusPacketBytes = 200;
     public const int CompactFrameBytes = 264;
     public const int HapticBuckets = 32;
+    public const int HapticDecimationFactor = PicoInputBlockFrames / HapticBuckets;
+    public const int HapticFilterRadius = 64;
+    public const double HapticLowPassCutoff = 0.028125;
     public const int WasapiBufferMilliseconds = 10;
     public const int MaxQueuedReports = 8;
     public const int MaxBufferedReports = 4;
@@ -96,6 +99,7 @@ sealed class HostAudioHelper : IDisposable
     private readonly ManualResetEventSlim stopped = new(false);
     private readonly Task writerTask;
     private readonly Task? diagnosticsTask;
+    private static readonly double[] HapticDownsampleKernel = BuildHapticDownsampleKernel();
     private MMDeviceEnumerator? enumerator;
     private MMDevice? renderDevice;
     private WasapiLoopbackCapture? capture;
@@ -711,8 +715,8 @@ sealed class HostAudioHelper : IDisposable
 
         for (var bucket = 0; bucket < AudioConstants.HapticBuckets; bucket++)
         {
-            var left = hasHaptics ? ResampleHapticBucket(hapticLeftBlock, bucket) : 0;
-            var right = hasHaptics ? ResampleHapticBucket(hapticRightBlock, bucket) : 0;
+            var left = hasHaptics ? FilterHapticBucket(hapticLeftBlock, bucket) : 0;
+            var right = hasHaptics ? FilterHapticBucket(hapticRightBlock, bucket) : 0;
             destination[bucket * 2] = FloatToInt8(left);
             destination[bucket * 2 + 1] = FloatToInt8(right);
         }
@@ -720,13 +724,66 @@ sealed class HostAudioHelper : IDisposable
         Buffer.BlockCopy(opus, 0, destination, 64, Math.Min(encodedBytes, AudioConstants.OpusPacketBytes));
     }
 
-    private static float ResampleHapticBucket(float[] samples, int bucket)
+    private static float FilterHapticBucket(float[] samples, int bucket)
     {
-        var sourcePosition = ((bucket + 0.5) * AudioConstants.PicoInputBlockFrames / AudioConstants.HapticBuckets) - 0.5;
-        var sourceIndex = Math.Clamp((int)Math.Floor(sourcePosition), 0, AudioConstants.PicoInputBlockFrames - 1);
-        var nextIndex = Math.Min(sourceIndex + 1, AudioConstants.PicoInputBlockFrames - 1);
-        var fraction = sourcePosition - sourceIndex;
-        return Lerp(samples[sourceIndex], samples[nextIndex], fraction);
+        var sourcePosition = ((bucket + 0.5) * AudioConstants.HapticDecimationFactor) - 0.5;
+        var firstSample = (int)Math.Floor(sourcePosition) - AudioConstants.HapticFilterRadius;
+        var value = 0.0;
+        for (var tap = 0; tap < HapticDownsampleKernel.Length; tap++)
+        {
+            var sampleIndex = Math.Clamp(firstSample + tap, 0, AudioConstants.PicoInputBlockFrames - 1);
+            value += samples[sampleIndex] * HapticDownsampleKernel[tap];
+        }
+        return (float)value;
+    }
+
+    private static double[] BuildHapticDownsampleKernel()
+    {
+        var taps = (AudioConstants.HapticFilterRadius * 2) + 1;
+        var kernel = new double[taps];
+        var sum = 0.0;
+        const double halfSamplePhase = 0.5;
+
+        for (var tap = 0; tap < taps; tap++)
+        {
+            var distance = tap - AudioConstants.HapticFilterRadius - halfSamplePhase;
+            var ideal = SincLowPass(distance, AudioConstants.HapticLowPassCutoff);
+            var window = BlackmanWindow(tap, taps);
+            kernel[tap] = ideal * window;
+            sum += kernel[tap];
+        }
+
+        if (Math.Abs(sum) < double.Epsilon)
+        {
+            return kernel;
+        }
+
+        for (var tap = 0; tap < taps; tap++)
+        {
+            kernel[tap] /= sum;
+        }
+        return kernel;
+    }
+
+    private static double SincLowPass(double sampleOffset, double cutoffCyclesPerSample)
+    {
+        if (Math.Abs(sampleOffset) < double.Epsilon)
+        {
+            return 2.0 * cutoffCyclesPerSample;
+        }
+
+        return Math.Sin(2.0 * Math.PI * cutoffCyclesPerSample * sampleOffset) / (Math.PI * sampleOffset);
+    }
+
+    private static double BlackmanWindow(int tap, int tapCount)
+    {
+        if (tapCount <= 1)
+        {
+            return 1.0;
+        }
+
+        var phase = 2.0 * Math.PI * tap / (tapCount - 1);
+        return 0.42 - (0.5 * Math.Cos(phase)) + (0.08 * Math.Cos(2.0 * phase));
     }
 
     private static float Lerp(float a, float b, double amount)
