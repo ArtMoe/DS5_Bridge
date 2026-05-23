@@ -1999,6 +1999,29 @@ static bool output_report_has_feedback_state_flags(uint8_t const *data, uint16_t
     return ((flag0 & feedback_mask0) | (flag1 & feedback_mask1) | (flag2 & feedback_mask2)) != 0;
 }
 
+static bool output_report_is_classic_rumble_transition(uint8_t const *data, uint16_t len) {
+    if (data == nullptr || len < 3 + DS_OUTPUT_REPORT_COMMON_SIZE) {
+        return false;
+    }
+    if (data[0] != DS_OUTPUT_REPORT_BT || data[2] != DS_OUTPUT_TAG) {
+        return false;
+    }
+
+    uint8_t const *payload = data + 3;
+    const uint8_t flag0 = payload[OUTPUT_PAYLOAD_VALID_FLAG0_OFFSET];
+    const uint8_t flag2 = payload[OUTPUT_PAYLOAD_VALID_FLAG2_OFFSET];
+    const bool has_rumble = (flag0 & (
+        DS_OUTPUT_VALID_FLAG0_COMPATIBLE_VIBRATION
+        | DS_OUTPUT_VALID_FLAG0_HAPTICS_SELECT
+    )) != 0 || (flag2 & DS_OUTPUT_VALID_FLAG2_COMPATIBLE_VIBRATION2) != 0;
+    if (!has_rumble) {
+        return false;
+    }
+
+    return classic_rumble_output_active
+        || (payload[OUTPUT_PAYLOAD_MOTOR_RIGHT_OFFSET] | payload[OUTPUT_PAYLOAD_MOTOR_LEFT_OFFSET]) != 0;
+}
+
 static bool strip_redundant_zero_rumble_during_audio(uint8_t *data, uint16_t len) {
     if (!audio_output_route_protected() || classic_rumble_output_active) {
         return false;
@@ -2292,7 +2315,10 @@ static bool classified_critical_output_is_duplicate(uint8_t *data, uint16_t len)
 }
 
 static bool enqueue_feedback_state_output(uint8_t *data, uint16_t len, uint8_t reason) {
-    if (output_report_has_feedback_state_flags(data, len) && !audio_recent()) {
+    if (
+        output_report_is_classic_rumble_transition(data, len)
+        || (output_report_has_feedback_state_flags(data, len) && !audio_recent())
+    ) {
         remember_classic_rumble_state_from_output(data, len);
         if (classified_critical_output_is_duplicate(data, len)) {
             return true;
