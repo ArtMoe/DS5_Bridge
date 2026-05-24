@@ -89,6 +89,10 @@ export interface BridgeDiagnostics {
   audioDebugLogLines: string[];
   audioDebugDroppedCount: number;
   audioDebugStats: AudioDebugStatsPayload | null;
+  triggerTraceLines: string[];
+  triggerTraceDroppedCount: number;
+  feedbackTraceLines: string[];
+  feedbackTraceDroppedCount: number;
   hostAudioStatus: HostAudioStatusPayload | null;
 }
 

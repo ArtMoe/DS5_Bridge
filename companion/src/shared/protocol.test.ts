@@ -23,6 +23,8 @@ import {
   parseAudioDebugReport,
   parseAudioStatsReport,
   parseAckReport,
+  parseFeedbackTraceReport,
+  parseTriggerTraceReport,
   parseStatusReport
 } from './protocol';
 
@@ -179,6 +181,112 @@ describe('companion protocol', () => {
       audio0x36EnqueuedCount: 12,
       audio0x36SentCount: 13,
       criticalStarvingAudioCount: 14
+    });
+  });
+
+  it('parses a trigger trace report', () => {
+    const report = baseReport(REPORT_ID.TRIGGER_TRACE);
+    report[7] = 1;
+    report[8] = 38;
+    writeU32(report, 9, 260);
+    writeU16(report, 13, 3);
+
+    const offset = 15;
+    writeU16(report, offset, 260);
+    writeU32(report, offset + 2, 12345);
+    report[offset + 6] = 4;
+    report[offset + 7] = 0x31;
+    report[offset + 8] = 78;
+    report[offset + 9] = 0xa0;
+    report[offset + 10] = 0x0c;
+    report[offset + 11] = 0x04;
+    report[offset + 12] = 0x00;
+    report[offset + 13] = 0x05;
+    report[offset + 14] = 1;
+    for (let index = 0; index < 11; index += 1) {
+      report[offset + 15 + index] = index + 1;
+      report[offset + 26 + index] = index + 21;
+    }
+
+    const trace = parseTriggerTraceReport(report);
+    expect(trace).toEqual({
+      latestSequence: 260,
+      droppedCount: 3,
+      events: [
+        {
+          sequence: 260,
+          timeMs: 12345,
+          stage: 4,
+          reportId: 0x31,
+          length: 78,
+          sequenceTag: 0xa0,
+          flag0: 0x0c,
+          flag1: 0x04,
+          flag2: 0x00,
+          motorPower: 0x05,
+          decision: 1,
+          rightTrigger: [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11],
+          leftTrigger: [21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31]
+        }
+      ]
+    });
+  });
+
+  it('parses a feedback trace report', () => {
+    const report = baseReport(REPORT_ID.FEEDBACK_TRACE);
+    report[7] = 1;
+    report[8] = 24;
+    writeU32(report, 9, 33);
+    writeU16(report, 13, 2);
+
+    const offset = 15;
+    writeU16(report, offset, 33);
+    writeU32(report, offset + 2, 4444);
+    report[offset + 6] = 4;
+    report[offset + 7] = 0x36;
+    report[offset + 8] = 255;
+    report[offset + 9] = 0xa0;
+    report[offset + 10] = 2;
+    report[offset + 11] = 0xa2;
+    report[offset + 12] = 0x80;
+    report[offset + 13] = 0x04;
+    report[offset + 14] = 0x12;
+    report[offset + 15] = 0x34;
+    report[offset + 16] = 96;
+    report[offset + 17] = 22;
+    report[offset + 18] = 40;
+    report[offset + 19] = 1;
+    report[offset + 20] = 2;
+    report[offset + 21] = 3;
+    report[offset + 22] = 4;
+
+    const trace = parseFeedbackTraceReport(report);
+    expect(trace).toEqual({
+      latestSequence: 33,
+      droppedCount: 2,
+      events: [
+        {
+          sequence: 33,
+          timeMs: 4444,
+          stage: 4,
+          reportId: 0x36,
+          length: 255,
+          sequenceTag: 0xa0,
+          decision: 2,
+          flag0: 0xa2,
+          flag1: 0x80,
+          flag2: 0x04,
+          motorRight: 0x12,
+          motorLeft: 0x34,
+          hapticPeak: 96,
+          hapticMean: 22,
+          hapticNonZero: 40,
+          detail0: 1,
+          detail1: 2,
+          detail2: 3,
+          detail3: 4
+        }
+      ]
     });
   });
 
