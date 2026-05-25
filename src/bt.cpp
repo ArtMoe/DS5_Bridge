@@ -768,10 +768,14 @@ void bt_set_microphone_state(uint8_t volume_percent, bool muted) {
     uint8_t report[DS_OUTPUT_REPORT_BT_SIZE];
     init_state_report(report);
     report[3 + OUTPUT_PAYLOAD_VALID_FLAG0_OFFSET] = DS_OUTPUT_VALID_FLAG0_MIC_VOLUME_ENABLE;
-    report[3 + OUTPUT_PAYLOAD_VALID_FLAG1_OFFSET] = DS_OUTPUT_VALID_FLAG1_POWER_SAVE_CONTROL_ENABLE;
+    report[3 + OUTPUT_PAYLOAD_VALID_FLAG1_OFFSET] = static_cast<uint8_t>(
+        DS_OUTPUT_VALID_FLAG1_MIC_MUTE_LED_CONTROL_ENABLE
+        | DS_OUTPUT_VALID_FLAG1_POWER_SAVE_CONTROL_ENABLE
+    );
     report[3 + OUTPUT_PAYLOAD_MIC_VOLUME_OFFSET] = muted
         ? 0
         : static_cast<uint8_t>((companion_mic_volume_percent * DS_OUTPUT_MIC_VOLUME_MAX + 50) / 100);
+    report[3 + OUTPUT_PAYLOAD_MUTE_LED_OFFSET] = 0;
     report[3 + OUTPUT_PAYLOAD_POWER_SAVE_CONTROL_OFFSET] = muted ? DS_OUTPUT_POWER_SAVE_CONTROL_MIC_MUTE : 0;
     bt_write(report, sizeof(report));
 }

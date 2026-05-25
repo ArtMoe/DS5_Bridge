@@ -34,6 +34,31 @@ void clamp_speaker_volume() {
     }
 }
 
+void clear_mic_control(uint8_t *payload) {
+    if (payload == nullptr) {
+        return;
+    }
+
+    payload[kValidFlag0Offset] = static_cast<uint8_t>(
+        payload[kValidFlag0Offset] & static_cast<uint8_t>(~kFlag0MicVolumeEnable)
+    );
+    payload[kValidFlag1Offset] = static_cast<uint8_t>(
+        payload[kValidFlag1Offset] & static_cast<uint8_t>(~kFlag1MicMuteLedControlEnable)
+    );
+    if ((payload[kValidFlag1Offset] & kFlag1PowerSaveControlEnable) != 0) {
+        payload[kPowerSaveControlOffset] = static_cast<uint8_t>(
+            payload[kPowerSaveControlOffset] & static_cast<uint8_t>(~kPowerSaveControlMicMute)
+        );
+        if (payload[kPowerSaveControlOffset] == 0) {
+            payload[kValidFlag1Offset] = static_cast<uint8_t>(
+                payload[kValidFlag1Offset] & static_cast<uint8_t>(~kFlag1PowerSaveControlEnable)
+            );
+        }
+    }
+    payload[kMicVolumeOffset] = 0;
+    payload[kMuteLedOffset] = 0;
+}
+
 uint8_t scale_lightbar_channel(uint8_t channel, uint8_t brightness_percent) {
     return scaled_percent(channel, brightness_percent);
 }
@@ -95,6 +120,7 @@ void controller_output_state_apply_host_payload(uint8_t const *data, uint8_t len
         std::memset(state_data + copy_len, 0, sizeof(state_data) - copy_len);
     }
     controller_output_state_clear_zero_rumble(state_data);
+    clear_mic_control(state_data);
 
     if (
         (state_data[kValidFlag0Offset] & kFlag0RightTriggerEffect) != 0
@@ -187,6 +213,7 @@ void controller_output_state_copy_audio_snapshot(uint8_t *destination, bool head
 
     std::memcpy(destination, state_data, sizeof(state_data));
     controller_output_state_clear_zero_rumble(destination);
+    clear_mic_control(destination);
     if (headset_plugged) {
         destination[kValidFlag0Offset] = static_cast<uint8_t>(
             (destination[kValidFlag0Offset] | kFlag0AudioControlEnable)

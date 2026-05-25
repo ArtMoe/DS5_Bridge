@@ -325,7 +325,7 @@ uint8_t descriptor_configuration[] = {
     0x01, // bInterfaceClass: Audio (0x01)
     0x01, // bInterfaceSubClass: Audio Control (0x01)
     0x00, // bInterfaceProtocol: 0x00
-    0x00, // iInterface: 0
+    0x04, // iInterface: DS5 Bridge Raw PCM
 
     // Class-specific AC Interface Header Descriptor
     0x09, // bLength: 9
@@ -346,7 +346,7 @@ uint8_t descriptor_configuration[] = {
     0x02, // bNrChannels: 2
     0x03, 0x00, // wChannelConfig: L/R Front (0x0003)
     0x00, // iChannelNames: 0
-    0x00, // iTerminal: 0
+    0x04, // iTerminal: DS5 Bridge Raw PCM
 
     // Feature Unit Descriptor (Unit ID 8 <- from Terminal 7)
     0x0A, // bLength: 10
@@ -379,7 +379,7 @@ uint8_t descriptor_configuration[] = {
     0x01, // bInterfaceClass: Audio
     0x02, // bInterfaceSubClass: Audio Streaming
     0x00, // bInterfaceProtocol
-    0x00, // iInterface
+    0x04, // iInterface: DS5 Bridge Raw PCM
 
     // --- INTERFACE DESCRIPTOR (4.1): Audio Streaming IN (Raw PCM Return - Alternate 1) ---
     0x09, // bLength
@@ -390,7 +390,7 @@ uint8_t descriptor_configuration[] = {
     0x01, // bInterfaceClass: Audio
     0x02, // bInterfaceSubClass: Audio Streaming
     0x00, // bInterfaceProtocol
-    0x00, // iInterface
+    0x04, // iInterface: DS5 Bridge Raw PCM
 
     // AS General Descriptor (for Interface 4.1)
     0x07, // bLength: 7
@@ -1031,6 +1031,7 @@ enum {
     STRID_MANUFACTURER,
     STRID_PRODUCT,
     STRID_SERIAL,
+    STRID_RAW_PCM,
 };
 
 // array of pointer to string descriptors
@@ -1044,6 +1045,7 @@ static char const *string_desc_arr[] =
     "DualSense Wireless Controller", // 2: Product
 #endif
     NULL, // 3: Serials will use unique ID if possible
+    "DS5 Bridge Raw PCM", // 4: Raw PCM Line endpoint
 };
 
 static uint16_t _desc_str[60 + 1];
