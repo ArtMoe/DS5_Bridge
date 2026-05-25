@@ -58,6 +58,7 @@ import type {
 } from '../shared/types';
 import {
   HostAudioEngine,
+  HostAudioStartError,
   MicKeepaliveEngine,
   playHostAudioTestTone,
   type HostAudioFramePayload
@@ -70,6 +71,7 @@ const HOST_AUDIO_HEARTBEAT_MS = 250;
 const HOST_AUDIO_ACTIVE_POLL_INTERVAL_MS = 5000;
 const HOST_AUDIO_STATUS_READ_INTERVAL_MS = 500;
 const HOST_AUDIO_HELPER_STATUS_READ_INTERVAL_MS = 5000;
+const HOST_AUDIO_CAPTURE_RETRY_MS = 5000;
 const AUDIO_DEBUG_READ_INTERVAL_MS = 500;
 const TRIGGER_TRACE_READ_INTERVAL_MS = 250;
 const FEEDBACK_TRACE_READ_INTERVAL_MS = 250;
@@ -802,6 +804,7 @@ export class BridgeService extends EventEmitter {
   private hostAudioFrameCount = 0;
   private hostAudioChunkWriteCount = 0;
   private hostAudioFrameDropCount = 0;
+  private hostAudioCaptureRetryAt = 0;
   private lastHostAudioStageLogAt = 0;
   private lastHostAudioStatusReadAt = 0;
   private lastAudioDebugReadAt = 0;
@@ -1332,6 +1335,7 @@ export class BridgeService extends EventEmitter {
 
   async setHostEncodedAudioEnabled(enabled: boolean): Promise<BridgeSnapshot> {
     const settings = this.settingsStore.get();
+    this.clearHostAudioCaptureBackoff();
     if (enabled) {
       await this.applyMicSettings(settings, false);
       await this.startHostAudioSession(true);
@@ -1890,6 +1894,72 @@ export class BridgeService extends EventEmitter {
     ]);
   }
 
+  private async ensureHostAudioCapture(speakerVolumePercent: number): Promise<boolean> {
+    if (this.isHostAudioCaptureRetryPending()) {
+      await this.hostAudioEngine.stop();
+      return false;
+    }
+
+    try {
+      await this.hostAudioEngine.start(this.devicePath, speakerVolumePercent);
+      this.clearHostAudioCaptureBackoff();
+      return true;
+    } catch (error) {
+      if (!(error instanceof HostAudioStartError)) {
+        throw error;
+      }
+
+      await this.handleHostAudioCaptureStartFailure(error);
+      return false;
+    }
+  }
+
+  private isHostAudioCaptureRetryPending(): boolean {
+    return this.hostAudioCaptureRetryAt > Date.now();
+  }
+
+  private clearHostAudioCaptureBackoff(): void {
+    this.hostAudioCaptureRetryAt = 0;
+  }
+
+  private async handleHostAudioCaptureStartFailure(error: HostAudioStartError): Promise<void> {
+    this.hostAudioCaptureRetryAt = Date.now() + HOST_AUDIO_CAPTURE_RETRY_MS;
+    await this.deactivateHostAudioFirmwareAfterCaptureFailure();
+
+    const retrySeconds = Math.round(HOST_AUDIO_CAPTURE_RETRY_MS / 1000);
+    const message = error.reason === 'device-in-use'
+      ? `DualSense audio endpoint is in exclusive use. Host Encoding will retry in ${retrySeconds}s; disable Host Encoding for games that require exclusive DualSense audio.`
+      : `${error.message} Host Encoding will retry in ${retrySeconds}s.`;
+    this.appendAudioDebugLines([
+      `[HostBridge] host audio capture unavailable reason=${error.reason} retryInMs=${HOST_AUDIO_CAPTURE_RETRY_MS}`
+    ]);
+    this.snapshot = {
+      ...this.snapshot,
+      diagnostics: {
+        ...this.snapshot.diagnostics,
+        lastError: message,
+        lastPollAt: Date.now()
+      }
+    };
+    this.emitSnapshot();
+  }
+
+  private async deactivateHostAudioFirmwareAfterCaptureFailure(): Promise<void> {
+    const wasHostAudioActive = this.hostAudioCommandActive;
+    this.clearHostAudioReportQueue();
+    this.hostAudioCommandActive = false;
+    await this.hostAudioEngine.stop();
+
+    if (!this.device || !wasHostAudioActive) {
+      return;
+    }
+
+    await this.sendCommand(COMMAND_ID.STOP_HOST_AUDIO, 0, { throwOnCommandError: false });
+    await this.sendCommand(COMMAND_ID.SET_HOST_AUDIO_ENABLED, 0, { throwOnCommandError: false });
+    await this.sendCommand(COMMAND_ID.SET_DUPLEX_ENABLED, 0, { throwOnCommandError: false });
+    this.readHostAudioStatus();
+  }
+
   private async updateHostAudioEngine(): Promise<void> {
     const settings = this.settingsStore.get();
     if (!settings.hostEncodedAudioEnabled || !this.device || !this.hostAudioCommandActive) {
@@ -1897,13 +1967,18 @@ export class BridgeService extends EventEmitter {
       await this.hostAudioEngine.stop();
       return;
     }
-    await this.hostAudioEngine.start(this.devicePath, settings.speakerEnabled ? settings.speakerVolumePercent : 0);
+    await this.ensureHostAudioCapture(settings.speakerEnabled ? settings.speakerVolumePercent : 0);
   }
 
   private async startHostAudioSession(expectSettingsRevisionChange: boolean): Promise<void> {
     const settings = this.settingsStore.get();
     const speakerVolumePercent = settings.speakerEnabled ? settings.speakerVolumePercent : 0;
     const duplexEnabled = settings.duplexMicEnabled;
+    const captureReady = await this.ensureHostAudioCapture(speakerVolumePercent);
+    if (!captureReady) {
+      this.readHostAudioStatus();
+      return;
+    }
     if (this.hostAudioCommandActive) {
       await this.hostAudioEngine.start(this.devicePath, speakerVolumePercent);
       this.readHostAudioStatus();
@@ -1921,7 +1996,6 @@ export class BridgeService extends EventEmitter {
       duplexEnabled ? HOST_AUDIO_PACKET_TYPE.SET_DUPLEX_ENABLED : HOST_AUDIO_PACKET_TYPE.SET_DUPLEX_DISABLED
     );
     this.sendHostAudioStreamReport(HOST_AUDIO_PACKET_TYPE.HEARTBEAT);
-    await this.hostAudioEngine.start(this.devicePath, speakerVolumePercent);
     this.readHostAudioStatus();
   }
 
@@ -1981,16 +2055,27 @@ export class BridgeService extends EventEmitter {
         this.hostAudioCommandActive = false;
         return;
       }
+      if (this.isHostAudioCaptureRetryPending()) {
+        if (this.hostAudioCommandActive) {
+          await this.deactivateHostAudioFirmwareAfterCaptureFailure();
+        }
+        this.readHostAudioStatusThrottled(!this.hostAudioCommandActive);
+        return;
+      }
       const helperWasActive = this.hostAudioEngine.isActive();
       if (!helperWasActive) {
         this.readHostAudioStatusThrottled(!this.hostAudioCommandActive);
       }
       if (!this.hostAudioCommandActive || (!helperWasActive && this.hostAudioStatus?.streamActive === false)) {
+        const speakerVolumePercent = settings.speakerEnabled ? settings.speakerVolumePercent : 0;
+        const captureReady = await this.ensureHostAudioCapture(speakerVolumePercent);
+        if (!captureReady) {
+          return;
+        }
         await this.sendCommand(COMMAND_ID.SET_HOST_AUDIO_ENABLED, 1, { throwOnCommandError: false });
         this.hostAudioCommandActive = true;
         await this.sendCommand(COMMAND_ID.START_HOST_AUDIO, 0, { throwOnCommandError: false });
         await this.sendCommand(COMMAND_ID.SET_DUPLEX_ENABLED, settings.duplexMicEnabled ? 1 : 0, { throwOnCommandError: false });
-        await this.updateHostAudioEngine();
         this.readHostAudioStatus();
       } else {
         await this.updateHostAudioEngine();
@@ -2243,7 +2328,7 @@ export class BridgeService extends EventEmitter {
     try {
       const settings = this.settingsStore.get();
       await this.applyCurrentSettings(settings, this.reapplyAttempt === 0);
-      if (settings.hostEncodedAudioEnabled && this.hostAudioCommandActive) {
+      if (!settings.hostEncodedAudioEnabled || this.hostAudioCommandActive) {
         this.reappliedSessionKey = this.sessionKey;
       } else if (this.reapplyAttempt >= STARTUP_REAPPLY_RETRY_DELAYS_MS.length) {
         this.reappliedSessionKey = this.sessionKey;
@@ -2409,6 +2494,7 @@ export class BridgeService extends EventEmitter {
     this.hostAudioFrameCount = 0;
     this.hostAudioChunkWriteCount = 0;
     this.hostAudioFrameDropCount = 0;
+    this.clearHostAudioCaptureBackoff();
     void this.hostAudioEngine.stop();
     void this.micKeepaliveEngine.stop();
   }

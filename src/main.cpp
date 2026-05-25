@@ -6,6 +6,8 @@
 #include <cstdio>
 #include "bsp/board_api.h"
 #include "bt.h"
+#include "controller_packet_compositor.h"
+#include "controller_output_policy.h"
 #include "utils.h"
 #include "resample.h"
 #include "audio.h"
@@ -250,10 +252,7 @@ void tud_hid_set_report_cb(uint8_t itf, uint8_t report_id, hid_report_type_t rep
                 companion_note_feedback_trace_report(CompanionFeedbackTraceHost, buffer, bufsize);
 #endif
                 uint8_t outputData[78]{};
-                outputData[0] = 0x31;
-                outputData[1] = reportSeqCounter << 4;
-                reportSeqCounter = (reportSeqCounter + 1) & 0x0F;
-                outputData[2] = 0x10;
+                controller_packet_init_bt_output_report(outputData, reportSeqCounter);
                 uint16_t payloadLen = 0;
                 if (bufsize > 1) {
                     payloadLen = bufsize - 1;
@@ -263,19 +262,19 @@ void tud_hid_set_report_cb(uint8_t itf, uint8_t report_id, hid_report_type_t rep
                     memcpy(outputData + 3, buffer + 1, payloadLen);
                 }
                 const bool lightbarOverride = companion_lightbar_override_active();
-                const bool hostClearsLeds = dualsense_host_output_clears_leds(outputData + 3, payloadLen);
+                const bool hostClearsLeds = controller_output_policy_host_output_clears_leds(outputData + 3, payloadLen);
 #ifdef ENABLE_COMPANION
                 const bool triggerIntensityChanged = companion_apply_trigger_effect_intensity(outputData + 3, payloadLen);
                 uint8_t companionOutput[sizeof(outputData)]{};
                 memcpy(companionOutput, outputData, sizeof(companionOutput));
-                bool sanitizedHostOutput = triggerIntensityChanged || sanitize_dualsense_host_output_payload(
+                bool sanitizedHostOutput = triggerIntensityChanged || controller_output_policy_sanitize_host_lightbar_payload(
                     companionOutput + 3,
                     payloadLen,
                     lightbarOverride
                 );
-                sanitizedHostOutput = bt_sanitize_host_speaker_amp_ownership(companionOutput, sizeof(companionOutput))
+                sanitizedHostOutput = controller_output_policy_sanitize_host_speaker_amp_report(companionOutput, sizeof(companionOutput))
                     || sanitizedHostOutput;
-                sanitizedHostOutput = bt_sanitize_host_mic_ownership(companionOutput, sizeof(companionOutput))
+                sanitizedHostOutput = controller_output_policy_sanitize_host_mic_report(companionOutput, sizeof(companionOutput))
                     || sanitizedHostOutput;
                 if (sanitizedHostOutput) {
                     uint8_t forwardedHostReport[48]{};
@@ -294,29 +293,29 @@ void tud_hid_set_report_cb(uint8_t itf, uint8_t report_id, hid_report_type_t rep
                 }
                 // 0x36 carries an audio-state snapshot while speaker streaming. Strip
                 // game LEDs only when the companion lightbar override is explicitly on.
-                sanitize_dualsense_host_output_payload(
+                controller_output_policy_sanitize_host_lightbar_payload(
                     audioStateData,
                     payloadLen,
                     lightbarOverride
                 );
-                bt_sanitize_host_speaker_amp_ownership_payload(audioStateData, payloadLen);
-                bt_sanitize_host_mic_ownership_payload(audioStateData, payloadLen);
-                bt_apply_classic_rumble_gain_payload(audioStateData, payloadLen);
+                controller_output_policy_sanitize_host_speaker_amp_payload(audioStateData, payloadLen);
+                controller_output_policy_sanitize_host_mic_payload(audioStateData, payloadLen);
+                controller_output_policy_apply_classic_rumble_gain_payload(audioStateData, payloadLen);
                 audio_set_state_data(audioStateData, static_cast<uint8_t>(payloadLen));
 #else
                 uint8_t audioStateData[sizeof(outputData) - 3]{};
                 if (payloadLen > 0) {
                     memcpy(audioStateData, outputData + 3, payloadLen);
                 }
-                sanitize_dualsense_host_output_payload(audioStateData, payloadLen);
-                bt_sanitize_host_speaker_amp_ownership_payload(audioStateData, payloadLen);
-                bt_sanitize_host_mic_ownership_payload(audioStateData, payloadLen);
-                bt_apply_classic_rumble_gain_payload(audioStateData, payloadLen);
+                controller_output_policy_sanitize_host_lightbar_payload(audioStateData, payloadLen, false);
+                controller_output_policy_sanitize_host_speaker_amp_payload(audioStateData, payloadLen);
+                controller_output_policy_sanitize_host_mic_payload(audioStateData, payloadLen);
+                controller_output_policy_apply_classic_rumble_gain_payload(audioStateData, payloadLen);
                 audio_set_state_data(audioStateData, static_cast<uint8_t>(payloadLen));
 #endif
                 // Keep app-controlled lighting authoritative when override is active.
-                sanitize_dualsense_host_output_payload(outputData + 3, payloadLen, lightbarOverride);
-                bt_sanitize_host_mic_ownership(outputData, sizeof(outputData));
+                controller_output_policy_sanitize_host_lightbar_payload(outputData + 3, payloadLen, lightbarOverride);
+                controller_output_policy_sanitize_host_mic_report(outputData, sizeof(outputData));
                 // Haptics gain is applied to audio samples. Output report motor
                 // bytes are classic rumble and must follow the rumble setting.
                 bt_write_classified_output(outputData, sizeof(outputData));

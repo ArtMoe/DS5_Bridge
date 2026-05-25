@@ -14,6 +14,9 @@
 #include <vector>
 
 #include "audio.h"
+#include "controller_packet_compositor.h"
+#include "controller_output_policy.h"
+#include "output_scheduler.h"
 #ifdef ENABLE_COMPANION
 #include "companion.h"
 #endif
@@ -274,7 +277,6 @@ static uint8_t state_report_seq = 0;
 static bool speaker_output_enabled = false;
 static bool speaker_output_headset_route = false;
 static uint8_t companion_mic_volume_percent = 100;
-static uint8_t classic_rumble_gain_percent = 100;
 static bool classic_rumble_output_active = false;
 
 static void update_max_u32(uint32_t &current, uint32_t candidate) {
@@ -430,39 +432,19 @@ bool bt_has_signal_strength() {
 }
 
 void bt_set_classic_rumble_gain(uint8_t gain_percent) {
-    classic_rumble_gain_percent = gain_percent > 200 ? 200 : gain_percent;
+    controller_output_policy_set_classic_rumble_gain(gain_percent);
 }
 
 uint8_t bt_classic_rumble_gain() {
-    return classic_rumble_gain_percent;
+    return controller_output_policy_classic_rumble_gain();
 }
 
 static uint8_t scale_classic_rumble_byte(uint8_t value) {
-    const uint16_t scaled = static_cast<uint16_t>(value) * classic_rumble_gain_percent;
-    return static_cast<uint8_t>(scaled >= 25500 ? 255 : (scaled + 50) / 100);
+    return controller_output_policy_scale_classic_rumble_byte(value);
 }
 
 bool bt_apply_classic_rumble_gain_payload(uint8_t *payload, uint16_t len) {
-    if (payload == nullptr || len <= OUTPUT_PAYLOAD_MOTOR_LEFT_OFFSET) {
-        return false;
-    }
-
-    const uint8_t flag0 = payload[OUTPUT_PAYLOAD_VALID_FLAG0_OFFSET];
-    const uint8_t flag2 = len > OUTPUT_PAYLOAD_VALID_FLAG2_OFFSET ? payload[OUTPUT_PAYLOAD_VALID_FLAG2_OFFSET] : 0;
-    const bool has_rumble = (flag0 & (
-        DS_OUTPUT_VALID_FLAG0_COMPATIBLE_VIBRATION
-        | DS_OUTPUT_VALID_FLAG0_HAPTICS_SELECT
-    )) != 0 || (flag2 & DS_OUTPUT_VALID_FLAG2_COMPATIBLE_VIBRATION2) != 0;
-    if (!has_rumble) {
-        return false;
-    }
-
-    const uint8_t right = payload[OUTPUT_PAYLOAD_MOTOR_RIGHT_OFFSET];
-    const uint8_t left = payload[OUTPUT_PAYLOAD_MOTOR_LEFT_OFFSET];
-    payload[OUTPUT_PAYLOAD_MOTOR_RIGHT_OFFSET] = scale_classic_rumble_byte(right);
-    payload[OUTPUT_PAYLOAD_MOTOR_LEFT_OFFSET] = scale_classic_rumble_byte(left);
-    return payload[OUTPUT_PAYLOAD_MOTOR_RIGHT_OFFSET] != right
-        || payload[OUTPUT_PAYLOAD_MOTOR_LEFT_OFFSET] != left;
+    return controller_output_policy_apply_classic_rumble_gain_payload(payload, len);
 }
 
 static bool apply_classic_rumble_gain(uint8_t *data, uint16_t len) {
@@ -553,11 +535,7 @@ static uint8_t scale_lightbar_channel(uint8_t channel, uint8_t brightness_percen
 }
 
 static void init_state_report(uint8_t *report) {
-    memset(report, 0, DS_OUTPUT_REPORT_BT_SIZE);
-    report[0] = DS_OUTPUT_REPORT_BT;
-    report[1] = state_report_seq << 4;
-    state_report_seq = (state_report_seq + 1) & 0x0F;
-    report[2] = DS_OUTPUT_TAG;
+    controller_packet_init_bt_output_report(report, state_report_seq);
 }
 
 static uint8_t trigger_strength_from_percent(uint8_t intensity_percent) {
@@ -1324,33 +1302,37 @@ static bool select_next_output_packet_locked(output_packet &packet, uint32_t now
     const uint32_t audio_age_us = audio_available
         ? packet_age_us(now, audio_queue.front().enqueue_time_us)
         : 0;
-    if (
-        audio_available
-        && !critical_queue.empty()
-        && critical_queue.size() >= CRITICAL_QUEUE_TARGET_DEPTH
-        && audio_age_us >= OUTPUT_AUDIO_MAX_AGE_US
-    ) {
+    const OutputSchedulerInputs scheduler_inputs{
+        audio_available,
+        !critical_queue.empty(),
+        state_pending,
+        audio_age_us,
+        static_cast<uint32_t>(audio_queue.size()),
+        static_cast<uint32_t>(critical_queue.size()),
+        consecutive_non_audio_sends
+    };
+    constexpr OutputSchedulerConfig scheduler_config{
+        OUTPUT_AUDIO_MAX_AGE_US,
+        CRITICAL_QUEUE_TARGET_DEPTH,
+        OUTPUT_MAX_CONSECUTIVE_NON_AUDIO_SENDS
+    };
+
+    if (output_scheduler_urgent_is_starving_audio(scheduler_inputs, scheduler_config)) {
         output_counters.critical_starving_audio_count++;
     }
 
-    // If a 0x36 audio packet is ready, keep it ahead of input-triggered
-    // output reports; letting those steal the next slot is audible on headset.
-    const bool non_audio_available = !critical_queue.empty() || state_pending;
-    const bool audio_due = audio_available
-        && (
-            non_audio_available
-            || audio_age_us >= OUTPUT_AUDIO_MAX_AGE_US
-            || audio_queue.size() > 1
-            || consecutive_non_audio_sends >= OUTPUT_MAX_CONSECUTIVE_NON_AUDIO_SENDS
-        );
+    const OutputSchedulerChoice choice = output_scheduler_choose_interrupt_packet(
+        scheduler_inputs,
+        scheduler_config
+    );
 
-    if (audio_due) {
+    if (choice == OutputSchedulerChoice::AudioStream) {
         packet = std::move(audio_queue.front());
         audio_queue.pop();
-    } else if (!critical_queue.empty()) {
+    } else if (choice == OutputSchedulerChoice::UrgentTransition) {
         packet = std::move(critical_queue.front());
         critical_queue.pop();
-    } else if (state_pending) {
+    } else if (choice == OutputSchedulerChoice::CoalescedState) {
         uint8_t report[DS_OUTPUT_REPORT_BT_SIZE];
         memcpy(report, state_pending_report, sizeof(report));
         if (!build_interrupt_output_packet(report, sizeof(report), packet.data)) {
@@ -1363,9 +1345,6 @@ static bool select_next_output_packet_locked(output_packet &packet, uint32_t now
         packet.report_id = DS_OUTPUT_REPORT_BT;
         packet.reason = state_pending_reason;
         state_pending = false;
-    } else if (audio_available) {
-        packet = std::move(audio_queue.front());
-        audio_queue.pop();
     } else {
         return false;
     }
@@ -1875,118 +1854,19 @@ static bool has_unclassified_state_payload_data(uint8_t const *payload, uint16_t
 }
 
 bool bt_sanitize_host_speaker_amp_ownership_payload(uint8_t *payload, uint16_t len) {
-    if (payload == nullptr || len < DS_OUTPUT_REPORT_COMMON_SIZE) {
-        return false;
-    }
-
-    bool changed = false;
-
-    const uint8_t original_flag0 = payload[OUTPUT_PAYLOAD_VALID_FLAG0_OFFSET];
-    const uint8_t original_flag1 = payload[OUTPUT_PAYLOAD_VALID_FLAG1_OFFSET];
-    const uint8_t next_flag0 = original_flag0 & static_cast<uint8_t>(~(
-        DS_OUTPUT_VALID_FLAG0_SPEAKER_VOLUME_ENABLE
-        | DS_OUTPUT_VALID_FLAG0_AUDIO_CONTROL_ENABLE
-    ));
-    if (payload[OUTPUT_PAYLOAD_VALID_FLAG0_OFFSET] != next_flag0) {
-        payload[OUTPUT_PAYLOAD_VALID_FLAG0_OFFSET] = next_flag0;
-        changed = true;
-    }
-
-    const uint8_t next_flag1 = original_flag1 & static_cast<uint8_t>(~DS_OUTPUT_VALID_FLAG1_AUDIO_CONTROL2_ENABLE);
-    if (payload[OUTPUT_PAYLOAD_VALID_FLAG1_OFFSET] != next_flag1) {
-        payload[OUTPUT_PAYLOAD_VALID_FLAG1_OFFSET] = next_flag1;
-        changed = true;
-    }
-
-    if (original_flag0 & (DS_OUTPUT_VALID_FLAG0_SPEAKER_VOLUME_ENABLE | DS_OUTPUT_VALID_FLAG0_AUDIO_CONTROL_ENABLE)) {
-        if (payload[OUTPUT_PAYLOAD_HEADPHONE_VOLUME_OFFSET] != 0) {
-            payload[OUTPUT_PAYLOAD_HEADPHONE_VOLUME_OFFSET] = 0;
-            changed = true;
-        }
-        if (payload[OUTPUT_PAYLOAD_SPEAKER_VOLUME_OFFSET] != 0) {
-            payload[OUTPUT_PAYLOAD_SPEAKER_VOLUME_OFFSET] = 0;
-            changed = true;
-        }
-    }
-    if (original_flag0 & DS_OUTPUT_VALID_FLAG0_AUDIO_CONTROL_ENABLE) {
-        if (payload[OUTPUT_PAYLOAD_AUDIO_CONTROL_OFFSET] != 0) {
-            payload[OUTPUT_PAYLOAD_AUDIO_CONTROL_OFFSET] = 0;
-            changed = true;
-        }
-    }
-    if (original_flag1 & DS_OUTPUT_VALID_FLAG1_AUDIO_CONTROL2_ENABLE) {
-        if (payload[OUTPUT_PAYLOAD_AUDIO_CONTROL2_OFFSET] != 0) {
-            payload[OUTPUT_PAYLOAD_AUDIO_CONTROL2_OFFSET] = 0;
-            changed = true;
-        }
-    }
-
-    return changed;
+    return controller_output_policy_sanitize_host_speaker_amp_payload(payload, len);
 }
 
 bool bt_sanitize_host_speaker_amp_ownership(uint8_t *data, uint16_t len) {
-    if (data == nullptr || len < 3 + DS_OUTPUT_REPORT_COMMON_SIZE) {
-        return false;
-    }
-    if (data[0] != DS_OUTPUT_REPORT_BT || data[2] != DS_OUTPUT_TAG) {
-        return false;
-    }
-
-    return bt_sanitize_host_speaker_amp_ownership_payload(data + 3, len - 3);
+    return controller_output_policy_sanitize_host_speaker_amp_report(data, len);
 }
 
 bool bt_sanitize_host_mic_ownership_payload(uint8_t *payload, uint16_t len) {
-    if (payload == nullptr || len < DS_OUTPUT_REPORT_COMMON_SIZE) {
-        return false;
-    }
-
-    bool changed = false;
-    const uint8_t original_flag0 = payload[OUTPUT_PAYLOAD_VALID_FLAG0_OFFSET];
-    const uint8_t original_flag1 = payload[OUTPUT_PAYLOAD_VALID_FLAG1_OFFSET];
-    const uint8_t next_flag0 = original_flag0 & static_cast<uint8_t>(~DS_OUTPUT_VALID_FLAG0_MIC_VOLUME_ENABLE);
-    uint8_t next_flag1 = original_flag1 & static_cast<uint8_t>(~DS_OUTPUT_VALID_FLAG1_MIC_MUTE_LED_CONTROL_ENABLE);
-    const bool original_power_save_control =
-        (original_flag1 & DS_OUTPUT_VALID_FLAG1_POWER_SAVE_CONTROL_ENABLE) != 0;
-    const uint8_t next_power_save_control = original_power_save_control
-        ? static_cast<uint8_t>(payload[OUTPUT_PAYLOAD_POWER_SAVE_CONTROL_OFFSET] & ~DS_OUTPUT_POWER_SAVE_CONTROL_MIC_MUTE)
-        : payload[OUTPUT_PAYLOAD_POWER_SAVE_CONTROL_OFFSET];
-    if (original_power_save_control && next_power_save_control == 0) {
-        next_flag1 &= static_cast<uint8_t>(~DS_OUTPUT_VALID_FLAG1_POWER_SAVE_CONTROL_ENABLE);
-    }
-
-    if (payload[OUTPUT_PAYLOAD_VALID_FLAG0_OFFSET] != next_flag0) {
-        payload[OUTPUT_PAYLOAD_VALID_FLAG0_OFFSET] = next_flag0;
-        changed = true;
-    }
-    if (payload[OUTPUT_PAYLOAD_VALID_FLAG1_OFFSET] != next_flag1) {
-        payload[OUTPUT_PAYLOAD_VALID_FLAG1_OFFSET] = next_flag1;
-        changed = true;
-    }
-    if ((original_flag0 & DS_OUTPUT_VALID_FLAG0_MIC_VOLUME_ENABLE) && payload[OUTPUT_PAYLOAD_MIC_VOLUME_OFFSET] != 0) {
-        payload[OUTPUT_PAYLOAD_MIC_VOLUME_OFFSET] = 0;
-        changed = true;
-    }
-    if ((original_flag1 & DS_OUTPUT_VALID_FLAG1_MIC_MUTE_LED_CONTROL_ENABLE) && payload[OUTPUT_PAYLOAD_MUTE_LED_OFFSET] != 0) {
-        payload[OUTPUT_PAYLOAD_MUTE_LED_OFFSET] = 0;
-        changed = true;
-    }
-    if (original_power_save_control && payload[OUTPUT_PAYLOAD_POWER_SAVE_CONTROL_OFFSET] != next_power_save_control) {
-        payload[OUTPUT_PAYLOAD_POWER_SAVE_CONTROL_OFFSET] = next_power_save_control;
-        changed = true;
-    }
-
-    return changed;
+    return controller_output_policy_sanitize_host_mic_payload(payload, len);
 }
 
 bool bt_sanitize_host_mic_ownership(uint8_t *data, uint16_t len) {
-    if (data == nullptr || len < 3 + DS_OUTPUT_REPORT_COMMON_SIZE) {
-        return false;
-    }
-    if (data[0] != DS_OUTPUT_REPORT_BT || data[2] != DS_OUTPUT_TAG) {
-        return false;
-    }
-
-    return bt_sanitize_host_mic_ownership_payload(data + 3, len - 3);
+    return controller_output_policy_sanitize_host_mic_report(data, len);
 }
 
 static uint8_t classify_output_report(uint8_t const *data, uint16_t len) {

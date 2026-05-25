@@ -39,6 +39,10 @@ add_executable(ds5-bridge
         src/usb_descriptors.c
         src/main.cpp
         src/usb.cpp
+        src/controller_packet_compositor.cpp
+        src/controller_output_policy.cpp
+        src/controller_output_state.cpp
+        src/output_scheduler.cpp
         src/audio.cpp
         src/bt.cpp
 )

@@ -9,9 +9,26 @@ export type HostAudioFramePayload = {
   encodedBytes: number;
 };
 
+export type HostAudioStartFailureReason =
+  | 'device-in-use'
+  | 'device-invalidated'
+  | 'start-timeout'
+  | 'helper-exit';
+
+export class HostAudioStartError extends Error {
+  constructor(
+    message: string,
+    readonly reason: HostAudioStartFailureReason
+  ) {
+    super(message);
+    this.name = 'HostAudioStartError';
+  }
+}
+
 const FRAME_RECORD_PREFIX_BYTES = 2;
 const HOST_AUDIO_FRAME_BYTES = 264;
 const HELPER_RECORDING_STARTED_MESSAGE = 'status: recording-started';
+const HELPER_CAPTURE_UNAVAILABLE_PREFIX = 'status: capture-unavailable';
 const HELPER_START_TIMEOUT_MS = 2000;
 const HELPER_TEST_TONE_TIMEOUT_MS = 10000;
 const HELPER_STDERR_MAX_CHARS = 8192;
@@ -150,26 +167,60 @@ export class HostAudioEngine extends EventEmitter {
       }
     });
 
-    await new Promise<void>((resolve) => {
+    await new Promise<void>((resolve, reject) => {
       let settled = false;
-      const finish = () => {
+      let stderr = '';
+      const finish = (error?: Error) => {
         if (settled) {
           return;
         }
         settled = true;
         clearTimeout(timeout);
-        resolve();
+        if (error) {
+          if (!helper.killed) {
+            helper.kill();
+          }
+          reject(error);
+        } else {
+          resolve();
+        }
       };
-      const timeout = setTimeout(finish, HELPER_START_TIMEOUT_MS);
+      const timeout = setTimeout(() => {
+        finish(new HostAudioStartError(
+          'Host audio helper did not start recording within 2000ms.',
+          'start-timeout'
+        ));
+      }, HELPER_START_TIMEOUT_MS);
 
       helper.stderr.on('data', (chunk: Buffer) => {
-        const text = chunk.toString('utf8').trim();
-        this.emit('status', text);
-        if (text.includes(HELPER_RECORDING_STARTED_MESSAGE)) {
-          finish();
+        stderr += chunk.toString('utf8');
+        const lines = stderr.split(/\r?\n/);
+        stderr = lines.pop() ?? '';
+        for (const line of lines) {
+          const text = line.trim();
+          if (!text) {
+            continue;
+          }
+          this.emit('status', text);
+          if (text.includes(HELPER_RECORDING_STARTED_MESSAGE)) {
+            finish();
+            continue;
+          }
+          const reason = parseCaptureUnavailableReason(text);
+          if (reason) {
+            finish(new HostAudioStartError(
+              hostAudioStartFailureMessage(reason),
+              reason
+            ));
+          }
         }
       });
-      helper.once('exit', finish);
+      helper.once('exit', (code, signal) => {
+        finish(new HostAudioStartError(
+          `Host audio helper exited before recording started: helper exited (${signal ?? code ?? 'unknown'}).`,
+          'helper-exit'
+        ));
+      });
     });
   }
 
@@ -212,6 +263,32 @@ function isExpectedHelperPipeError(error: unknown): boolean {
   return code === 'EPIPE'
     || code === 'ERR_STREAM_DESTROYED'
     || error.message.includes('write EPIPE');
+}
+
+function parseCaptureUnavailableReason(line: string): HostAudioStartFailureReason | null {
+  if (!line.startsWith(HELPER_CAPTURE_UNAVAILABLE_PREFIX)) {
+    return null;
+  }
+  if (line.includes('reason=device-in-use')) {
+    return 'device-in-use';
+  }
+  if (line.includes('reason=device-invalidated')) {
+    return 'device-invalidated';
+  }
+  return 'helper-exit';
+}
+
+function hostAudioStartFailureMessage(reason: HostAudioStartFailureReason): string {
+  switch (reason) {
+    case 'device-in-use':
+      return 'DualSense audio endpoint is in exclusive use by another application.';
+    case 'device-invalidated':
+      return 'DualSense audio endpoint changed while host audio was starting.';
+    case 'start-timeout':
+      return 'Host audio helper did not start recording within 2000ms.';
+    case 'helper-exit':
+      return 'Host audio helper exited before recording started.';
+  }
 }
 
 export async function playHostAudioTestTone(speakerVolumePercent = 100): Promise<void> {

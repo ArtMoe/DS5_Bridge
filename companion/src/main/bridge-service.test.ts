@@ -374,6 +374,7 @@ async function flushReapply(): Promise<void> {
 
 describe('BridgeService', () => {
   let tempDirs: string[] = [];
+  let services: BridgeService[] = [];
 
   beforeEach(() => {
     hidMock.state.devicesList = [];
@@ -381,9 +382,11 @@ describe('BridgeService', () => {
     hidMock.devices.mockClear();
     hidMock.HID.mockClear();
     tempDirs = [];
+    services = [];
   });
 
-  afterEach(() => {
+  afterEach(async () => {
+    await Promise.allSettled(services.map((service) => service.stop()));
     for (const tempDir of tempDirs) {
       rmSync(tempDir, { recursive: true, force: true });
     }
@@ -392,6 +395,7 @@ describe('BridgeService', () => {
   function serviceFixture(initialSettings?: Parameters<SettingsStore['update']>[0]): BridgeService {
     const fixture = createService(initialSettings);
     tempDirs.push(fixture.tempDir);
+    services.push(fixture.service);
     return fixture.service;
   }
 

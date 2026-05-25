@@ -2,6 +2,7 @@ using System.Buffers.Binary;
 using System.Collections.Concurrent;
 using System.Diagnostics;
 using System.Reflection;
+using System.Runtime.InteropServices;
 using Concentus.Enums;
 using Concentus.Structs;
 using HidSharp;
@@ -46,6 +47,8 @@ static class AudioConstants
     public const int MicKeepaliveBufferMilliseconds = 10;
     public const float SpeakerGainRampStepPermille = 1000f / (TargetSampleRate * 0.02f);
     public static readonly long FrameIntervalTicks = Stopwatch.Frequency * PicoInputBlockFrames / TargetSampleRate;
+    public const int AudclntDeviceInvalidated = unchecked((int)0x88890004);
+    public const int AudclntDeviceInUse = unchecked((int)0x8889000A);
 }
 
 static class HostAudioTestTone
@@ -53,7 +56,7 @@ static class HostAudioTestTone
     public static void Play(HelperOptions options)
     {
         using var enumerator = new MMDeviceEnumerator();
-        var device = HostAudioHelper.SelectRenderEndpoint(enumerator, options.DeviceName);
+        var device = EndpointManager.SelectRenderEndpoint(enumerator, options.DeviceName);
         using var output = new WasapiOut(device, AudioClientShareMode.Shared, false, 120);
         using var fileReader = OpenTestAudioFile(options.TestAudioPath);
         using var playbackStopped = new ManualResetEventSlim(false);
@@ -155,7 +158,7 @@ sealed class HostAudioHelper : IDisposable
     {
         if (options.ListDevices)
         {
-            ListDevices();
+            EndpointManager.ListDevices();
             return;
         }
 
@@ -221,17 +224,14 @@ sealed class HostAudioHelper : IDisposable
         }
 
         TryOpenCompanionHid();
-        var device = SelectRenderEndpoint(enumerator, options.DeviceName);
+        var device = EndpointManager.SelectRenderEndpoint(enumerator, options.DeviceName);
         renderDevice = device;
         capture = new WasapiLoopbackCapture(device);
         SetWasapiBufferMilliseconds(capture, AudioConstants.WasapiBufferMilliseconds);
         capture.DataAvailable += OnDataAvailable;
         capture.RecordingStopped += (_, eventArgs) =>
         {
-            if (eventArgs.Exception is not null)
-            {
-                Console.Error.WriteLine($"error: capture stopped: {eventArgs.Exception.Message}");
-            }
+            WriteWasapiStopFailure(eventArgs.Exception);
             stopped.Set();
         };
 
@@ -240,7 +240,15 @@ sealed class HostAudioHelper : IDisposable
             Console.Error.WriteLine(
                 $"status: capturing '{device.FriendlyName}' {capture.WaveFormat.SampleRate}Hz {capture.WaveFormat.Channels}ch {capture.WaveFormat.BitsPerSample}bit {capture.WaveFormat.Encoding}");
         }
-        capture.StartRecording();
+        try
+        {
+            capture.StartRecording();
+        }
+        catch (COMException error) when (WriteWasapiStartFailure(error, device.FriendlyName))
+        {
+            stopped.Set();
+            return;
+        }
         Console.Error.WriteLine("status: recording-started");
     }
 
@@ -267,7 +275,7 @@ sealed class HostAudioHelper : IDisposable
 
     private void StartMicKeepalive(MMDeviceEnumerator enumerator)
     {
-        var device = SelectCaptureEndpoint(enumerator, options.MicDeviceName ?? options.DeviceName);
+        var device = EndpointManager.SelectCaptureEndpoint(enumerator, options.MicDeviceName ?? options.DeviceName);
         micCapture = new WasapiCapture(device, false, AudioConstants.MicKeepaliveBufferMilliseconds);
         micCapture.DataAvailable += OnMicDataAvailable;
         micCapture.RecordingStopped += (_, eventArgs) =>
@@ -293,175 +301,62 @@ sealed class HostAudioHelper : IDisposable
 
     private void TryOpenCompanionHid()
     {
-        if (string.IsNullOrWhiteSpace(options.HidPath))
-        {
-            return;
-        }
-
-        var device = DeviceList.Local.GetHidDevices()
-            .FirstOrDefault(candidate => string.Equals(candidate.DevicePath, options.HidPath, StringComparison.OrdinalIgnoreCase));
-        if (device is null)
-        {
-            if (AudioConstants.DiagnosticsEnabled)
-            {
-                Console.Error.WriteLine("status: companion HID path not found; using stdout frame transport");
-            }
-            return;
-        }
-
-        try
-        {
-            hidStream = device.Open();
-            hidStream.WriteTimeout = AudioConstants.HidWriteTimeoutMilliseconds;
-            if (AudioConstants.DiagnosticsEnabled)
-            {
-                Console.Error.WriteLine($"status: companion HID direct output active maxOutput={device.GetMaxOutputReportLength()}");
-            }
-        }
-        catch (Exception error)
-        {
-            hidStream = null;
-            if (AudioConstants.DiagnosticsEnabled)
-            {
-                Console.Error.WriteLine($"status: companion HID direct output unavailable: {error.Message}; using stdout frame transport");
-            }
-        }
-    }
-
-    public static MMDevice SelectRenderEndpoint(MMDeviceEnumerator enumerator, string? deviceName)
-    {
-        var devices = enumerator
-            .EnumerateAudioEndPoints(DataFlow.Render, DeviceState.Active)
-            .ToArray();
-
-        if (!string.IsNullOrWhiteSpace(deviceName))
-        {
-            var exact = devices.FirstOrDefault(device =>
-                string.Equals(device.FriendlyName, deviceName, StringComparison.OrdinalIgnoreCase));
-            if (exact is not null)
-            {
-                return exact;
-            }
-
-            var contains = devices.FirstOrDefault(device =>
-                device.FriendlyName.Contains(deviceName, StringComparison.OrdinalIgnoreCase));
-            if (contains is not null)
-            {
-                return contains;
-            }
-
-            if (deviceName.Contains("DS5 Bridge", StringComparison.OrdinalIgnoreCase))
-            {
-                var alias = FindKnownBridgeEndpoint(devices);
-                if (alias is not null)
-                {
-                    if (AudioConstants.DiagnosticsEnabled)
-                    {
-                        Console.Error.WriteLine($"status: endpoint alias '{alias.FriendlyName}' matched for '{deviceName}'");
-                    }
-                    return alias;
-                }
-            }
-
-            var available = string.Join(", ", devices.Select(device => $"'{device.FriendlyName}'"));
-            throw new InvalidOperationException($"Render endpoint matching '{deviceName}' was not found. Available endpoints: {available}");
-        }
-
-        var ds5Bridge = FindKnownBridgeEndpoint(devices);
-        if (ds5Bridge is not null)
-        {
-            return ds5Bridge;
-        }
-
-        return enumerator.GetDefaultAudioEndpoint(DataFlow.Render, Role.Multimedia);
-    }
-
-    private static MMDevice SelectCaptureEndpoint(MMDeviceEnumerator enumerator, string? deviceName)
-    {
-        var devices = enumerator
-            .EnumerateAudioEndPoints(DataFlow.Capture, DeviceState.Active)
-            .ToArray();
-
-        if (!string.IsNullOrWhiteSpace(deviceName))
-        {
-            var exact = devices.FirstOrDefault(device =>
-                string.Equals(device.FriendlyName, deviceName, StringComparison.OrdinalIgnoreCase));
-            if (exact is not null)
-            {
-                return exact;
-            }
-
-            var contains = devices.FirstOrDefault(device =>
-                device.FriendlyName.Contains(deviceName, StringComparison.OrdinalIgnoreCase));
-            if (contains is not null)
-            {
-                return contains;
-            }
-
-            if (deviceName.Contains("DS5 Bridge", StringComparison.OrdinalIgnoreCase))
-            {
-                var alias = FindKnownBridgeEndpoint(devices);
-                if (alias is not null)
-                {
-                    if (AudioConstants.DiagnosticsEnabled)
-                    {
-                        Console.Error.WriteLine($"status: capture endpoint alias '{alias.FriendlyName}' matched for '{deviceName}'");
-                    }
-                    return alias;
-                }
-            }
-
-            var available = string.Join(", ", devices.Select(device => $"'{device.FriendlyName}'"));
-            throw new InvalidOperationException($"Capture endpoint matching '{deviceName}' was not found. Available endpoints: {available}");
-        }
-
-        var ds5Bridge = FindKnownBridgeEndpoint(devices);
-        if (ds5Bridge is not null)
-        {
-            return ds5Bridge;
-        }
-
-        return enumerator.GetDefaultAudioEndpoint(DataFlow.Capture, Role.Communications);
-    }
-
-    private static MMDevice? FindKnownBridgeEndpoint(IEnumerable<MMDevice> devices)
-    {
-        var names = new[]
-        {
-            "DS5 Bridge",
-            "DualSense Wireless Controller"
-        };
-
-        foreach (var name in names)
-        {
-            var match = devices.FirstOrDefault(device =>
-                device.FriendlyName.Contains(name, StringComparison.OrdinalIgnoreCase));
-            if (match is not null)
-            {
-                return match;
-            }
-        }
-
-        return null;
-    }
-
-    private static void ListDevices()
-    {
-        using var enumerator = new MMDeviceEnumerator();
-        foreach (var device in enumerator.EnumerateAudioEndPoints(DataFlow.Render, DeviceState.Active))
-        {
-            Console.Error.WriteLine($"render-device: {device.FriendlyName}");
-        }
-        foreach (var device in enumerator.EnumerateAudioEndPoints(DataFlow.Capture, DeviceState.Active))
-        {
-            Console.Error.WriteLine($"capture-device: {device.FriendlyName}");
-        }
+        hidStream = PicoTransport.TryOpenDirectHid(options.HidPath);
     }
 
     private static void SetWasapiBufferMilliseconds(WasapiLoopbackCapture capture, int milliseconds)
     {
         var field = typeof(WasapiCapture).GetField("audioBufferMillisecondsLength", BindingFlags.Instance | BindingFlags.NonPublic);
         field?.SetValue(capture, milliseconds);
+    }
+
+    private static bool WriteWasapiStartFailure(COMException error, string deviceName)
+    {
+        var reason = WasapiUnavailableReason(error.HResult);
+        if (reason is null)
+        {
+            return false;
+        }
+
+        Console.Error.WriteLine(
+            $"status: capture-unavailable reason={reason} hr={FormatHResult(error.HResult)} device='{deviceName}'");
+        return true;
+    }
+
+    private static void WriteWasapiStopFailure(Exception? error)
+    {
+        if (error is null)
+        {
+            return;
+        }
+
+        if (error is COMException comError)
+        {
+            var reason = WasapiUnavailableReason(comError.HResult);
+            if (reason is not null)
+            {
+                Console.Error.WriteLine(
+                    $"status: capture-unavailable reason={reason} hr={FormatHResult(comError.HResult)}");
+                return;
+            }
+        }
+
+        Console.Error.WriteLine($"error: capture stopped: {error.Message}");
+    }
+
+    private static string? WasapiUnavailableReason(int hresult)
+    {
+        return hresult switch
+        {
+            AudioConstants.AudclntDeviceInUse => "device-in-use",
+            AudioConstants.AudclntDeviceInvalidated => "device-invalidated",
+            _ => null
+        };
+    }
+
+    private static string FormatHResult(int hresult)
+    {
+        return $"0x{unchecked((uint)hresult):X8}";
     }
 
     private void OnDataAvailable(object? sender, WaveInEventArgs eventArgs)
@@ -849,7 +744,7 @@ sealed class HostAudioHelper : IDisposable
                 }
                 else
                 {
-                    WriteFrameToStdout(stdout, frame);
+                    HostPacketizer.WriteStdoutFrame(stdout, writePrefix, frame);
                 }
                 if (AudioConstants.DiagnosticsEnabled)
                 {
@@ -862,14 +757,6 @@ sealed class HostAudioHelper : IDisposable
         {
             Console.Error.WriteLine($"error: writer stopped: {error.GetType().Name}: {error.Message}");
         }
-    }
-
-    private void WriteFrameToStdout(Stream stdout, byte[] frame)
-    {
-        BinaryPrimitives.WriteUInt16LittleEndian(writePrefix, (ushort)frame.Length);
-        stdout.Write(writePrefix);
-        stdout.Write(frame);
-        stdout.Flush();
     }
 
     private static void WaitUntil(Stopwatch stopwatch, long targetTicks)
@@ -897,31 +784,12 @@ sealed class HostAudioHelper : IDisposable
     private bool TryWriteFrameToHid(byte[] frame)
     {
         var sequence = frameSequence++;
-        var fragmentIndex = 0;
-        var fragmentCount = (frame.Length + AudioConstants.FastPayloadBytes - 1) / AudioConstants.FastPayloadBytes;
-        for (var offset = 0; offset < frame.Length; offset += AudioConstants.FastPayloadBytes)
+        var ok = HostPacketizer.WriteFastHidFragments(frame, sequence, hidReport, TryWriteHidReport, out var fragmentCount);
+        if (ok && AudioConstants.DiagnosticsEnabled)
         {
-            Array.Clear(hidReport);
-            var payloadLength = Math.Min(AudioConstants.FastPayloadBytes, frame.Length - offset);
-            hidReport[0] = AudioConstants.HostAudioStreamReportId;
-            hidReport[1] = AudioConstants.FastFrameFragmentType;
-            hidReport[2] = (byte)(sequence & 0xff);
-            hidReport[3] = (byte)(sequence >> 8);
-            hidReport[4] = (byte)fragmentIndex;
-            hidReport[5] = (byte)fragmentCount;
-            hidReport[6] = (byte)payloadLength;
-            Buffer.BlockCopy(frame, offset, hidReport, 7, payloadLength);
-            if (!TryWriteHidReport(hidReport))
-            {
-                return false;
-            }
-            if (AudioConstants.DiagnosticsEnabled)
-            {
-                writtenFragments++;
-            }
-            fragmentIndex++;
+            writtenFragments += fragmentCount;
         }
-        return true;
+        return ok;
     }
 
     private bool TryWriteHidReport(byte[] report)
@@ -993,13 +861,7 @@ sealed class HostAudioHelper : IDisposable
     {
         var stream = hidStream;
         hidStream = null;
-        try
-        {
-            stream?.Dispose();
-        }
-        catch
-        {
-        }
+        PicoTransport.DisposeQuietly(stream);
     }
 
     private static void UpdateMax(ref long target, long value)
