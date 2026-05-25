@@ -38,8 +38,8 @@ extern uint8_t usb_hid_polling_interval_ms_value;
 #define DS5_FEEDBACK_TRACE_ENABLED 0
 #endif
 
-#define CONFIG_TOTAL_LEN_STANDARD 0x00E3
-#define CONFIG_TOTAL_LEN_COMPANION 0x011C
+#define CONFIG_TOTAL_LEN_STANDARD 0x00E6
+#define CONFIG_TOTAL_LEN_COMPANION 0x011F
 #define COMPANION_HID_REPORT_DESC_LEN \
     (0x0040 \
         + (DS5_TRIGGER_TRACE_ENABLED ? 0x0008 : 0) \
@@ -128,7 +128,7 @@ uint8_t descriptor_configuration[] = {
     0x24, // bDescriptorType: CS_INTERFACE (0x24)
     0x01, // bDescriptorSubtype: Header (0x01)
     0x00, 0x01, // bcdADC: 1.00
-    0x49, 0x00, // wTotalLength: 73 (0x0049)
+    0x4C, 0x00, // wTotalLength: 76 (0x004C)
     0x02, // bInCollection: 2 streaming interfaces
     0x01, // baInterfaceNr(1): Interface 1
     0x02, // baInterfaceNr(2): Interface 2
@@ -165,20 +165,20 @@ uint8_t descriptor_configuration[] = {
     0x02, // bSourceID: 2 (Feature Unit)
     0x00, // iTerminal: 0
 
-    // Input Terminal Descriptor (Terminal ID 4: Headset Mic)
+    // Input Terminal Descriptor (Terminal ID 4: Raw PCM return)
     0x0C, // bLength: 12
     0x24, // bDescriptorType: CS_INTERFACE
     0x02, // bDescriptorSubtype: Input Terminal
     0x04, // bTerminalID: 4
     0x02, 0x04, // wTerminalType: Headset (0x0402)
     0x03, // bAssocTerminal: 3 (paired with speaker)
-    0x01, // bNrChannels: 1
-    0x00, 0x00, // wChannelConfig: non-predefined mono
+    0x04, // bNrChannels: 4
+    0x33, 0x00, // wChannelConfig: L/R Front + L/R Surround (0x0033)
     0x00, // iChannelNames: 0
     0x00, // iTerminal: 0
 
     // Feature Unit Descriptor (Unit ID 5 ← from Terminal 4)
-    0x09, // bLength: 9
+    0x0C, // bLength: 12
     0x24, // bDescriptorType: CS_INTERFACE
     0x06, // bDescriptorSubtype: Feature Unit
     0x05, // bUnitID: 5
@@ -186,6 +186,7 @@ uint8_t descriptor_configuration[] = {
     0x01, // bControlSize: 1
     0x03, // bmaControls[0]: Master – Mute, Volume
     0x00, // bmaControls[1]: Ch1 – no controls
+    0x00, 0x00, 0x00, // bmaControls[2..4]: no per-channel controls
     0x00, // iFeature: 0
 
     // Output Terminal Descriptor (Terminal ID 6: USB Streaming ← from Unit 5)
@@ -287,12 +288,12 @@ uint8_t descriptor_configuration[] = {
     0x01, // bDelay: 1 frame
     0x01, 0x00, // wFormatTag: PCM (0x0001)
 
-    // Format Type Descriptor (1-channel, 16-bit, 48kHz)
+    // Format Type Descriptor (4-channel, 16-bit, 48kHz)
     0x0B, // bLength: 11
     0x24, // bDescriptorType: CS_INTERFACE
     0x02, // bDescriptorSubtype: FORMAT_TYPE
     0x01, // bFormatType: TYPE_I
-    0x01, // bNrChannels: 1
+    0x04, // bNrChannels: 4
     0x02, // bSubframeSize: 2
     0x10, // bBitResolution: 16
     0x01, // bSamFreqType: 1
@@ -303,7 +304,7 @@ uint8_t descriptor_configuration[] = {
     0x05, // bDescriptorType (ENDPOINT)
     0x82, // bEndpointAddress: IN EP2
     0x05, // bmAttributes: Isochronous, Asynchronous
-    0x62, 0x00, // wMaxPacketSize: 98 bytes
+    0x88, 0x01, // wMaxPacketSize: 392 bytes
     0x01, // bInterval: 1
     0x00, // bRefresh
     0x00, // bSynchAddress

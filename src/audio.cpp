@@ -60,10 +60,11 @@
 #define HOST_FRAME_REASSEMBLY_SIZE 448
 #define HOST_AUDIO_REPORT_SIZE REPORT_SIZE
 #define HOST_AUDIO_COMPACT_REPORT_SIZE (SAMPLE_SIZE + 200)
+#define HOST_RAW_PCM_RETURN_PACKET_BYTES (48 * INPUT_CHANNELS * sizeof(int16_t))
 #define HOST_MIC_OPUS_SIZE 71
 #define HOST_MIC_OPUS_FRAMES 480
 #define HOST_MIC_INPUT_CHANNELS 1
-#define HOST_MIC_USB_CHANNELS 1
+#define HOST_MIC_USB_CHANNELS CFG_TUD_AUDIO_FUNC_1_N_CHANNELS_TX
 #define HOST_MIC_QUEUE_DEPTH 8
 #define HOST_MIC_USB_PACKET_BYTES (48 * HOST_MIC_USB_CHANNELS * sizeof(int16_t))
 #define HOST_MIC_USB_PREFILL_BYTES (10 * HOST_MIC_USB_PACKET_BYTES)
@@ -246,6 +247,8 @@ static void clear_host_reassembly();
 static void clear_mic_queues();
 static void audio_host_poll();
 static void process_mic_usb_output();
+static void process_host_usb_audio_packets(uint8_t max_reads);
+static void discard_usb_audio_packets(uint8_t max_reads);
 static void clear_partial_audio_state();
 static void reset_controller_audio_report_counters();
 static void schedule_host_route_primer();
@@ -266,7 +269,18 @@ static void audio_debug_log_impl(
 #endif
 static void copy_routed_state_data(uint8_t *destination);
 
+static bool host_raw_pcm_return_requested() {
+    return host_runtime.requested;
+}
+
+static bool host_raw_pcm_return_active() {
+    return host_raw_pcm_return_requested() && usb_mic_streaming_active();
+}
+
 static bool host_mic_path_active() {
+    if (host_raw_pcm_return_requested()) {
+        return false;
+    }
     return host_runtime.duplex_requested
         && host_runtime.mode == AudioRuntimeHostEncodedActive
         && bt_is_controller_connected();
@@ -1773,6 +1787,64 @@ static bool process_usb_audio_packet() {
     return true;
 }
 
+static bool process_usb_audio_raw_pcm_return_packet() {
+    const uint32_t now = time_us_32();
+    if (!tud_audio_available()) {
+        return false;
+    }
+
+    alignas(4) uint8_t raw[HOST_RAW_PCM_RETURN_PACKET_BYTES];
+    const uint32_t bytes_read = tud_audio_read(raw, sizeof(raw));
+    if (bytes_read == 0) {
+        return false;
+    }
+    audio_stats_note_usb_read(now);
+
+    if (!host_raw_pcm_return_active()) {
+        return true;
+    }
+
+    tu_fifo_t *ep_in_fifo = tud_audio_get_ep_in_ff();
+    if (ep_in_fifo != nullptr && tu_fifo_remaining(ep_in_fifo) < bytes_read) {
+        audio_debug_log(
+            AudioDebugUsbEvent,
+            5,
+            clamp_debug_u8(bytes_read),
+            clamp_debug_u8(tu_fifo_remaining(ep_in_fifo)),
+            0,
+            0
+        );
+        return true;
+    }
+
+    const uint16_t written = tud_audio_write(raw, static_cast<uint16_t>(bytes_read));
+    if (written != bytes_read) {
+        audio_debug_log(
+            AudioDebugUsbEvent,
+            6,
+            clamp_debug_u8(written),
+            clamp_debug_u8(bytes_read),
+            usb_mic_streaming_active() ? 1 : 0,
+            0
+        );
+    }
+
+    return true;
+}
+
+static void process_host_usb_audio_packets(uint8_t max_reads) {
+    if (!host_raw_pcm_return_requested()) {
+        discard_usb_audio_packets(max_reads);
+        return;
+    }
+
+    for (uint8_t i = 0; i < max_reads; i++) {
+        if (!process_usb_audio_raw_pcm_return_packet()) {
+            break;
+        }
+    }
+}
+
 static void discard_usb_audio_packets(uint8_t max_reads) {
     int16_t discard[192];
     uint8_t reads = 0;
@@ -1983,7 +2055,9 @@ void audio_mic_add_packet(uint8_t const *data, uint16_t len) {
 
 void audio_loop() {
     const uint32_t now = time_us_32();
-    process_mic_usb_output();
+    if (!host_raw_pcm_return_requested()) {
+        process_mic_usb_output();
+    }
     audio_host_poll();
 
     if (!bt_is_controller_connected()) {
@@ -2009,13 +2083,13 @@ void audio_loop() {
 
     if (host_runtime.requested && host_start_grace_active(time_us_32())) {
         (void)prime_host_audio_route_if_needed();
-        discard_usb_audio_packets(AUDIO_LOOP_MAX_USB_READS);
+        process_host_usb_audio_packets(AUDIO_LOOP_MAX_USB_READS);
         return;
     }
 
     if (host_runtime.mode == AudioRuntimeHostEncodedActive) {
         (void)prime_host_audio_route_if_needed();
-        discard_usb_audio_packets(AUDIO_LOOP_MAX_USB_READS);
+        process_host_usb_audio_packets(AUDIO_LOOP_MAX_USB_READS);
         return;
     }
 

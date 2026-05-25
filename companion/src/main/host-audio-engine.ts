@@ -34,6 +34,7 @@ const HELPER_TEST_TONE_TIMEOUT_MS = 10000;
 const HELPER_STDERR_MAX_CHARS = 8192;
 const HELPER_RELATIVE_PATH = path.join('native', 'HostAudioHelper', 'HostAudioHelper.exe');
 const HELPER_TEST_AUDIO_FILE = 'test-speaker-tone-silence-tail.mp3';
+const HOST_AUDIO_SOURCE = normalizeHostAudioSource(process.env.DS5_BRIDGE_HOST_AUDIO_SOURCE);
 const DEV_HELPER_RELATIVE_PATH = path.join(
   'native',
   'HostAudioHelper',
@@ -138,7 +139,14 @@ export class HostAudioEngine extends EventEmitter {
 
   private async startInternal(hidPath: string | null, speakerVolumePercent: number): Promise<void> {
     const helperPath = resolveHelperPath();
-    const args = ['--device-name', 'DS5 Bridge', '--speaker-volume', `${speakerVolumePercent}`];
+    const args = [
+      '--device-name',
+      'DS5 Bridge',
+      '--source',
+      HOST_AUDIO_SOURCE,
+      '--speaker-volume',
+      `${speakerVolumePercent}`
+    ];
     if (hidPath) {
       args.push('--hid-path', hidPath);
     }
@@ -352,6 +360,10 @@ export class MicKeepaliveEngine extends EventEmitter {
   private starting: Promise<void> | null = null;
 
   async start(): Promise<void> {
+    if (hostAudioUsesRawPcmCapture()) {
+      await this.stop();
+      return;
+    }
     if (this.process) {
       return;
     }
@@ -413,6 +425,14 @@ export class MicKeepaliveEngine extends EventEmitter {
       }
     });
   }
+}
+
+function normalizeHostAudioSource(value: string | undefined): 'raw-pcm-capture' | 'render-loopback' {
+  return value === 'render-loopback' ? 'render-loopback' : 'raw-pcm-capture';
+}
+
+export function hostAudioUsesRawPcmCapture(): boolean {
+  return HOST_AUDIO_SOURCE === 'raw-pcm-capture';
 }
 
 function resolveHelperPath(): string {

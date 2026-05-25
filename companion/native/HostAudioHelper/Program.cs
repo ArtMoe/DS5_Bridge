@@ -106,8 +106,7 @@ sealed class HostAudioHelper : IDisposable
     private readonly Task? diagnosticsTask;
     private static readonly double[] HapticDownsampleKernel = BuildHapticDownsampleKernel();
     private MMDeviceEnumerator? enumerator;
-    private MMDevice? renderDevice;
-    private WasapiLoopbackCapture? capture;
+    private WasapiCapture? capture;
     private WasapiCapture? micCapture;
     private HidStream? hidStream;
     private int picoBlockFrameIndex;
@@ -224,9 +223,12 @@ sealed class HostAudioHelper : IDisposable
         }
 
         TryOpenCompanionHid();
-        var device = EndpointManager.SelectRenderEndpoint(enumerator, options.DeviceName);
-        renderDevice = device;
-        capture = new WasapiLoopbackCapture(device);
+        var device = options.Source == HostAudioSource.RawPcmCapture
+            ? EndpointManager.SelectCaptureEndpoint(enumerator, options.DeviceName)
+            : EndpointManager.SelectRenderEndpoint(enumerator, options.DeviceName);
+        capture = options.Source == HostAudioSource.RawPcmCapture
+            ? new WasapiCapture(device, false, AudioConstants.WasapiBufferMilliseconds)
+            : new WasapiLoopbackCapture(device);
         SetWasapiBufferMilliseconds(capture, AudioConstants.WasapiBufferMilliseconds);
         capture.DataAvailable += OnDataAvailable;
         capture.RecordingStopped += (_, eventArgs) =>
@@ -235,11 +237,8 @@ sealed class HostAudioHelper : IDisposable
             stopped.Set();
         };
 
-        if (AudioConstants.DiagnosticsEnabled)
-        {
-            Console.Error.WriteLine(
-                $"status: capturing '{device.FriendlyName}' {capture.WaveFormat.SampleRate}Hz {capture.WaveFormat.Channels}ch {capture.WaveFormat.BitsPerSample}bit {capture.WaveFormat.Encoding}");
-        }
+        Console.Error.WriteLine(
+            $"status: host-capture-format source={options.SourceArgument} device='{device.FriendlyName}' sampleRate={capture.WaveFormat.SampleRate} channels={capture.WaveFormat.Channels} bits={capture.WaveFormat.BitsPerSample} encoding={capture.WaveFormat.Encoding}");
         try
         {
             capture.StartRecording();
@@ -304,7 +303,7 @@ sealed class HostAudioHelper : IDisposable
         hidStream = PicoTransport.TryOpenDirectHid(options.HidPath);
     }
 
-    private static void SetWasapiBufferMilliseconds(WasapiLoopbackCapture capture, int milliseconds)
+    private static void SetWasapiBufferMilliseconds(WasapiCapture capture, int milliseconds)
     {
         var field = typeof(WasapiCapture).GetField("audioBufferMillisecondsLength", BindingFlags.Instance | BindingFlags.NonPublic);
         field?.SetValue(capture, milliseconds);
@@ -1009,9 +1008,16 @@ sealed class FrameDumpWriter : IDisposable
     }
 }
 
+enum HostAudioSource
+{
+    RenderLoopback,
+    RawPcmCapture
+}
+
 sealed record HelperOptions(
     string? DeviceName,
     string? HidPath,
+    HostAudioSource Source,
     bool ListDevices,
     bool MicKeepaliveOnly,
     string? MicDeviceName,
@@ -1021,11 +1027,14 @@ sealed record HelperOptions(
     string? FrameDumpPath,
     int FrameDumpFrameLimit)
 {
+    public string SourceArgument => Source == HostAudioSource.RawPcmCapture ? "raw-pcm-capture" : "render-loopback";
+
     public static HelperOptions Parse(string[] args)
     {
         string? deviceName = null;
         string? hidPath = null;
         string? micDeviceName = null;
+        var source = HostAudioSource.RenderLoopback;
         var speakerVolumePercent = 100;
         string? testAudioPath = null;
         string? frameDumpPath = Environment.GetEnvironmentVariable("DS5_BRIDGE_HOST_AUDIO_FRAME_DUMP");
@@ -1045,6 +1054,9 @@ sealed record HelperOptions(
                     break;
                 case "--hid-path" when index + 1 < args.Length:
                     hidPath = args[++index];
+                    break;
+                case "--source" when index + 1 < args.Length:
+                    source = ParseSource(args[++index]);
                     break;
                 case "--mic-device-name" when index + 1 < args.Length:
                     micDeviceName = args[++index];
@@ -1079,6 +1091,7 @@ sealed record HelperOptions(
         return new HelperOptions(
             deviceName,
             hidPath,
+            source,
             listDevices,
             micKeepaliveOnly,
             micDeviceName,
@@ -1087,6 +1100,13 @@ sealed record HelperOptions(
             playTestTone,
             frameDumpPath,
             frameDumpFrameLimit);
+    }
+
+    private static HostAudioSource ParseSource(string value)
+    {
+        return value.Equals("raw-pcm-capture", StringComparison.OrdinalIgnoreCase)
+            ? HostAudioSource.RawPcmCapture
+            : HostAudioSource.RenderLoopback;
     }
 
     private static int ParseFrameDumpLimit(string? value)
