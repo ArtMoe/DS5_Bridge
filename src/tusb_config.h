@@ -120,17 +120,19 @@
 #define CFG_TUD_AUDIO_FUNC_1_N_BYTES_PER_SAMPLE_TX      2
 #define CFG_TUD_AUDIO_FUNC_1_RESOLUTION_TX              16
 
-// Raw PCM return path (second IN/TX function): mirror the 4-channel USB
-// playback stream back to the Companion without stealing the real mic endpoint.
-#define CFG_TUD_AUDIO_FUNC_2_N_CHANNELS_TX              4
+// Raw PCM return path (second IN/TX function): mirror speaker stereo back to
+// the Companion without stealing the real mic endpoint. Haptics stay local on
+// the Pico and are merged into host-encoded reports.
+#define CFG_TUD_AUDIO_FUNC_2_N_CHANNELS_TX              2
 #define CFG_TUD_AUDIO_FUNC_2_N_BYTES_PER_SAMPLE_TX      2
 #define CFG_TUD_AUDIO_FUNC_2_RESOLUTION_TX              16
 
 // UAC1 Full-Speed endpoint size
 #define CFG_TUD_AUDIO_FUNC_1_SAMPLE_RATE            48000
+#define CFG_TUD_AUDIO_FUNC_2_SAMPLE_RATE            48000
 #define CFG_TUD_AUDIO_FUNC_1_FORMAT_1_EP_SZ_OUT     TUD_AUDIO_EP_SIZE(false, CFG_TUD_AUDIO_FUNC_1_SAMPLE_RATE, CFG_TUD_AUDIO_FUNC_1_N_BYTES_PER_SAMPLE_RX, CFG_TUD_AUDIO_FUNC_1_N_CHANNELS_RX)
 #define CFG_TUD_AUDIO_FUNC_1_FORMAT_1_EP_SZ_IN      TUD_AUDIO_EP_SIZE(false, CFG_TUD_AUDIO_FUNC_1_SAMPLE_RATE, CFG_TUD_AUDIO_FUNC_1_N_BYTES_PER_SAMPLE_TX, CFG_TUD_AUDIO_FUNC_1_N_CHANNELS_TX)
-#define CFG_TUD_AUDIO_FUNC_2_FORMAT_1_EP_SZ_IN      TUD_AUDIO_EP_SIZE(false, CFG_TUD_AUDIO_FUNC_1_SAMPLE_RATE, CFG_TUD_AUDIO_FUNC_2_N_BYTES_PER_SAMPLE_TX, CFG_TUD_AUDIO_FUNC_2_N_CHANNELS_TX)
+#define CFG_TUD_AUDIO_FUNC_2_FORMAT_1_EP_SZ_IN      TUD_AUDIO_EP_SIZE(false, CFG_TUD_AUDIO_FUNC_2_SAMPLE_RATE, CFG_TUD_AUDIO_FUNC_2_N_BYTES_PER_SAMPLE_TX, CFG_TUD_AUDIO_FUNC_2_N_CHANNELS_TX)
 #define CFG_TUD_AUDIO_FUNC_1_EP_OUT_SZ_MAX          CFG_TUD_AUDIO_FUNC_1_FORMAT_1_EP_SZ_OUT
 #define CFG_TUD_AUDIO_FUNC_1_EP_IN_SZ_MAX           CFG_TUD_AUDIO_FUNC_1_FORMAT_1_EP_SZ_IN
 #define CFG_TUD_AUDIO_FUNC_2_EP_OUT_SZ_MAX          0

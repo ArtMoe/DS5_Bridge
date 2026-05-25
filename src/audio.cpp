@@ -60,7 +60,11 @@
 #define HOST_FRAME_REASSEMBLY_SIZE 448
 #define HOST_AUDIO_REPORT_SIZE REPORT_SIZE
 #define HOST_AUDIO_COMPACT_REPORT_SIZE (SAMPLE_SIZE + 200)
-#define HOST_RAW_PCM_RETURN_PACKET_BYTES (48 * INPUT_CHANNELS * sizeof(int16_t))
+#define HOST_RAW_PCM_RETURN_FRAMES 48
+#define HOST_RAW_PCM_RETURN_CHANNELS 2
+#define HOST_RAW_PCM_RETURN_PACKET_BYTES (HOST_RAW_PCM_RETURN_FRAMES * INPUT_CHANNELS * sizeof(int16_t))
+#define HOST_RAW_PCM_RETURN_LINE_BYTES (HOST_RAW_PCM_RETURN_FRAMES * HOST_RAW_PCM_RETURN_CHANNELS * sizeof(int16_t))
+#define HOST_USB_HAPTIC_LATCH_US 50000
 #define HOST_MIC_OPUS_SIZE 71
 #define HOST_MIC_OPUS_FRAMES 480
 #define HOST_MIC_INPUT_CHANNELS 1
@@ -214,6 +218,9 @@ static float audio_buf[512 * 2];
 static uint audio_buf_pos = 0;
 static int8_t audio_haptic_buf[SAMPLE_SIZE];
 static int audio_haptic_buf_pos = 0;
+static int8_t host_usb_haptic_buf[SAMPLE_SIZE]{};
+static bool host_usb_haptic_pending = false;
+static uint32_t host_usb_haptic_us = 0;
 static HostAudioRuntimeState host_runtime;
 static uint16_t host_reassembly_generation = 0;
 static uint16_t host_reassembly_sequence = 0;
@@ -255,6 +262,9 @@ static void reset_controller_audio_report_counters();
 static void schedule_host_route_primer();
 static bool prime_host_audio_route_if_needed();
 static uint8_t clamp_debug_u8(uint32_t value);
+static bool haptic_block_has_signal(uint8_t const *data);
+static bool copy_latest_host_usb_haptics(uint8_t *destination);
+static void store_latest_host_usb_haptics(int8_t const *data);
 #if DS5_AUDIO_DEBUG_ENABLED
 static void audio_debug_log_impl(
     AudioDebugEventCode code,
@@ -1001,6 +1011,52 @@ static void apply_haptics_gain_to_packet(uint8_t *data) {
     }
 }
 
+static bool haptic_block_has_signal(uint8_t const *data) {
+    if (data == nullptr) {
+        return false;
+    }
+
+    auto const *samples = reinterpret_cast<int8_t const *>(data);
+    for (uint16_t i = 0; i < SAMPLE_SIZE; i++) {
+        if (samples[i] > 1 || samples[i] < -1) {
+            return true;
+        }
+    }
+    return false;
+}
+
+static void store_latest_host_usb_haptics(int8_t const *data) {
+    if (data == nullptr) {
+        return;
+    }
+    if (!haptic_block_has_signal(reinterpret_cast<uint8_t const *>(data))) {
+        if (
+            host_usb_haptic_pending
+            && static_cast<uint32_t>(time_us_32() - host_usb_haptic_us) > HOST_USB_HAPTIC_LATCH_US
+        ) {
+            host_usb_haptic_pending = false;
+        }
+        return;
+    }
+
+    memcpy(host_usb_haptic_buf, data, sizeof(host_usb_haptic_buf));
+    host_usb_haptic_pending = true;
+    host_usb_haptic_us = time_us_32();
+}
+
+static bool copy_latest_host_usb_haptics(uint8_t *destination) {
+    if (destination == nullptr || !host_usb_haptic_pending) {
+        return false;
+    }
+    if (static_cast<uint32_t>(time_us_32() - host_usb_haptic_us) > HOST_USB_HAPTIC_LATCH_US) {
+        host_usb_haptic_pending = false;
+        return false;
+    }
+
+    memcpy(destination, host_usb_haptic_buf, sizeof(host_usb_haptic_buf));
+    return true;
+}
+
 static void build_host_audio_report_header(uint8_t *packet) {
     memset(packet, 0, HOST_AUDIO_REPORT_SIZE);
     packet[0] = REPORT_ID;
@@ -1265,6 +1321,9 @@ static bool submit_host_audio_report(uint8_t const *report, uint16_t len) {
 #endif
         build_host_audio_report_header(packet);
         memcpy(packet + 78, report, SAMPLE_SIZE);
+        if (!haptic_block_has_signal(packet + 78)) {
+            (void)copy_latest_host_usb_haptics(packet + 78);
+        }
         apply_haptics_gain_to_packet(packet + 78);
         memcpy(packet + 144, report + SAMPLE_SIZE, 200);
     } else if (len == HOST_AUDIO_REPORT_SIZE && report[0] == REPORT_ID) {
@@ -1274,6 +1333,9 @@ static bool submit_host_audio_report(uint8_t const *report, uint16_t len) {
         memcpy(packet, report, sizeof(packet));
         copy_routed_state_data(packet + 13);
         packet[142] = (plug_headset ? 0x16 : 0x13) | (1 << 7);
+        if (!haptic_block_has_signal(packet + 78)) {
+            (void)copy_latest_host_usb_haptics(packet + 78);
+        }
         apply_haptics_gain_to_packet(packet + 78);
     } else {
         host_frames_dropped++;
@@ -1791,40 +1853,72 @@ static bool process_usb_audio_raw_pcm_return_packet() {
         return false;
     }
 
-    alignas(4) uint8_t raw[HOST_RAW_PCM_RETURN_PACKET_BYTES];
+    alignas(4) int16_t raw[HOST_RAW_PCM_RETURN_FRAMES * INPUT_CHANNELS];
     const uint32_t bytes_read = tud_audio_read(raw, sizeof(raw));
     if (bytes_read == 0) {
         return false;
     }
+    const int frames = bytes_read / (INPUT_CHANNELS * sizeof(int16_t));
+    if (frames == 0) {
+        return false;
+    }
     audio_stats_note_usb_read(now);
 
-    if (!host_raw_pcm_return_active()) {
-        return true;
+    alignas(4) int16_t line[HOST_RAW_PCM_RETURN_FRAMES * HOST_RAW_PCM_RETURN_CHANNELS]{};
+    WDL_ResampleSample *in_buf;
+    const int nframes = resampler.ResamplePrepare(frames, OUTPUT_CHANNELS, &in_buf);
+    for (int i = 0; i < nframes; i++) {
+        line[i * HOST_RAW_PCM_RETURN_CHANNELS] = raw[i * INPUT_CHANNELS];
+        line[i * HOST_RAW_PCM_RETURN_CHANNELS + 1] = raw[i * INPUT_CHANNELS + 1];
+        in_buf[i * 2] = static_cast<WDL_ResampleSample>(raw[i * INPUT_CHANNELS + 2]) / 32768.0f;
+        in_buf[i * 2 + 1] = static_cast<WDL_ResampleSample>(raw[i * INPUT_CHANNELS + 3]) / 32768.0f;
     }
 
-    tu_fifo_t *ep_in_fifo = tud_audio_n_get_ep_in_ff(HOST_RAW_PCM_AUDIO_FUNC_ID);
-    if (ep_in_fifo != nullptr && tu_fifo_remaining(ep_in_fifo) < bytes_read) {
-        audio_debug_log(
-            AudioDebugUsbEvent,
-            5,
-            clamp_debug_u8(bytes_read),
-            clamp_debug_u8(tu_fifo_remaining(ep_in_fifo)),
-            0,
-            0
-        );
-        return true;
+    static WDL_ResampleSample out_buf[SAMPLE_SIZE];
+    const int out_frames = resampler.ResampleOut(out_buf, nframes, SAMPLE_SIZE / OUTPUT_CHANNELS, OUTPUT_CHANNELS);
+    for (int i = 0; i < out_frames; i++) {
+        const int val_l = static_cast<int>(out_buf[i * 2] * 127.0f);
+        const int val_r = static_cast<int>(out_buf[i * 2 + 1] * 127.0f);
+        audio_haptic_buf[audio_haptic_buf_pos++] = static_cast<int8_t>(clamp(val_l, -128, 127));
+        audio_haptic_buf[audio_haptic_buf_pos++] = static_cast<int8_t>(clamp(val_r, -128, 127));
+
+        if (audio_haptic_buf_pos != SAMPLE_SIZE) {
+            continue;
+        }
+        store_latest_host_usb_haptics(audio_haptic_buf);
+        audio_haptic_buf_pos = 0;
     }
 
-    const uint16_t written = tud_audio_n_write(HOST_RAW_PCM_AUDIO_FUNC_ID, raw, static_cast<uint16_t>(bytes_read));
-    if (written != bytes_read) {
-        audio_debug_log(
-            AudioDebugUsbEvent,
-            6,
-            clamp_debug_u8(written),
-            clamp_debug_u8(bytes_read),
-            usb_line_streaming_active() ? 1 : 0,
-            0
+    if (host_raw_pcm_return_active()) {
+        const uint16_t line_bytes = static_cast<uint16_t>(frames * HOST_RAW_PCM_RETURN_CHANNELS * sizeof(int16_t));
+        tu_fifo_t *ep_in_fifo = tud_audio_n_get_ep_in_ff(HOST_RAW_PCM_AUDIO_FUNC_ID);
+        if (ep_in_fifo != nullptr && tu_fifo_remaining(ep_in_fifo) < line_bytes) {
+            audio_debug_log(
+                AudioDebugUsbEvent,
+                5,
+                clamp_debug_u8(line_bytes),
+                clamp_debug_u8(tu_fifo_remaining(ep_in_fifo)),
+                0,
+                0
+            );
+            return true;
+        }
+
+        const uint16_t written = tud_audio_n_write(
+            HOST_RAW_PCM_AUDIO_FUNC_ID,
+            reinterpret_cast<uint8_t const *>(line),
+            line_bytes
         );
+        if (written != line_bytes) {
+            audio_debug_log(
+                AudioDebugUsbEvent,
+                6,
+                clamp_debug_u8(written),
+                clamp_debug_u8(line_bytes),
+                usb_line_streaming_active() ? 1 : 0,
+                0
+            );
+        }
     }
 
     return true;
