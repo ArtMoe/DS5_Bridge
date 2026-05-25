@@ -38,8 +38,8 @@ extern uint8_t usb_hid_polling_interval_ms_value;
 #define DS5_FEEDBACK_TRACE_ENABLED 0
 #endif
 
-#define CONFIG_TOTAL_LEN_STANDARD 0x00E6
-#define CONFIG_TOTAL_LEN_COMPANION 0x011F
+#define CONFIG_TOTAL_LEN_STANDARD 0x014A
+#define CONFIG_TOTAL_LEN_COMPANION 0x0183
 #define COMPANION_HID_REPORT_DESC_LEN \
     (0x0040 \
         + (DS5_TRIGGER_TRACE_ENABLED ? 0x0008 : 0) \
@@ -102,10 +102,10 @@ uint8_t descriptor_configuration[] = {
     0x02, // bDescriptorType (CONFIGURATION)
 #ifdef ENABLE_COMPANION
     CONFIG_TOTAL_LEN_COMPANION & 0xFF, (CONFIG_TOTAL_LEN_COMPANION >> 8) & 0xFF, // wTotalLength: 277
-    0x06, // bNumInterfaces: 6
+    0x08, // bNumInterfaces: 8
 #else
     CONFIG_TOTAL_LEN_STANDARD & 0xFF, (CONFIG_TOTAL_LEN_STANDARD >> 8) & 0xFF, // wTotalLength: 227
-    0x04, // bNumInterfaces: 4
+    0x06, // bNumInterfaces: 6
 #endif
     0x01, // bConfigurationValue: 1
     0x00, // iConfiguration: 0
@@ -128,7 +128,7 @@ uint8_t descriptor_configuration[] = {
     0x24, // bDescriptorType: CS_INTERFACE (0x24)
     0x01, // bDescriptorSubtype: Header (0x01)
     0x00, 0x01, // bcdADC: 1.00
-    0x4C, 0x00, // wTotalLength: 76 (0x004C)
+    0x49, 0x00, // wTotalLength: 73 (0x0049)
     0x02, // bInCollection: 2 streaming interfaces
     0x01, // baInterfaceNr(1): Interface 1
     0x02, // baInterfaceNr(2): Interface 2
@@ -161,24 +161,24 @@ uint8_t descriptor_configuration[] = {
     0x03, // bDescriptorSubtype: Output Terminal
     0x03, // bTerminalID: 3
     0x01, 0x03, // wTerminalType: Speaker (0x0301)
-    0x00, // bAssocTerminal: 0 (raw return is not a headset mic pair)
+    0x04, // bAssocTerminal: 4 (paired with mic input)
     0x02, // bSourceID: 2 (Feature Unit)
     0x00, // iTerminal: 0
 
-    // Input Terminal Descriptor (Terminal ID 4: Raw PCM return)
+    // Input Terminal Descriptor (Terminal ID 4: Headset Mic)
     0x0C, // bLength: 12
     0x24, // bDescriptorType: CS_INTERFACE
     0x02, // bDescriptorSubtype: Input Terminal
     0x04, // bTerminalID: 4
-    0x03, 0x06, // wTerminalType: Line Connector (0x0603)
-    0x00, // bAssocTerminal: 0
-    0x04, // bNrChannels: 4
-    0x33, 0x00, // wChannelConfig: L/R Front + L/R Surround (0x0033)
+    0x02, 0x04, // wTerminalType: Headset (0x0402)
+    0x03, // bAssocTerminal: 3 (paired with speaker)
+    0x01, // bNrChannels: 1
+    0x00, 0x00, // wChannelConfig: non-predefined mono
     0x00, // iChannelNames: 0
     0x00, // iTerminal: 0
 
     // Feature Unit Descriptor (Unit ID 5 ← from Terminal 4)
-    0x0C, // bLength: 12
+    0x09, // bLength: 9
     0x24, // bDescriptorType: CS_INTERFACE
     0x06, // bDescriptorSubtype: Feature Unit
     0x05, // bUnitID: 5
@@ -186,7 +186,6 @@ uint8_t descriptor_configuration[] = {
     0x01, // bControlSize: 1
     0x03, // bmaControls[0]: Master – Mute, Volume
     0x00, // bmaControls[1]: Ch1 – no controls
-    0x00, 0x00, 0x00, // bmaControls[2..4]: no per-channel controls
     0x00, // iFeature: 0
 
     // Output Terminal Descriptor (Terminal ID 6: USB Streaming ← from Unit 5)
@@ -288,12 +287,12 @@ uint8_t descriptor_configuration[] = {
     0x01, // bDelay: 1 frame
     0x01, 0x00, // wFormatTag: PCM (0x0001)
 
-    // Format Type Descriptor (4-channel, 16-bit, 48kHz)
+    // Format Type Descriptor (1-channel, 16-bit, 48kHz)
     0x0B, // bLength: 11
     0x24, // bDescriptorType: CS_INTERFACE
     0x02, // bDescriptorSubtype: FORMAT_TYPE
     0x01, // bFormatType: TYPE_I
-    0x04, // bNrChannels: 4
+    0x01, // bNrChannels: 1
     0x02, // bSubframeSize: 2
     0x10, // bBitResolution: 16
     0x01, // bSamFreqType: 1
@@ -304,7 +303,7 @@ uint8_t descriptor_configuration[] = {
     0x05, // bDescriptorType (ENDPOINT)
     0x82, // bEndpointAddress: IN EP2
     0x05, // bmAttributes: Isochronous, Asynchronous
-    0x88, 0x01, // wMaxPacketSize: 392 bytes
+    0x62, 0x00, // wMaxPacketSize: 98 bytes
     0x01, // bInterval: 1
     0x00, // bRefresh
     0x00, // bSynchAddress
@@ -317,10 +316,123 @@ uint8_t descriptor_configuration[] = {
     0x00, // Lock Delay Units
     0x00, 0x00, // Lock Delay
 
-    // --- INTERFACE DESCRIPTOR (3.0): HID (DualSense 5 Gamepad + Touchpad) ---
+    // --- INTERFACE DESCRIPTOR (3.0): Audio Control (Raw PCM Return) ---
     0x09, // bLength
     0x04, // bDescriptorType (INTERFACE)
     0x03, // bInterfaceNumber: 3
+    0x00, // bAlternateSetting: 0
+    0x00, // bNumEndpoints: 0
+    0x01, // bInterfaceClass: Audio (0x01)
+    0x01, // bInterfaceSubClass: Audio Control (0x01)
+    0x00, // bInterfaceProtocol: 0x00
+    0x00, // iInterface: 0
+
+    // Class-specific AC Interface Header Descriptor
+    0x09, // bLength: 9
+    0x24, // bDescriptorType: CS_INTERFACE (0x24)
+    0x01, // bDescriptorSubtype: Header (0x01)
+    0x00, 0x01, // bcdADC: 1.00
+    0x2A, 0x00, // wTotalLength: 42 (0x002A)
+    0x01, // bInCollection: 1 streaming interface
+    0x04, // baInterfaceNr(1): Interface 4
+
+    // Input Terminal Descriptor (Terminal ID 7: Raw PCM return)
+    0x0C, // bLength: 12
+    0x24, // bDescriptorType: CS_INTERFACE
+    0x02, // bDescriptorSubtype: Input Terminal
+    0x07, // bTerminalID: 7
+    0x03, 0x06, // wTerminalType: Line Connector (0x0603)
+    0x00, // bAssocTerminal: 0
+    0x04, // bNrChannels: 4
+    0x33, 0x00, // wChannelConfig: L/R Front + L/R Surround (0x0033)
+    0x00, // iChannelNames: 0
+    0x00, // iTerminal: 0
+
+    // Feature Unit Descriptor (Unit ID 8 <- from Terminal 7)
+    0x0C, // bLength: 12
+    0x24, // bDescriptorType: CS_INTERFACE
+    0x06, // bDescriptorSubtype: Feature Unit
+    0x08, // bUnitID: 8
+    0x07, // bSourceID: 7
+    0x01, // bControlSize: 1
+    0x03, // bmaControls[0]: Master - Mute, Volume
+    0x00, // bmaControls[1]: Ch1 - no controls
+    0x00, 0x00, 0x00, // bmaControls[2..4]: no per-channel controls
+    0x00, // iFeature: 0
+
+    // Output Terminal Descriptor (Terminal ID 9: USB Streaming <- from Unit 8)
+    0x09, // bLength: 9
+    0x24, // bDescriptorType: CS_INTERFACE
+    0x03, // bDescriptorSubtype: Output Terminal
+    0x09, // bTerminalID: 9
+    0x01, 0x01, // wTerminalType: USB Streaming (0x0101)
+    0x00, // bAssocTerminal: 0
+    0x08, // bSourceID: 8
+    0x00, // iTerminal: 0
+
+    // --- INTERFACE DESCRIPTOR (4.0): Audio Streaming IN (Raw PCM Return - Alternate 0) ---
+    0x09, // bLength
+    0x04, // bDescriptorType (INTERFACE)
+    0x04, // bInterfaceNumber: 4
+    0x00, // bAlternateSetting: 0
+    0x00, // bNumEndpoints: 0
+    0x01, // bInterfaceClass: Audio
+    0x02, // bInterfaceSubClass: Audio Streaming
+    0x00, // bInterfaceProtocol
+    0x00, // iInterface
+
+    // --- INTERFACE DESCRIPTOR (4.1): Audio Streaming IN (Raw PCM Return - Alternate 1) ---
+    0x09, // bLength
+    0x04, // bDescriptorType (INTERFACE)
+    0x04, // bInterfaceNumber: 4
+    0x01, // bAlternateSetting: 1
+    0x01, // bNumEndpoints: 1
+    0x01, // bInterfaceClass: Audio
+    0x02, // bInterfaceSubClass: Audio Streaming
+    0x00, // bInterfaceProtocol
+    0x00, // iInterface
+
+    // AS General Descriptor (for Interface 4.1)
+    0x07, // bLength: 7
+    0x24, // bDescriptorType: CS_INTERFACE
+    0x01, // bDescriptorSubtype: AS_GENERAL
+    0x09, // bTerminalLink: connected to Terminal ID 9
+    0x01, // bDelay: 1 frame
+    0x01, 0x00, // wFormatTag: PCM (0x0001)
+
+    // Format Type Descriptor (4-channel, 16-bit, 48kHz)
+    0x0B, // bLength: 11
+    0x24, // bDescriptorType: CS_INTERFACE
+    0x02, // bDescriptorSubtype: FORMAT_TYPE
+    0x01, // bFormatType: TYPE_I
+    0x04, // bNrChannels: 4
+    0x02, // bSubframeSize: 2
+    0x10, // bBitResolution: 16
+    0x01, // bSamFreqType: 1
+    0x80, 0xBB, 0x00, // tSamFreq: 48000 Hz
+
+    // Endpoint Descriptor (Raw PCM Return IN: EP8)
+    0x09, // bLength
+    0x05, // bDescriptorType (ENDPOINT)
+    0x88, // bEndpointAddress: IN EP8
+    0x05, // bmAttributes: Isochronous, Asynchronous
+    0x88, 0x01, // wMaxPacketSize: 392 bytes
+    0x01, // bInterval: 1
+    0x00, // bRefresh
+    0x00, // bSynchAddress
+
+    // Class-specific Audio Streaming Endpoint Descriptor (EP8)
+    0x07, // bLength
+    0x25, // bDescriptorType: CS_ENDPOINT
+    0x01, // bDescriptorSubtype: GENERAL
+    0x00, // Attributes: No controls
+    0x00, // Lock Delay Units
+    0x00, 0x00, // Lock Delay
+
+    // --- INTERFACE DESCRIPTOR (5.0): HID (DualSense 5 Gamepad + Touchpad) ---
+    0x09, // bLength
+    0x04, // bDescriptorType (INTERFACE)
+    0x05, // bInterfaceNumber: 5
     0x00, // bAlternateSetting: 0
     0x02, // bNumEndpoints: 2 (IN + OUT)
     0x03, // bInterfaceClass: HID
@@ -358,10 +470,10 @@ uint8_t descriptor_configuration[] = {
     0x01, // bInterval: 1 (polling every 4ms -> 1ms)
 
 #ifdef ENABLE_COMPANION
-    // --- INTERFACE DESCRIPTOR (4.0): HID (DS5 Bridge Companion) ---
+    // --- INTERFACE DESCRIPTOR (6.0): HID (DS5 Bridge Companion) ---
     0x09, // bLength
     0x04, // bDescriptorType (INTERFACE)
-    0x04, // bInterfaceNumber: 4
+    0x06, // bInterfaceNumber: 6
     0x00, // bAlternateSetting: 0
     0x02, // bNumEndpoints: 2 (IN + OUT)
     0x03, // bInterfaceClass: HID
@@ -394,10 +506,10 @@ uint8_t descriptor_configuration[] = {
     0x40, 0x00, // wMaxPacketSize: 64
     0x01, // bInterval: 1
 
-    // --- INTERFACE DESCRIPTOR (5.0): HID (Bridge Keyboard) ---
+    // --- INTERFACE DESCRIPTOR (7.0): HID (Bridge Keyboard) ---
     0x09, // bLength
     0x04, // bDescriptorType (INTERFACE)
-    0x05, // bInterfaceNumber: 5
+    0x07, // bInterfaceNumber: 7
     0x00, // bAlternateSetting: 0
     0x01, // bNumEndpoints: 1 (IN)
     0x03, // bInterfaceClass: HID

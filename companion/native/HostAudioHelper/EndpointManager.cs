@@ -48,6 +48,54 @@ sealed class EndpointManager
         return enumerator.GetDefaultAudioEndpoint(DataFlow.Capture, Role.Communications);
     }
 
+    public static MMDevice SelectRawPcmCaptureEndpoint(MMDeviceEnumerator enumerator, string? deviceName)
+    {
+        var devices = enumerator
+            .EnumerateAudioEndPoints(DataFlow.Capture, DeviceState.Active)
+            .ToArray();
+
+        if (!string.IsNullOrWhiteSpace(deviceName))
+        {
+            var named = SelectPreferredNamedCaptureEndpoint(devices, deviceName, IsLineEndpoint);
+            if (named is not null)
+            {
+                return named;
+            }
+        }
+
+        var bridge = SelectPreferredBridgeCaptureEndpoint(devices, IsLineEndpoint);
+        if (bridge is not null)
+        {
+            return bridge;
+        }
+
+        return SelectCaptureEndpoint(enumerator, deviceName);
+    }
+
+    public static MMDevice SelectMicCaptureEndpoint(MMDeviceEnumerator enumerator, string? deviceName)
+    {
+        var devices = enumerator
+            .EnumerateAudioEndPoints(DataFlow.Capture, DeviceState.Active)
+            .ToArray();
+
+        if (!string.IsNullOrWhiteSpace(deviceName))
+        {
+            var named = SelectPreferredNamedCaptureEndpoint(devices, deviceName, IsMicEndpoint);
+            if (named is not null)
+            {
+                return named;
+            }
+        }
+
+        var bridge = SelectPreferredBridgeCaptureEndpoint(devices, IsMicEndpoint);
+        if (bridge is not null)
+        {
+            return bridge;
+        }
+
+        return SelectCaptureEndpoint(enumerator, deviceName);
+    }
+
     public static MMDevice? FindKnownBridgeEndpoint(IEnumerable<MMDevice> devices)
     {
         foreach (var name in BridgeEndpointAliases)
@@ -107,5 +155,66 @@ sealed class EndpointManager
 
         var available = string.Join(", ", devices.Select(device => $"'{device.FriendlyName}'"));
         throw new InvalidOperationException($"{role} endpoint matching '{deviceName}' was not found. Available endpoints: {available}");
+    }
+
+    private static MMDevice? SelectPreferredNamedCaptureEndpoint(
+        MMDevice[] devices,
+        string deviceName,
+        Func<MMDevice, bool> preferred)
+    {
+        var matches = devices
+            .Where(device =>
+                string.Equals(device.FriendlyName, deviceName, StringComparison.OrdinalIgnoreCase)
+                || device.FriendlyName.Contains(deviceName, StringComparison.OrdinalIgnoreCase)
+                || (deviceName.Contains("DS5 Bridge", StringComparison.OrdinalIgnoreCase)
+                    && IsKnownBridgeEndpoint(device)))
+            .ToArray();
+
+        return SelectPreferredEndpoint(matches, preferred);
+    }
+
+    private static MMDevice? SelectPreferredBridgeCaptureEndpoint(MMDevice[] devices, Func<MMDevice, bool> preferred)
+    {
+        foreach (var name in BridgeEndpointAliases)
+        {
+            var matches = devices
+                .Where(device => device.FriendlyName.Contains(name, StringComparison.OrdinalIgnoreCase))
+                .ToArray();
+            var preferredEndpoint = SelectPreferredEndpoint(matches, preferred);
+            if (preferredEndpoint is not null)
+            {
+                return preferredEndpoint;
+            }
+        }
+
+        return null;
+    }
+
+    private static MMDevice? SelectPreferredEndpoint(MMDevice[] devices, Func<MMDevice, bool> preferred)
+    {
+        var preferredEndpoint = devices.FirstOrDefault(preferred);
+        if (preferredEndpoint is not null)
+        {
+            return preferredEndpoint;
+        }
+
+        return devices.FirstOrDefault();
+    }
+
+    private static bool IsKnownBridgeEndpoint(MMDevice device)
+    {
+        return BridgeEndpointAliases.Any(alias =>
+            device.FriendlyName.Contains(alias, StringComparison.OrdinalIgnoreCase));
+    }
+
+    private static bool IsLineEndpoint(MMDevice device)
+    {
+        return device.FriendlyName.Contains("Line", StringComparison.OrdinalIgnoreCase);
+    }
+
+    private static bool IsMicEndpoint(MMDevice device)
+    {
+        return device.FriendlyName.Contains("Microphone", StringComparison.OrdinalIgnoreCase)
+            || device.FriendlyName.Contains("Headset", StringComparison.OrdinalIgnoreCase);
     }
 }

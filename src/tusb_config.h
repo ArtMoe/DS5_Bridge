@@ -91,7 +91,7 @@
 #endif
 
 //------------- CLASS -------------//
-#define CFG_TUD_AUDIO             1
+#define CFG_TUD_AUDIO             2
 #ifdef ENABLE_COMPANION
 #define CFG_TUD_HID               3
 #else
@@ -115,23 +115,33 @@
 #define CFG_TUD_AUDIO_FUNC_1_N_BYTES_PER_SAMPLE_RX      2
 #define CFG_TUD_AUDIO_FUNC_1_RESOLUTION_RX              16
 
-// Raw PCM return path (IN/TX): mirror the 4-channel USB playback stream back
-// to the Companion for host-side Opus encoding without touching WASAPI render.
-#define CFG_TUD_AUDIO_FUNC_1_N_CHANNELS_TX              4
+// Microphone (IN/TX) path: 1-channel, 16-bit.
+#define CFG_TUD_AUDIO_FUNC_1_N_CHANNELS_TX              1
 #define CFG_TUD_AUDIO_FUNC_1_N_BYTES_PER_SAMPLE_TX      2
 #define CFG_TUD_AUDIO_FUNC_1_RESOLUTION_TX              16
+
+// Raw PCM return path (second IN/TX function): mirror the 4-channel USB
+// playback stream back to the Companion without stealing the real mic endpoint.
+#define CFG_TUD_AUDIO_FUNC_2_N_CHANNELS_TX              4
+#define CFG_TUD_AUDIO_FUNC_2_N_BYTES_PER_SAMPLE_TX      2
+#define CFG_TUD_AUDIO_FUNC_2_RESOLUTION_TX              16
 
 // UAC1 Full-Speed endpoint size
 #define CFG_TUD_AUDIO_FUNC_1_SAMPLE_RATE            48000
 #define CFG_TUD_AUDIO_FUNC_1_FORMAT_1_EP_SZ_OUT     TUD_AUDIO_EP_SIZE(false, CFG_TUD_AUDIO_FUNC_1_SAMPLE_RATE, CFG_TUD_AUDIO_FUNC_1_N_BYTES_PER_SAMPLE_RX, CFG_TUD_AUDIO_FUNC_1_N_CHANNELS_RX)
 #define CFG_TUD_AUDIO_FUNC_1_FORMAT_1_EP_SZ_IN      TUD_AUDIO_EP_SIZE(false, CFG_TUD_AUDIO_FUNC_1_SAMPLE_RATE, CFG_TUD_AUDIO_FUNC_1_N_BYTES_PER_SAMPLE_TX, CFG_TUD_AUDIO_FUNC_1_N_CHANNELS_TX)
+#define CFG_TUD_AUDIO_FUNC_2_FORMAT_1_EP_SZ_IN      TUD_AUDIO_EP_SIZE(false, CFG_TUD_AUDIO_FUNC_1_SAMPLE_RATE, CFG_TUD_AUDIO_FUNC_2_N_BYTES_PER_SAMPLE_TX, CFG_TUD_AUDIO_FUNC_2_N_CHANNELS_TX)
 #define CFG_TUD_AUDIO_FUNC_1_EP_OUT_SZ_MAX          CFG_TUD_AUDIO_FUNC_1_FORMAT_1_EP_SZ_OUT
 #define CFG_TUD_AUDIO_FUNC_1_EP_IN_SZ_MAX           CFG_TUD_AUDIO_FUNC_1_FORMAT_1_EP_SZ_IN
+#define CFG_TUD_AUDIO_FUNC_2_EP_OUT_SZ_MAX          0
+#define CFG_TUD_AUDIO_FUNC_2_EP_IN_SZ_MAX           CFG_TUD_AUDIO_FUNC_2_FORMAT_1_EP_SZ_IN
 
 #define CFG_TUD_AUDIO_FUNC_1_EP_OUT_SW_BUF_SZ       (3 * CFG_TUD_AUDIO_FUNC_1_EP_OUT_SZ_MAX)
 #define CFG_TUD_AUDIO_FUNC_1_EP_IN_SW_BUF_SZ        (16 * CFG_TUD_AUDIO_FUNC_1_EP_IN_SZ_MAX)
+#define CFG_TUD_AUDIO_FUNC_2_EP_OUT_SW_BUF_SZ       0
+#define CFG_TUD_AUDIO_FUNC_2_EP_IN_SW_BUF_SZ        (16 * CFG_TUD_AUDIO_FUNC_2_EP_IN_SZ_MAX)
 
-// Enable OUT EP (speaker) and IN EP (mic)
+// Enable OUT EP (speaker) and IN EPs (mic + raw PCM return)
 #define CFG_TUD_AUDIO_ENABLE_EP_OUT                 1
 #define CFG_TUD_AUDIO_ENABLE_EP_IN                  1
 

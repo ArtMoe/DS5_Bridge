@@ -43,7 +43,7 @@ static class AudioConstants
     public const int WriterScheduleLateWarningUs = 8000;
     public const int HidWriteLateWarningUs = 8000;
     public const int DiagnosticsIntervalMilliseconds = 2000;
-    public static readonly bool DiagnosticsEnabled = false;
+    public static readonly bool DiagnosticsEnabled = true;
     public const int MicKeepaliveBufferMilliseconds = 10;
     public const float SpeakerGainRampStepPermille = 1000f / (TargetSampleRate * 0.02f);
     public static readonly long FrameIntervalTicks = Stopwatch.Frequency * PicoInputBlockFrames / TargetSampleRate;
@@ -228,7 +228,7 @@ sealed class HostAudioHelper : IDisposable
         try
         {
             var device = options.Source == HostAudioSource.RawPcmCapture
-                ? EndpointManager.SelectCaptureEndpoint(enumerator, options.DeviceName)
+                ? EndpointManager.SelectRawPcmCaptureEndpoint(enumerator, options.DeviceName)
                 : EndpointManager.SelectRenderEndpoint(enumerator, options.DeviceName);
             deviceName = device.FriendlyName;
             capture = options.Source == HostAudioSource.RawPcmCapture
@@ -284,7 +284,7 @@ sealed class HostAudioHelper : IDisposable
 
     private void StartMicKeepalive(MMDeviceEnumerator enumerator)
     {
-        var device = EndpointManager.SelectCaptureEndpoint(enumerator, options.MicDeviceName ?? options.DeviceName);
+        var device = EndpointManager.SelectMicCaptureEndpoint(enumerator, options.MicDeviceName ?? options.DeviceName);
         micCapture = new WasapiCapture(device, false, AudioConstants.MicKeepaliveBufferMilliseconds);
         micCapture.DataAvailable += OnMicDataAvailable;
         micCapture.RecordingStopped += (_, eventArgs) =>

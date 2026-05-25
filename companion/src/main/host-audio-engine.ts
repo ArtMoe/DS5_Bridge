@@ -366,10 +366,6 @@ export class MicKeepaliveEngine extends EventEmitter {
   private starting: Promise<void> | null = null;
 
   async start(): Promise<void> {
-    if (hostAudioUsesRawPcmCapture()) {
-      await this.stop();
-      return;
-    }
     if (this.process) {
       return;
     }
