@@ -1026,6 +1026,28 @@ button {
   transform: translate(-50%, 0);
 }
 
+.host-encoding-switch {
+  position: relative;
+}
+
+.host-encoding-switch:hover .host-encoding-tooltip,
+.host-encoding-switch:focus-within .host-encoding-tooltip {
+  opacity: 1;
+  transform: translate(0, 0);
+}
+
+.shortcut-glyph-tooltip.host-encoding-tooltip {
+  left: auto;
+  right: 0;
+  display: block;
+  width: min(520px, calc(100vw - 64px));
+  max-width: min(520px, calc(100vw - 64px));
+  text-align: left;
+  white-space: normal;
+  overflow-wrap: anywhere;
+  transform: translate(0, -4px);
+}
+
 .shortcut-glyph-tooltip {
   display: flex;
   align-items: center;
@@ -1948,6 +1970,38 @@ button.overview-shortcut-chip {
   margin-left: -10px;
   padding-left: 10px;
   padding-right: 11px;
+}
+
+.audio-heading-controls .host-encoding-switch-warn {
+  border-radius: var(--control-radius);
+  color: #ffe1a3;
+}
+
+.host-encoding-state {
+  min-height: 22px;
+  max-width: 102px;
+  padding: 0 8px;
+  border: 1px solid rgba(142, 164, 194, 0.28);
+  border-radius: var(--control-radius);
+  display: inline-flex;
+  align-items: center;
+  color: #b9c8dc;
+  background: rgba(142, 164, 194, 0.1);
+  font-size: 11px;
+  line-height: 1;
+  white-space: nowrap;
+}
+
+.host-encoding-state.warn {
+  border-color: rgba(244, 192, 93, 0.38);
+  color: #ffe1a3;
+  background: rgba(244, 192, 93, 0.12);
+}
+
+.host-encoding-state.retry {
+  border-color: rgba(78, 145, 255, 0.28);
+  color: #c6d8f6;
+  background: rgba(78, 145, 255, 0.1);
 }
 
 .audio-heading-controls .inline-switch + .inline-switch {
@@ -4064,6 +4118,11 @@ input[type="range"]:disabled::-webkit-slider-thumb {
   background: #1667dc;
 }
 
+.switch.on.warn {
+  border-color: rgba(244, 192, 93, 0.86);
+  background: #a96f18;
+}
+
 .switch.on:disabled {
   border-color: rgba(142, 164, 194, 0.24);
   background: rgba(126, 145, 172, 0.2);
@@ -4074,6 +4133,11 @@ input[type="range"]:disabled::-webkit-slider-thumb {
   opacity: 1;
   border-color: rgba(40, 124, 255, 0.88);
   background: #1667dc;
+}
+
+.audio-heading-controls .switch.on.warn:disabled {
+  border-color: rgba(244, 192, 93, 0.86);
+  background: #a96f18;
 }
 
 .switch.on span {

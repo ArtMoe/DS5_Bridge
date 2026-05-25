@@ -29,7 +29,7 @@ const FRAME_RECORD_PREFIX_BYTES = 2;
 const HOST_AUDIO_FRAME_BYTES = 264;
 const HELPER_RECORDING_STARTED_MESSAGE = 'status: recording-started';
 const HELPER_CAPTURE_UNAVAILABLE_PREFIX = 'status: capture-unavailable';
-const HELPER_START_TIMEOUT_MS = 2000;
+const HELPER_START_TIMEOUT_MS = 8000;
 const HELPER_TEST_TONE_TIMEOUT_MS = 10000;
 const HELPER_STDERR_MAX_CHARS = 8192;
 const HELPER_RELATIVE_PATH = path.join('native', 'HostAudioHelper', 'HostAudioHelper.exe');
@@ -187,7 +187,7 @@ export class HostAudioEngine extends EventEmitter {
       };
       const timeout = setTimeout(() => {
         finish(new HostAudioStartError(
-          'Host audio helper did not start recording within 2000ms.',
+          `Host audio helper did not start recording within ${HELPER_START_TIMEOUT_MS}ms.`,
           'start-timeout'
         ));
       }, HELPER_START_TIMEOUT_MS);
@@ -285,7 +285,7 @@ function hostAudioStartFailureMessage(reason: HostAudioStartFailureReason): stri
     case 'device-invalidated':
       return 'DualSense audio endpoint changed while host audio was starting.';
     case 'start-timeout':
-      return 'Host audio helper did not start recording within 2000ms.';
+      return `Host audio helper did not start recording within ${HELPER_START_TIMEOUT_MS}ms.`;
     case 'helper-exit':
       return 'Host audio helper exited before recording started.';
   }

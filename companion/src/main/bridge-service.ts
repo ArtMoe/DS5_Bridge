@@ -52,6 +52,8 @@ import type {
   BridgeDiagnostics,
   BridgeSnapshot,
   CompanionSettings,
+  HostAudioCaptureIssue,
+  HostAudioCaptureRetry,
   HidDeviceSummary,
   UiScalePercent,
   WindowsDeviceCleanupResult
@@ -61,6 +63,7 @@ import {
   HostAudioStartError,
   MicKeepaliveEngine,
   playHostAudioTestTone,
+  type HostAudioStartFailureReason,
   type HostAudioFramePayload
 } from './host-audio-engine';
 import { HidDiscoveryClient } from './hid-discovery-client';
@@ -106,6 +109,8 @@ type BridgeDiagnosticsWithoutAudioLog = Omit<
   | 'triggerTraceDroppedCount'
   | 'feedbackTraceLines'
   | 'feedbackTraceDroppedCount'
+  | 'hostAudioCaptureIssue'
+  | 'hostAudioCaptureRetry'
   | 'hostAudioStatus'
 >;
 
@@ -188,6 +193,26 @@ function isSupportedFirmwareVersion(version: string): boolean {
   return major >= 1;
 }
 
+function hostAudioCaptureIssueMessage(
+  reason: HostAudioStartFailureReason,
+  retrySeconds: number,
+  fallbackMessage: string
+): string {
+  switch (reason) {
+    case 'device-in-use':
+      return `DualSense audio endpoint is in exclusive use. Host Encoding will retry in ${retrySeconds}s; disable Host Encoding for games that require exclusive DualSense audio.`;
+    case 'device-invalidated':
+      return `DualSense audio endpoint changed while Host Encoding was starting. Host Encoding will retry in ${retrySeconds}s.`;
+    case 'start-timeout':
+    case 'helper-exit':
+      return `${fallbackMessage} Host Encoding will retry in ${retrySeconds}s.`;
+  }
+}
+
+function shouldSurfaceHostAudioCaptureIssue(reason: HostAudioStartFailureReason): boolean {
+  return reason === 'device-in-use' || reason === 'device-invalidated';
+}
+
 function emptyDiagnostics(rawDevices: HidDeviceSummary[]): BridgeDiagnostics {
   return {
     hidPath: null,
@@ -198,6 +223,8 @@ function emptyDiagnostics(rawDevices: HidDeviceSummary[]): BridgeDiagnostics {
     lastError: null,
     lastPollAt: null,
     rawDevices,
+    hostAudioCaptureIssue: null,
+    hostAudioCaptureRetry: null,
     audioDebugLogPath: null,
     audioDebugLogLines: [],
     audioDebugDroppedCount: 0,
@@ -805,6 +832,8 @@ export class BridgeService extends EventEmitter {
   private hostAudioChunkWriteCount = 0;
   private hostAudioFrameDropCount = 0;
   private hostAudioCaptureRetryAt = 0;
+  private hostAudioCaptureIssue: HostAudioCaptureIssue | null = null;
+  private hostAudioCaptureRetry: HostAudioCaptureRetry | null = null;
   private lastHostAudioStageLogAt = 0;
   private lastHostAudioStatusReadAt = 0;
   private lastAudioDebugReadAt = 0;
@@ -948,6 +977,8 @@ export class BridgeService extends EventEmitter {
       triggerTraceDroppedCount: this.triggerTraceDroppedCount,
       feedbackTraceLines: [...this.feedbackTraceLines],
       feedbackTraceDroppedCount: this.feedbackTraceDroppedCount,
+      hostAudioCaptureIssue: this.hostAudioCaptureIssue ? { ...this.hostAudioCaptureIssue } : null,
+      hostAudioCaptureRetry: this.hostAudioCaptureRetry ? { ...this.hostAudioCaptureRetry } : null,
       hostAudioStatus: this.hostAudioStatus ? { ...this.hostAudioStatus } : null
     };
   }
@@ -1118,9 +1149,10 @@ export class BridgeService extends EventEmitter {
     }
 
     try {
-      this.hostAudioStatus = parseHostAudioStatusReport(
+      const status = parseHostAudioStatusReport(
         this.device.getFeatureReport(REPORT_ID.HOST_AUDIO_STATUS, REPORT_LENGTH)
       );
+      this.hostAudioStatus = status;
       this.lastHostAudioStatusReadAt = Date.now();
     } catch {
       this.hostAudioStatus = null;
@@ -1920,26 +1952,40 @@ export class BridgeService extends EventEmitter {
 
   private clearHostAudioCaptureBackoff(): void {
     this.hostAudioCaptureRetryAt = 0;
+    this.hostAudioCaptureIssue = null;
+    this.hostAudioCaptureRetry = null;
   }
 
   private async handleHostAudioCaptureStartFailure(error: HostAudioStartError): Promise<void> {
-    this.hostAudioCaptureRetryAt = Date.now() + HOST_AUDIO_CAPTURE_RETRY_MS;
+    const retryAt = Date.now() + HOST_AUDIO_CAPTURE_RETRY_MS;
+    this.hostAudioCaptureRetryAt = retryAt;
     await this.deactivateHostAudioFirmwareAfterCaptureFailure();
 
     const retrySeconds = Math.round(HOST_AUDIO_CAPTURE_RETRY_MS / 1000);
-    const message = error.reason === 'device-in-use'
-      ? `DualSense audio endpoint is in exclusive use. Host Encoding will retry in ${retrySeconds}s; disable Host Encoding for games that require exclusive DualSense audio.`
-      : `${error.message} Host Encoding will retry in ${retrySeconds}s.`;
+    const message = hostAudioCaptureIssueMessage(error.reason, retrySeconds, error.message);
+    const surfaceIssue = shouldSurfaceHostAudioCaptureIssue(error.reason);
+    this.hostAudioCaptureRetry = {
+      reason: error.reason,
+      message,
+      retryAt
+    };
+    this.hostAudioCaptureIssue = surfaceIssue
+      ? {
+          reason: error.reason,
+          message,
+          retryAt
+        }
+      : null;
     this.appendAudioDebugLines([
       `[HostBridge] host audio capture unavailable reason=${error.reason} retryInMs=${HOST_AUDIO_CAPTURE_RETRY_MS}`
     ]);
     this.snapshot = {
       ...this.snapshot,
-      diagnostics: {
+      diagnostics: this.withAudioDebugDiagnostics({
         ...this.snapshot.diagnostics,
-        lastError: message,
+        lastError: surfaceIssue ? message : this.snapshot.diagnostics.lastError,
         lastPollAt: Date.now()
-      }
+      })
     };
     this.emitSnapshot();
   }
@@ -2546,6 +2592,8 @@ export class BridgeService extends EventEmitter {
         feedbackTraceLineCount: this.snapshot.diagnostics.feedbackTraceLines.length,
         feedbackTraceTail: this.snapshot.diagnostics.feedbackTraceLines.at(-1) ?? null,
         feedbackTraceDroppedCount: this.snapshot.diagnostics.feedbackTraceDroppedCount,
+        hostAudioCaptureIssue: this.snapshot.diagnostics.hostAudioCaptureIssue,
+        hostAudioCaptureRetry: this.snapshot.diagnostics.hostAudioCaptureRetry,
         hostAudioStatus: this.snapshot.diagnostics.hostAudioStatus
       }
     });

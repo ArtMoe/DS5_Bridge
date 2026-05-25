@@ -373,6 +373,36 @@ function sliderTickClass(value: number, max: number): string | undefined {
   return undefined;
 }
 
+type HostAudioCaptureStatusReason =
+  | NonNullable<BridgeSnapshot['diagnostics']['hostAudioCaptureIssue']>['reason']
+  | NonNullable<BridgeSnapshot['diagnostics']['hostAudioCaptureRetry']>['reason'];
+
+function hostAudioCaptureIssueLabel(reason: HostAudioCaptureStatusReason): string {
+  switch (reason) {
+    case 'device-in-use':
+      return 'Endpoint Busy';
+    case 'device-invalidated':
+      return 'Endpoint Changed';
+    case 'start-timeout':
+      return 'Retrying';
+    case 'helper-exit':
+      return 'Helper Restarting';
+  }
+}
+
+function hostAudioCaptureIssueTooltip(reason: HostAudioCaptureStatusReason): string {
+  switch (reason) {
+    case 'device-in-use':
+      return 'Another app has exclusive control of the DualSense audio endpoint. Host Encoding will retry automatically.';
+    case 'device-invalidated':
+      return 'Windows changed the DualSense audio endpoint while Host Encoding was starting. The app will retry automatically.';
+    case 'start-timeout':
+      return 'The host audio encoder did not start in time. The app will retry automatically.';
+    case 'helper-exit':
+      return 'The host audio encoder stopped before capture started. The app will retry automatically.';
+  }
+}
+
 function FeatureTipsPanel({
   tab,
   onSettingsFocusRequest,
@@ -1720,9 +1750,15 @@ export function App() {
   const duplexMicEnabled = Boolean(snapshot?.settings.duplexMicEnabled);
   const audioEnabled = speakerEnabled || duplexMicEnabled;
   const hostAudioActive = hostAudioStatus?.mode === 'host-encoded-active';
+  const hostAudioCaptureIssue = snapshot?.diagnostics.hostAudioCaptureIssue ?? null;
+  const hostAudioCaptureRetry = snapshot?.diagnostics.hostAudioCaptureRetry ?? null;
+  const hostAudioCaptureStatus = hostAudioCaptureIssue ?? hostAudioCaptureRetry;
+  const hostAudioCaptureWarning = hostAudioEnabled && Boolean(hostAudioCaptureIssue);
+  const hostAudioCaptureRetrying = hostAudioEnabled && !hostAudioCaptureWarning && Boolean(hostAudioCaptureRetry);
   const initialHostAudioStartGrace = Date.now() - appOpenedAtRef.current < HOST_AUDIO_INITIAL_START_GRACE_MS;
   const hostAudioStarting = hostAudioEnabled
     && !hostAudioActive
+    && !hostAudioCaptureStatus
     && (
       !hostAudioStatus
       || hostAudioStatus.fallbackReason === 'none'
@@ -1733,14 +1769,19 @@ export function App() {
     ? 'Unavailable'
     : hostAudioActive
       ? 'Host Encoding Active'
+      : hostAudioEnabled && hostAudioCaptureStatus
+        ? hostAudioCaptureIssueLabel(hostAudioCaptureStatus.reason)
       : hostAudioStarting
         ? 'Starting Host Encoding'
       : hostAudioEnabled
         ? `Fallback: ${hostAudioStatus?.fallbackReason?.replaceAll('-', ' ') ?? 'pending'}`
         : 'Pico Local';
+  const hostAudioTooltip = hostAudioCaptureStatus
+    ? hostAudioCaptureStatus.message || hostAudioCaptureIssueTooltip(hostAudioCaptureStatus.reason)
+    : hostAudioLabel;
   const hostAudioTone = hostAudioActive
     ? 'good'
-    : connected && hostAudioEnabled && !hostAudioStarting
+    : connected && hostAudioEnabled && !hostAudioCaptureRetrying && (Boolean(hostAudioCaptureIssue) || !hostAudioStarting)
       ? 'warn'
       : 'idle';
   const duplexMicLabel = hostAudioStatus?.duplexActive
@@ -1905,9 +1946,11 @@ export function App() {
     ? '--'
     : hostAudioActive
       ? 'Active'
+      : hostAudioEnabled && hostAudioCaptureStatus
+        ? hostAudioCaptureIssueLabel(hostAudioCaptureStatus.reason)
       : hostAudioStarting
         ? 'Starting'
-        : hostAudioEnabled
+      : hostAudioEnabled
           ? `Fallback: ${hostAudioStatus?.fallbackReason?.replaceAll('-', ' ') ?? 'pending'}`
           : 'Pico Local';
   const overviewAudioOutputLabel = connected ? (headsetOutputDetected ? 'Headphones' : 'Speaker') : '--';
@@ -3720,21 +3763,37 @@ export function App() {
                   <div
                     className={[
                       'inline-switch',
+                      'host-encoding-switch',
+                      hostAudioCaptureWarning ? 'host-encoding-switch-warn' : '',
                       featureFocusTarget === 'host-encoding' ? `feature-focus-highlight feature-focus-highlight-${featureFocusPulse % 2}` : ''
                     ].filter(Boolean).join(' ')}
                   >
+                    {hostAudioEnabled && hostAudioCaptureStatus ? (
+                      <span className={`host-encoding-state ${hostAudioCaptureWarning ? 'warn' : 'retry'}`}>
+                        {hostAudioCaptureIssueLabel(hostAudioCaptureStatus.reason)}
+                      </span>
+                    ) : null}
                     <span>Host Encoding</span>
                     <button
                       type="button"
                       role="switch"
                       aria-checked={hostAudioEnabled}
                       aria-label="Enable host encoded audio"
-                      className={`switch ${hostAudioEnabled ? 'on' : ''}`}
+                      className={[
+                        'switch',
+                        hostAudioEnabled ? 'on' : '',
+                        hostAudioCaptureWarning ? 'warn' : ''
+                      ].filter(Boolean).join(' ')}
                       disabled={!connected || pendingAction !== null}
                       onClick={toggleHostEncodedAudioEnabled}
                     >
                       <span />
                     </button>
+                    {hostAudioEnabled && hostAudioCaptureStatus ? (
+                      <span className="settings-shortcut-tooltip shortcut-glyph-tooltip host-encoding-tooltip" role="tooltip">
+                        {hostAudioTooltip}
+                      </span>
+                    ) : null}
                   </div>
                   <div className="inline-switch">
                     <span>Enabled</span>
@@ -3965,7 +4024,7 @@ export function App() {
                       <span className={`dot ${activeAudioTestStatusTone}`} />
                       <strong>{activeAudioTestStatusLabel}</strong>
                     </span>
-                    <span className={`status-badge ${hostAudioTone}`} title={hostAudioLabel}>
+                    <span className={`status-badge ${hostAudioTone}`} title={hostAudioTooltip}>
                       <span className={`dot ${hostAudioTone}`} />
                       <strong>{hostAudioLabel}</strong>
                     </span>
