@@ -83,6 +83,7 @@ import type { BridgeSnapshot, UiScalePercent } from '../shared/types';
 
 type ControlTab = 'overview' | 'haptics' | 'audio' | 'triggers' | 'lighting' | 'remapping' | 'system';
 type ControllerType = BridgeStatusPayload['controllerType'];
+type KnownControllerType = Exclude<ControllerType, 'unknown'>;
 type RemapButtonDefinition = {
   id: RemapButtonId;
   label: string;
@@ -394,6 +395,13 @@ type SinkSelectableAudio = HTMLAudioElement & {
   setSinkId?: (sinkId: string) => Promise<void>;
   sinkId?: string;
 };
+const LAST_REMAP_CONTROLLER_TYPE_STORAGE_KEY = 'ds5bridge.lastRemapControllerType';
+
+function storedRemapControllerType(): KnownControllerType {
+  const saved = window.localStorage.getItem(LAST_REMAP_CONTROLLER_TYPE_STORAGE_KEY);
+  return saved === 'dualsense-edge' ? 'dualsense-edge' : 'dualsense';
+}
+
 type CustomSelectProps<T extends SelectValue> = {
   value: T;
   options: Array<[string, T]>;
@@ -1516,7 +1524,7 @@ export function App() {
   const [showNotificationsMenu, setShowNotificationsMenu] = useState(false);
   const [showClassicRumbleControl, setShowClassicRumbleControl] = useState(false);
   const [showMicrophoneControl, setShowMicrophoneControl] = useState(false);
-  const [lastRemapControllerType, setLastRemapControllerType] = useState<ControllerType>('dualsense');
+  const [lastRemapControllerType, setLastRemapControllerType] = useState<KnownControllerType>(storedRemapControllerType);
   const [windowDragging, setWindowDragging] = useState(false);
   const [testLocked, setTestLocked] = useState(false);
   const [speakerTestLocked, setSpeakerTestLocked] = useState(false);
@@ -1588,6 +1596,7 @@ export function App() {
   useEffect(() => {
     if (snapshot?.status?.controllerConnected && liveControllerType && liveControllerType !== 'unknown') {
       setLastRemapControllerType(liveControllerType);
+      window.localStorage.setItem(LAST_REMAP_CONTROLLER_TYPE_STORAGE_KEY, liveControllerType);
     }
   }, [liveControllerType, snapshot?.status?.controllerConnected]);
 
