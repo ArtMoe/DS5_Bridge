@@ -74,6 +74,7 @@ import type {
   MuteButtonMode,
   MuteKeyboardBehavior,
   PollingRateMode,
+  BridgeStatusPayload,
   RemapButtonId,
   TriggerTestMode,
   TriggerTestTarget
@@ -81,6 +82,7 @@ import type {
 import type { BridgeSnapshot, UiScalePercent } from '../shared/types';
 
 type ControlTab = 'overview' | 'haptics' | 'audio' | 'triggers' | 'lighting' | 'remapping' | 'system';
+type ControllerType = BridgeStatusPayload['controllerType'];
 type RemapButtonDefinition = {
   id: RemapButtonId;
   label: string;
@@ -1514,6 +1516,7 @@ export function App() {
   const [showNotificationsMenu, setShowNotificationsMenu] = useState(false);
   const [showClassicRumbleControl, setShowClassicRumbleControl] = useState(false);
   const [showMicrophoneControl, setShowMicrophoneControl] = useState(false);
+  const [lastRemapControllerType, setLastRemapControllerType] = useState<ControllerType>('dualsense');
   const [windowDragging, setWindowDragging] = useState(false);
   const [testLocked, setTestLocked] = useState(false);
   const [speakerTestLocked, setSpeakerTestLocked] = useState(false);
@@ -1555,7 +1558,11 @@ export function App() {
   const overviewSleepConfirmArmedRef = useRef(false);
   const appOpenedAtRef = useRef(Date.now());
   const connected = snapshot?.state === 'connected';
-  const showDualSenseEdgeRemapButtons = snapshot?.status?.controllerType === 'dualsense-edge';
+  const liveControllerType = snapshot?.status?.controllerType;
+  const remapControllerType = snapshot?.status?.controllerConnected && liveControllerType && liveControllerType !== 'unknown'
+    ? liveControllerType
+    : lastRemapControllerType;
+  const showDualSenseEdgeRemapButtons = remapControllerType === 'dualsense-edge';
   const remapModifiedCount = useMemo(() => (
     REMAP_ALL_BUTTON_IDS.filter((buttonId) => remapDraft[buttonId] !== buttonId).length
   ), [remapDraft]);
@@ -1577,6 +1584,12 @@ export function App() {
   ), [snapshot?.settings.buttonRemappingProfiles]);
   const selectedRemapProfileIsDefault = selectedRemapProfileId === DEFAULT_BUTTON_REMAP_PROFILE_ID;
   const remappingLayoutAsset = showDualSenseEdgeRemapButtons ? REMAP_EDGE_LAYOUT_ASSET : REMAP_STANDARD_LAYOUT_ASSET;
+
+  useEffect(() => {
+    if (snapshot?.status?.controllerConnected && liveControllerType && liveControllerType !== 'unknown') {
+      setLastRemapControllerType(liveControllerType);
+    }
+  }, [liveControllerType, snapshot?.status?.controllerConnected]);
 
   function applySnapshot(next: BridgeSnapshot) {
     setSnapshot(next);
