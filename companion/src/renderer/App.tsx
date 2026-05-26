@@ -284,9 +284,9 @@ const REMAP_CALLOUT_POINTS: Record<StandardRemapButtonId, Array<[number, number]
   l1: [[2.4, 63.71], [129.99, 63.71], [161.13, 118.36]],
   create: [[2.4, 124.24], [110.86, 124.24], [134, 163], [186.65, 162.89]],
   'dpad-up': [[2.4, 184.78], [146.83, 184.78]],
-  'dpad-right': [[2.4, 366.39], [106.55, 366.39], [189.13, 221.85]],
+  'dpad-right': [[2.4, 245.32], [126.31, 245.32], [138.09, 221.25]],
   'dpad-down': [[2.4, 305.86], [124.63, 305.86], [162.42, 241.39]],
-  'dpad-left': [[2.4, 245.32], [126.31, 245.32], [138.09, 221.25]],
+  'dpad-left': [[2.4, 366.39], [106.55, 366.39], [189.13, 221.85]],
   l3: [[2.4, 426.93], [143.77, 426.93], [230.4, 275.47]],
   r2: [[595.34, 3.17], [480.78, 3.17], [427.95, 93.94]],
   r1: [[595.34, 63.71], [468.92, 63.71], [437.92, 117.79]],
@@ -294,8 +294,8 @@ const REMAP_CALLOUT_POINTS: Record<StandardRemapButtonId, Array<[number, number]
   triangle: [[595.34, 184.78], [453.97, 184.78]],
   circle: [[595.34, 245.32], [486.88, 245.32], [473.71, 222.09]],
   cross: [[595.34, 305.86], [472.22, 305.86], [438.56, 248.84]],
-  square: [[595.34, 426.93], [453.97, 426.93], [369.45, 275.47]],
-  r3: [[595.34, 366.39], [485.42, 366.39], [405.35, 223.46]]
+  square: [[595.34, 366.39], [485.42, 366.39], [405.35, 223.46]],
+  r3: [[595.34, 426.93], [453.97, 426.93], [369.45, 275.47]]
 };
 const REMAP_EDGE_CALLOUT_POINTS: Record<StandardRemapButtonId, Array<[number, number]>> = {
   l2: [[0.5, 0.5], [116.01, 0.5], [162.08, 90.82]],
@@ -320,9 +320,9 @@ const REMAP_CALLOUT_Y: Record<StandardRemapButtonId, number> = {
   l1: 63.71,
   create: 124.24,
   'dpad-up': 184.78,
-  'dpad-right': 366.39,
+  'dpad-right': 245.32,
   'dpad-down': 305.86,
-  'dpad-left': 245.32,
+  'dpad-left': 366.39,
   l3: 426.93,
   r2: 3.17,
   r1: 63.71,
@@ -330,8 +330,8 @@ const REMAP_CALLOUT_Y: Record<StandardRemapButtonId, number> = {
   triangle: 184.78,
   circle: 245.32,
   cross: 305.86,
-  square: 426.93,
-  r3: 366.39
+  square: 366.39,
+  r3: 426.93
 };
 const REMAP_EDGE_CALLOUT_Y: Record<StandardRemapButtonId, number> = {
   l2: 0.5,
