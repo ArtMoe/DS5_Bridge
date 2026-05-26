@@ -2803,9 +2803,8 @@ export function App() {
       if (next.settings.speakerEnabled !== enabled) {
         next = await window.bridge.setSpeakerEnabled(enabled);
       }
-      const micEnabled = enabled && next.settings.hostEncodedAudioEnabled;
-      if (next.settings.duplexMicEnabled !== micEnabled) {
-        next = await window.bridge.setDuplexMicEnabled(micEnabled);
+      if (!enabled && next.settings.duplexMicEnabled) {
+        next = await window.bridge.setDuplexMicEnabled(false);
       }
       return next;
     });

@@ -47,16 +47,16 @@ describe('SettingsStore', () => {
       settings: {
         speakerVolumePercent: 100,
         micVolumePercent: 100,
-        micMuted: false,
+        micMuted: true,
         hostEncodedAudioEnabled: true,
-        duplexMicEnabled: true,
+        duplexMicEnabled: false,
         lightbarColor: '#0000ff'
       }
     });
     expect(settings.hostEncodedAudioEnabled).toBe(true);
-    expect(settings.duplexMicEnabled).toBe(true);
+    expect(settings.duplexMicEnabled).toBe(false);
     expect(settings.micVolumePercent).toBe(100);
-    expect(settings.micMuted).toBe(false);
+    expect(settings.micMuted).toBe(true);
     expect(settings.lightbarColor).toBe('#0000ff');
   });
 
@@ -64,12 +64,15 @@ describe('SettingsStore', () => {
     const userDataPath = tempUserDataPath();
     writeFileSync(path.join(userDataPath, 'settings.json'), JSON.stringify({
       selectedControllerProfileId: 'profile-personalized',
+      duplexMicEnabled: true,
+      micMuted: false,
       controllerProfiles: [{
         id: 'profile-personalized',
         name: 'Personalized',
         settings: {
           speakerVolumePercent: 30,
-          micMuted: true,
+          micMuted: false,
+          duplexMicEnabled: true,
           hostEncodedAudioEnabled: false
         }
       }]
@@ -82,8 +85,11 @@ describe('SettingsStore', () => {
     expect(settings.controllerProfiles.find((profile) => profile.id === 'profile-personalized')?.settings).toMatchObject({
       speakerVolumePercent: 30,
       micMuted: true,
+      duplexMicEnabled: false,
       hostEncodedAudioEnabled: false
     });
+    expect(settings.micMuted).toBe(true);
+    expect(settings.duplexMicEnabled).toBe(false);
     expect(settings.controllerProfiles.find((profile) => profile.id === DEFAULT_CONTROLLER_PROFILE_ID)?.settings.speakerVolumePercent).toBe(100);
   });
 

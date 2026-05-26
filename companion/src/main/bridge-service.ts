@@ -78,7 +78,7 @@ const HOST_AUDIO_CAPTURE_RETRY_MS = 5000;
 const AUDIO_DEBUG_READ_INTERVAL_MS = 500;
 const TRIGGER_TRACE_READ_INTERVAL_MS = 250;
 const FEEDBACK_TRACE_READ_INTERVAL_MS = 250;
-const AUDIO_DEBUG_DIAGNOSTICS_ENABLED = true;
+const AUDIO_DEBUG_DIAGNOSTICS_ENABLED = false;
 const HOST_AUDIO_MAX_QUEUED_FRAMES = 2;
 const HOST_AUDIO_STOP_FADE_MS = 40;
 const LOW_BATTERY_PERCENT = 20;
@@ -1371,7 +1371,11 @@ export class BridgeService extends EventEmitter {
     const settings = this.settingsStore.get();
     this.clearHostAudioCaptureBackoff();
     if (enabled) {
-      await this.applyMicSettings(settings, false);
+      if (settings.duplexMicEnabled) {
+        await this.applyMicSettings(settings, false);
+      } else {
+        await this.sendCommand(COMMAND_ID.SET_MIC_MUTE, 1, { throwOnCommandError: false });
+      }
       await this.startHostAudioSession(true);
     } else {
       await this.stopHostAudioSession(true);
@@ -2395,7 +2399,11 @@ export class BridgeService extends EventEmitter {
     if (settings.hostEncodedAudioEnabled) {
       await this.startHostAudioSession(expectSettingsRevisionChange);
       await this.applySpeakerSettings(settings, expectSettingsRevisionChange);
-      await this.applyMicSettings(settings, expectSettingsRevisionChange);
+      if (settings.duplexMicEnabled) {
+        await this.applyMicSettings(settings, expectSettingsRevisionChange);
+      } else {
+        await this.sendCommand(COMMAND_ID.SET_MIC_MUTE, 1, { throwOnCommandError: false });
+      }
     }
     await this.applyLightbarSettings(settings, expectSettingsRevisionChange);
     await this.sendCommand(COMMAND_ID.SET_MUTE_BUTTON_ACTION, muteButtonModeValue(settings.muteButtonMode), {

@@ -2,6 +2,11 @@ using NAudio.CoreAudioApi;
 
 sealed class EndpointManager
 {
+    private static readonly string[] RawPcmEndpointNames =
+    [
+        "DS5 Bridge Raw PCM"
+    ];
+
     private static readonly string[] BridgeEndpointAliases =
     [
         "DS5 Bridge",
@@ -54,22 +59,34 @@ sealed class EndpointManager
             .EnumerateAudioEndPoints(DataFlow.Capture, DeviceState.Active)
             .ToArray();
 
+        var exactRawPcm = SelectNamedRawPcmEndpoint(devices, deviceName)
+            ?? SelectNamedRawPcmEndpoint(devices, RawPcmEndpointNames[0]);
+        if (exactRawPcm is not null)
+        {
+            return exactRawPcm;
+        }
+
         if (!string.IsNullOrWhiteSpace(deviceName))
         {
-            var named = SelectPreferredNamedCaptureEndpoint(devices, deviceName, IsLineEndpoint);
+            var named = SelectPreferredNamedCaptureEndpoint(devices, deviceName, IsRawPcmEndpoint, allowFallback: false);
             if (named is not null)
             {
                 return named;
             }
         }
 
-        var bridge = SelectPreferredBridgeCaptureEndpoint(devices, IsLineEndpoint);
+        var bridge = SelectPreferredBridgeCaptureEndpoint(devices, IsRawPcmEndpoint, allowFallback: false);
         if (bridge is not null)
         {
             return bridge;
         }
 
-        return SelectCaptureEndpoint(enumerator, deviceName);
+        var target = string.IsNullOrWhiteSpace(deviceName)
+            ? string.Join("' or '", RawPcmEndpointNames)
+            : deviceName;
+        var available = string.Join(", ", devices.Select(device => $"'{device.FriendlyName}'"));
+        throw new InvalidOperationException(
+            $"Raw PCM capture endpoint matching '{target}' was not found. Available capture endpoints: {available}");
     }
 
     public static MMDevice SelectMicCaptureEndpoint(MMDeviceEnumerator enumerator, string? deviceName)
@@ -160,7 +177,8 @@ sealed class EndpointManager
     private static MMDevice? SelectPreferredNamedCaptureEndpoint(
         MMDevice[] devices,
         string deviceName,
-        Func<MMDevice, bool> preferred)
+        Func<MMDevice, bool> preferred,
+        bool allowFallback = true)
     {
         var matches = devices
             .Where(device =>
@@ -170,17 +188,40 @@ sealed class EndpointManager
                     && IsKnownBridgeEndpoint(device)))
             .ToArray();
 
-        return SelectPreferredEndpoint(matches, preferred);
+        return SelectPreferredEndpoint(matches, preferred, allowFallback);
     }
 
-    private static MMDevice? SelectPreferredBridgeCaptureEndpoint(MMDevice[] devices, Func<MMDevice, bool> preferred)
+    private static MMDevice? SelectNamedRawPcmEndpoint(MMDevice[] devices, string? deviceName)
+    {
+        if (string.IsNullOrWhiteSpace(deviceName))
+        {
+            return null;
+        }
+
+        var exact = devices.FirstOrDefault(device =>
+            IsRawPcmEndpoint(device)
+            && string.Equals(device.FriendlyName, deviceName, StringComparison.OrdinalIgnoreCase));
+        if (exact is not null)
+        {
+            return exact;
+        }
+
+        return devices.FirstOrDefault(device =>
+            IsRawPcmEndpoint(device)
+            && device.FriendlyName.Contains(deviceName, StringComparison.OrdinalIgnoreCase));
+    }
+
+    private static MMDevice? SelectPreferredBridgeCaptureEndpoint(
+        MMDevice[] devices,
+        Func<MMDevice, bool> preferred,
+        bool allowFallback = true)
     {
         foreach (var name in BridgeEndpointAliases)
         {
             var matches = devices
                 .Where(device => device.FriendlyName.Contains(name, StringComparison.OrdinalIgnoreCase))
                 .ToArray();
-            var preferredEndpoint = SelectPreferredEndpoint(matches, preferred);
+            var preferredEndpoint = SelectPreferredEndpoint(matches, preferred, allowFallback);
             if (preferredEndpoint is not null)
             {
                 return preferredEndpoint;
@@ -190,7 +231,7 @@ sealed class EndpointManager
         return null;
     }
 
-    private static MMDevice? SelectPreferredEndpoint(MMDevice[] devices, Func<MMDevice, bool> preferred)
+    private static MMDevice? SelectPreferredEndpoint(MMDevice[] devices, Func<MMDevice, bool> preferred, bool allowFallback)
     {
         var preferredEndpoint = devices.FirstOrDefault(preferred);
         if (preferredEndpoint is not null)
@@ -198,7 +239,7 @@ sealed class EndpointManager
             return preferredEndpoint;
         }
 
-        return devices.FirstOrDefault();
+        return allowFallback ? devices.FirstOrDefault() : null;
     }
 
     private static bool IsKnownBridgeEndpoint(MMDevice device)
@@ -207,9 +248,10 @@ sealed class EndpointManager
             device.FriendlyName.Contains(alias, StringComparison.OrdinalIgnoreCase));
     }
 
-    private static bool IsLineEndpoint(MMDevice device)
+    private static bool IsRawPcmEndpoint(MMDevice device)
     {
-        return device.FriendlyName.Contains("Line", StringComparison.OrdinalIgnoreCase);
+        return device.FriendlyName.Contains("Raw PCM", StringComparison.OrdinalIgnoreCase)
+            || device.FriendlyName.Contains("Line", StringComparison.OrdinalIgnoreCase);
     }
 
     private static bool IsMicEndpoint(MMDevice device)

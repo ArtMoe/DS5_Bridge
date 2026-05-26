@@ -29,7 +29,7 @@ const DEFAULT_CONTROLLER_PROFILE_SETTINGS: ControllerProfileSettings = {
   speakerEnabled: true,
   speakerVolumePercent: 100,
   micVolumePercent: 100,
-  micMuted: false,
+  micMuted: true,
   lightbarEnabled: true,
   lightbarColor: '#0000ff',
   lightbarBrightnessPercent: 100,
@@ -42,7 +42,7 @@ const DEFAULT_CONTROLLER_PROFILE_SETTINGS: ControllerProfileSettings = {
   speakerVolumeShortcutEnabled: false,
   pollingRateMode: '1000',
   hostEncodedAudioEnabled: true,
-  duplexMicEnabled: true,
+  duplexMicEnabled: false,
   controllerPowerSavingEnabled: false
 };
 
@@ -464,7 +464,48 @@ function cloneSettings(settings: CompanionSettings): CompanionSettings {
 
 type PersistedSettings = Partial<CompanionSettings> & {
   customProfile?: Partial<CompanionSettings>;
+  settingsSchemaVersion?: number;
 };
+
+const CURRENT_SETTINGS_SCHEMA_VERSION = 2;
+
+function migratePersistedSettings(value: PersistedSettings): PersistedSettings {
+  const version = Number.isFinite(value.settingsSchemaVersion)
+    ? Math.max(0, Math.floor(value.settingsSchemaVersion!))
+    : 0;
+  if (version >= CURRENT_SETTINGS_SCHEMA_VERSION) {
+    return value;
+  }
+
+  const next: PersistedSettings = {
+    ...value,
+    settingsSchemaVersion: CURRENT_SETTINGS_SCHEMA_VERSION
+  };
+  if (version < 2) {
+    next.duplexMicEnabled = false;
+    next.micMuted = true;
+    next.controllerProfiles = Array.isArray(value.controllerProfiles)
+      ? value.controllerProfiles.map((profile) => ({
+        ...profile,
+        settings: profile?.settings
+          ? {
+            ...profile.settings,
+            duplexMicEnabled: false,
+            micMuted: true
+          }
+          : profile?.settings
+      }))
+      : value.controllerProfiles;
+    next.customProfile = value.customProfile
+      ? {
+        ...value.customProfile,
+        duplexMicEnabled: false,
+        micMuted: true
+      }
+      : value.customProfile;
+  }
+  return next;
+}
 
 function normalizeSettings(value: Partial<CompanionSettings> | null | undefined): CompanionSettings {
   const selectedPresetId = normalizePresetId(value?.selectedPresetId);
@@ -813,7 +854,7 @@ export class SettingsStore {
   private read(): { settings: CompanionSettings; customSettings: CompanionSettings } {
     try {
       const raw = fs.readFileSync(this.filePath, 'utf8');
-      const parsed = JSON.parse(raw) as PersistedSettings;
+      const parsed = migratePersistedSettings(JSON.parse(raw) as PersistedSettings);
       const settings = normalizeSettings(parsed);
       const fallbackCustom = settings.selectedPresetId === 'custom' ? settings : DEFAULT_SETTINGS;
       return {
@@ -852,6 +893,7 @@ export class SettingsStore {
   private write(): void {
     fs.mkdirSync(path.dirname(this.filePath), { recursive: true });
     fs.writeFileSync(this.filePath, `${JSON.stringify({
+      settingsSchemaVersion: CURRENT_SETTINGS_SCHEMA_VERSION,
       ...this.settings,
       customProfile: this.customSettings
     }, null, 2)}\n`, 'utf8');

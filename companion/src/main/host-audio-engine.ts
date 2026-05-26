@@ -36,6 +36,8 @@ const HELPER_STDERR_MAX_CHARS = 8192;
 const HELPER_RELATIVE_PATH = path.join('native', 'HostAudioHelper', 'HostAudioHelper.exe');
 const HELPER_TEST_AUDIO_FILE = 'test-speaker-tone-silence-tail.mp3';
 const HOST_AUDIO_SOURCE = normalizeHostAudioSource(process.env.DS5_BRIDGE_HOST_AUDIO_SOURCE);
+const BRIDGE_AUDIO_DEVICE_NAME = 'DS5 Bridge';
+const BRIDGE_RAW_PCM_DEVICE_NAME = 'DS5 Bridge Raw PCM';
 const DEV_HELPER_RELATIVE_PATH = path.join(
   'native',
   'HostAudioHelper',
@@ -140,9 +142,10 @@ export class HostAudioEngine extends EventEmitter {
 
   private async startInternal(hidPath: string | null, speakerVolumePercent: number): Promise<void> {
     const helperPath = resolveHelperPath();
+    const deviceName = hostAudioUsesRawPcmCapture() ? BRIDGE_RAW_PCM_DEVICE_NAME : BRIDGE_AUDIO_DEVICE_NAME;
     const args = [
       '--device-name',
-      'DS5 Bridge',
+      deviceName,
       '--source',
       HOST_AUDIO_SOURCE,
       '--speaker-volume',
