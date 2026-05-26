@@ -17,6 +17,7 @@ import {
   IconDeviceFloppy as Save,
   IconDeviceGamepad2,
   IconDeviceGamepad3,
+  IconFlame,
   IconBrandGithub,
   IconDeviceMobileVibration as Vibrate,
   IconHeadphones as Headphones,
@@ -104,10 +105,12 @@ type FeatureTipsPanelProps = {
   hostEncodingTipActionable?: boolean;
 };
 type SettingsFocusTarget = 'controller-power-saving' | 'sleep-shortcut' | 'volume-shortcut';
-type NotificationFocusTarget = 'controller-status' | 'low-battery';
+type NotificationFocusTarget = 'controller-status' | 'low-battery' | 'all';
 type FeatureFocusTarget = 'host-encoding';
 
 const HAPTICS_STEP = 20;
+const STANDARD_FEEDBACK_GAIN_PERCENT = 200;
+const BOOSTED_FEEDBACK_GAIN_PERCENT = 500;
 const SPEAKER_VOLUME_STEP = 10;
 const MIC_VOLUME_STEP = 10;
 const LIGHTBAR_BRIGHTNESS_STEP = 10;
@@ -163,7 +166,7 @@ const TRIGGER_EFFECT_PRESETS: Array<[string, number]> = [
   ['High', 100]
 ];
 const PERCENT_SLIDER_TICKS = Array.from({ length: 11 }, (_, index) => index * 10);
-const HAPTICS_SLIDER_TICKS = Array.from({ length: 11 }, (_, index) => index * 20);
+const STANDARD_HAPTICS_SLIDER_TICKS = Array.from({ length: 11 }, (_, index) => index * 20);
 const BRIDGE_AUDIO_OUTPUT_RE = /ds5|dualsense|dual sense|wireless controller|bridge/i;
 const BRIDGE_AUDIO_INPUT_RE = /ds5|dualsense|dual sense|wireless controller|bridge/i;
 const BRIDGE_AUDIO_ENDPOINT_UNAVAILABLE = 'DualSense audio endpoint unavailable';
@@ -334,8 +337,8 @@ type CustomSelectProps<T extends SelectValue> = {
   onChange: (value: T) => void;
 };
 
-function snapHapticsValue(value: number): number {
-  return Math.max(0, Math.min(200, Math.round(value / HAPTICS_STEP) * HAPTICS_STEP));
+function snapHapticsValue(value: number, max = STANDARD_FEEDBACK_GAIN_PERCENT): number {
+  return Math.max(0, Math.min(max, Math.round(value / HAPTICS_STEP) * HAPTICS_STEP));
 }
 
 function snapSpeakerVolume(value: number): number {
@@ -364,12 +367,32 @@ function capControllerPowerSavingValue(value: number, snapshot: BridgeSnapshot |
     : value;
 }
 
+function feedbackSliderMaxFromSnapshot(snapshot: BridgeSnapshot | null | undefined): number {
+  if (controllerPowerSavingActiveFromSnapshot(snapshot)) {
+    return CONTROLLER_POWER_SAVING_CAP_PERCENT;
+  }
+  return snapshot?.settings.feedbackBoostEnabled ? BOOSTED_FEEDBACK_GAIN_PERCENT : STANDARD_FEEDBACK_GAIN_PERCENT;
+}
+
+function feedbackSliderTicks(max: number): number[] {
+  if (max === STANDARD_FEEDBACK_GAIN_PERCENT) {
+    return STANDARD_HAPTICS_SLIDER_TICKS;
+  }
+  return Array.from({ length: 11 }, (_, index) => (max / 10) * index);
+}
+
 function displayHapticsValue(snapshot: BridgeSnapshot): number {
-  return snapHapticsValue(capControllerPowerSavingValue(snapshot.settings.hapticsGainPercent, snapshot));
+  return snapHapticsValue(
+    capControllerPowerSavingValue(snapshot.settings.hapticsGainPercent, snapshot),
+    feedbackSliderMaxFromSnapshot(snapshot)
+  );
 }
 
 function displayClassicRumbleValue(snapshot: BridgeSnapshot): number {
-  return snapHapticsValue(capControllerPowerSavingValue(snapshot.settings.classicRumbleGainPercent, snapshot));
+  return snapHapticsValue(
+    capControllerPowerSavingValue(snapshot.settings.classicRumbleGainPercent, snapshot),
+    feedbackSliderMaxFromSnapshot(snapshot)
+  );
 }
 
 function displayLightbarBrightnessValue(snapshot: BridgeSnapshot): number {
@@ -548,6 +571,7 @@ function controllerProfileSettingsFromSnapshot(snapshot: BridgeSnapshot): Contro
   return {
     hapticsEnabled: snapshot.settings.hapticsEnabled,
     hapticsGainPercent: snapshot.settings.hapticsGainPercent,
+    feedbackBoostEnabled: snapshot.settings.feedbackBoostEnabled,
     classicRumbleEnabled: snapshot.settings.classicRumbleEnabled,
     classicRumbleGainPercent: snapshot.settings.classicRumbleGainPercent,
     adaptiveTriggersEnabled: snapshot.settings.adaptiveTriggersEnabled,
@@ -1781,7 +1805,9 @@ export function App() {
   const hostAudioStatus = snapshot?.diagnostics.hostAudioStatus;
   const headsetOutputDetected = Boolean(hostAudioStatus?.headsetPlugged);
   const controllerPowerSavingActive = controllerPowerSavingActiveFromSnapshot(snapshot);
-  const hapticsSliderMax = controllerPowerSavingActive ? CONTROLLER_POWER_SAVING_CAP_PERCENT : 200;
+  const feedbackBoostEnabled = Boolean(snapshot?.settings.feedbackBoostEnabled);
+  const hapticsSliderMax = feedbackSliderMaxFromSnapshot(snapshot);
+  const hapticsSliderTicks = feedbackSliderTicks(hapticsSliderMax);
   const percentSliderMax = controllerPowerSavingActive ? CONTROLLER_POWER_SAVING_CAP_PERCENT : 100;
   const OutputIcon = headsetOutputDetected ? Headphones : Volume2;
   const outputControlLabel = headsetOutputDetected ? 'Headphones' : 'Speaker';
@@ -2218,7 +2244,7 @@ export function App() {
   }
 
   async function commitHapticsValue(value = hapticsValue) {
-    const snappedValue = snapHapticsValue(value);
+    const snappedValue = snapHapticsValue(value, hapticsSliderMax);
     if (
       !snapshot
       || snapshot.state !== 'connected'
@@ -2248,7 +2274,7 @@ export function App() {
   }
 
   async function commitClassicRumbleValue(value = classicRumbleValue) {
-    const snappedValue = snapHapticsValue(value);
+    const snappedValue = snapHapticsValue(value, hapticsSliderMax);
     if (
       !snapshot
       || snapshot.state !== 'connected'
@@ -2435,14 +2461,14 @@ export function App() {
   }
 
   function setHapticsPreset(value: number) {
-    const snappedValue = snapHapticsValue(capControllerPowerSavingValue(value, snapshot));
+    const snappedValue = snapHapticsValue(capControllerPowerSavingValue(value, snapshot), hapticsSliderMax);
     hapticsEditingRef.current = true;
     setHapticsValue(snappedValue);
     void commitHapticsValue(snappedValue);
   }
 
   function setClassicRumblePreset(value: number) {
-    const snappedValue = snapHapticsValue(capControllerPowerSavingValue(value, snapshot));
+    const snappedValue = snapHapticsValue(capControllerPowerSavingValue(value, snapshot), hapticsSliderMax);
     classicRumbleEditingRef.current = true;
     setClassicRumbleValue(snappedValue);
     void commitClassicRumbleValue(snappedValue);
@@ -2765,6 +2791,13 @@ export function App() {
     ));
   }
 
+  function toggleFeedbackBoostEnabled() {
+    if (!snapshot) return;
+    void runAction('feedback-boost', () => (
+      window.bridge.setFeedbackBoostEnabled(!snapshot.settings.feedbackBoostEnabled)
+    ));
+  }
+
   function toggleSpeakerEnabled() {
     if (!snapshot) return;
     void runAction('speaker-enabled', () => window.bridge.setSpeakerEnabled(!snapshot.settings.speakerEnabled));
@@ -3058,7 +3091,7 @@ export function App() {
                     <Bell size={16} />
                     <span>Notifications</span>
                   </div>
-                  <div className={`settings-menu-row ${notificationFocusTarget === 'controller-status' ? 'settings-menu-row-highlight' : ''}`}>
+                  <div className={`settings-menu-row ${notificationFocusTarget === 'controller-status' || notificationFocusTarget === 'all' ? 'settings-menu-row-highlight' : ''}`}>
                     <div>
                       <strong>Controller Status</strong>
                       <span>Toast when the controller connects or disconnects</span>
@@ -3074,7 +3107,7 @@ export function App() {
                       <span />
                     </button>
                   </div>
-                  <div className={`settings-menu-row ${notificationFocusTarget === 'low-battery' ? 'settings-menu-row-highlight' : ''}`}>
+                  <div className={`settings-menu-row ${notificationFocusTarget === 'low-battery' || notificationFocusTarget === 'all' ? 'settings-menu-row-highlight' : ''}`}>
                     <div>
                       <strong>Low Battery</strong>
                       <span>Toast when battery reaches 20% or below</span>
@@ -3360,7 +3393,10 @@ export function App() {
                         onPointerDown={() => {
                           hapticsEditingRef.current = true;
                         }}
-                        onChange={(event) => setHapticsValue(snapHapticsValue(Number(event.currentTarget.value)))}
+                        onChange={(event) => setHapticsValue(snapHapticsValue(
+                          Number(event.currentTarget.value),
+                          hapticsSliderMax
+                        ))}
                         onPointerUp={() => void commitHapticsValue()}
                         onKeyDown={(event) => {
                           if (event.key === 'ArrowLeft' || event.key === 'ArrowRight' || event.key === 'Home' || event.key === 'End') {
@@ -3375,8 +3411,8 @@ export function App() {
                         onBlur={() => void commitHapticsValue()}
                       />
                       <div className="overview-range-ticks" aria-hidden="true">
-                        {HAPTICS_SLIDER_TICKS.map((value) => (
-                          <span key={value} className={sliderTickClass(value, 200)} />
+                        {hapticsSliderTicks.map((value) => (
+                          <span key={value} className={sliderTickClass(value, hapticsSliderMax)} />
                         ))}
                       </div>
                     </div>
@@ -3582,7 +3618,13 @@ export function App() {
                       </button>
                     ))
                   ) : (
-                    <span className="overview-chip muted">Off</span>
+                    <button
+                      className="overview-chip muted"
+                      type="button"
+                      onClick={() => focusNotificationSettings('all')}
+                    >
+                      Off
+                    </button>
                   )}
                 </div>
               </div>
@@ -3670,7 +3712,10 @@ export function App() {
                             onPointerDown={() => {
                               classicRumbleEditingRef.current = true;
                             }}
-                            onChange={(event) => setClassicRumbleValue(snapHapticsValue(Number(event.currentTarget.value)))}
+                            onChange={(event) => setClassicRumbleValue(snapHapticsValue(
+                              Number(event.currentTarget.value),
+                              hapticsSliderMax
+                            ))}
                             onPointerUp={() => void commitClassicRumbleValue()}
                             onKeyDown={(event) => {
                               if (event.key === 'ArrowLeft' || event.key === 'ArrowRight' || event.key === 'Home' || event.key === 'End') {
@@ -3696,7 +3741,10 @@ export function App() {
                             onPointerDown={() => {
                               hapticsEditingRef.current = true;
                             }}
-                            onChange={(event) => setHapticsValue(snapHapticsValue(Number(event.currentTarget.value)))}
+                            onChange={(event) => setHapticsValue(snapHapticsValue(
+                              Number(event.currentTarget.value),
+                              hapticsSliderMax
+                            ))}
                             onPointerUp={() => void commitHapticsValue()}
                             onKeyDown={(event) => {
                               if (event.key === 'ArrowLeft' || event.key === 'ArrowRight' || event.key === 'Home' || event.key === 'End') {
@@ -3712,8 +3760,8 @@ export function App() {
                           />
                         )}
                         <div className="range-ticks" aria-hidden="true">
-                          {HAPTICS_SLIDER_TICKS.map((value) => (
-                            <span key={value} className={sliderTickClass(value, 200)} />
+                          {hapticsSliderTicks.map((value) => (
+                            <span key={value} className={sliderTickClass(value, hapticsSliderMax)} />
                           ))}
                         </div>
                       </div>
@@ -3723,7 +3771,7 @@ export function App() {
                   <p>{showClassicRumbleControl ? 'Applies to game rumble output.' : 'Balanced feedback across both motors.'}</p>
                   <div className="segmented-row">
                     {HAPTICS_PRESETS.map(([label, value]) => {
-                      const presetValue = snapHapticsValue(Number(value));
+                      const presetValue = snapHapticsValue(Number(value), hapticsSliderMax);
                       const currentValue = showClassicRumbleControl ? classicRumbleValue : hapticsValue;
                       return (
                         <button
@@ -3745,6 +3793,17 @@ export function App() {
                       );
                     })}
                   </div>
+                  <button
+                    type="button"
+                    className={`feature-icon feedback-boost-button haptics-boost-button ${feedbackBoostEnabled ? 'active' : ''}`}
+                    aria-pressed={feedbackBoostEnabled}
+                    aria-label="Boost feedback gain"
+                    title={feedbackBoostEnabled ? 'Feedback boost: up to 500%' : 'Enable feedback boost up to 500%'}
+                    disabled={!connected || pendingAction !== null}
+                    onClick={toggleFeedbackBoostEnabled}
+                  >
+                    <IconFlame size={20} />
+                  </button>
                 </section>
                 <section className="feature-card test-card">
                   <div className="feature-card-title">

@@ -53,8 +53,8 @@ void bt_set_microphone_state(uint8_t volume_percent, bool muted);
 void bt_set_speaker_output_enabled(bool enabled, bool headset_plugged = false, bool force = false);
 void bt_rearm_speaker_output_route(bool headset_plugged);
 void bt_refresh_speaker_output();
-void bt_set_classic_rumble_gain(uint8_t gain_percent);
-uint8_t bt_classic_rumble_gain();
+void bt_set_classic_rumble_gain(uint16_t gain_percent);
+uint16_t bt_classic_rumble_gain();
 void bt_set_classic_rumble_output(uint8_t right, uint8_t left);
 void bt_set_adaptive_trigger_effect(uint8_t mode, uint8_t intensity_percent, uint8_t target = 0);
 void bt_replay_adaptive_trigger_effect(

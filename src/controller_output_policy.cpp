@@ -6,20 +6,20 @@ using namespace ds5::output;
 
 namespace {
 
-uint8_t classic_rumble_gain_percent = 100;
+uint16_t classic_rumble_gain_percent = 100;
 
 } // namespace
 
-void controller_output_policy_set_classic_rumble_gain(uint8_t gain_percent) {
-    classic_rumble_gain_percent = gain_percent > 200 ? 200 : gain_percent;
+void controller_output_policy_set_classic_rumble_gain(uint16_t gain_percent) {
+    classic_rumble_gain_percent = gain_percent > 500 ? 500 : gain_percent;
 }
 
-uint8_t controller_output_policy_classic_rumble_gain() {
+uint16_t controller_output_policy_classic_rumble_gain() {
     return classic_rumble_gain_percent;
 }
 
 uint8_t controller_output_policy_scale_classic_rumble_byte(uint8_t value) {
-    const uint16_t scaled = static_cast<uint16_t>(value) * classic_rumble_gain_percent;
+    const uint32_t scaled = static_cast<uint32_t>(value) * classic_rumble_gain_percent;
     return static_cast<uint8_t>(scaled >= 25500 ? 255 : (scaled + 50) / 100);
 }
 

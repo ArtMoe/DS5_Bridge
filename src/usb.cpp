@@ -14,7 +14,7 @@
 #include "usb.h"
 
 uint8_t mute[2]; // 0: speaker/LED fallback, 1: mic/idle-disconnect fallback
-float volume[2] = {DEFAULT_COMPANION_SPEAKER_GAIN, 1.0f}; // 0: companion speaker gain 0-1, 1: haptics gain 0-2
+float volume[2] = {DEFAULT_COMPANION_SPEAKER_GAIN, 1.0f}; // 0: companion speaker gain 0-1, 1: haptics gain 0-5
 uint8_t usb_host_volume_percent[3] = {100, 100, 100};
 uint8_t usb_host_mute[3] = {0, 0, 0};
 uint32_t usb_host_volume_set_count[3] = {0, 0, 0};

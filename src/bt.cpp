@@ -431,11 +431,11 @@ bool bt_has_signal_strength() {
     return bt_rssi_known;
 }
 
-void bt_set_classic_rumble_gain(uint8_t gain_percent) {
+void bt_set_classic_rumble_gain(uint16_t gain_percent) {
     controller_output_policy_set_classic_rumble_gain(gain_percent);
 }
 
-uint8_t bt_classic_rumble_gain() {
+uint16_t bt_classic_rumble_gain() {
     return controller_output_policy_classic_rumble_gain();
 }
 

@@ -93,6 +93,8 @@ const STARTUP_REAPPLY_RETRY_DELAYS_MS = [250, 650, 1300] as const;
 const MIN_IDLE_DISCONNECT_TIMEOUT_MINUTES = 1;
 const MAX_IDLE_DISCONNECT_TIMEOUT_MINUTES = 120;
 const CONTROLLER_POWER_SAVING_CAP_PERCENT = 60;
+const STANDARD_FEEDBACK_GAIN_PERCENT = 200;
+const BOOSTED_FEEDBACK_GAIN_PERCENT = 500;
 const SONY_VENDOR_ID = 0x054c;
 const DUALSENSE_PRODUCT_IDS = new Set([0x0ce6, 0x0df2]);
 const WINDOWS_DEVICE_CLEANUP_RELATIVE_PATH = path.join('tools', 'windows', 'clean-ds5bridge-devices.ps1');
@@ -130,6 +132,7 @@ const PRESET_SETTINGS: Record<Exclude<BridgePresetId, 'custom'>, Partial<Compani
     selectedPresetId: 'balanced',
     hapticsEnabled: true,
     hapticsGainPercent: 100,
+    feedbackBoostEnabled: false,
     classicRumbleEnabled: true,
     classicRumbleGainPercent: 100,
     speakerEnabled: true,
@@ -1178,15 +1181,23 @@ export class BridgeService extends EventEmitter {
       : value;
   }
 
+  private feedbackGainMax(settings: CompanionSettings): number {
+    return settings.feedbackBoostEnabled ? BOOSTED_FEEDBACK_GAIN_PERCENT : STANDARD_FEEDBACK_GAIN_PERCENT;
+  }
+
+  private capForFeedbackBoost(value: number, settings: CompanionSettings): number {
+    return Math.min(value, this.feedbackGainMax(settings));
+  }
+
   private effectiveHapticsGain(settings: CompanionSettings): number {
     return settings.hapticsEnabled
-      ? this.capForControllerPowerSaving(settings.hapticsGainPercent, settings)
+      ? this.capForControllerPowerSaving(this.capForFeedbackBoost(settings.hapticsGainPercent, settings), settings)
       : 0;
   }
 
   private effectiveClassicRumbleGain(settings: CompanionSettings): number {
     return settings.classicRumbleEnabled
-      ? this.capForControllerPowerSaving(settings.classicRumbleGainPercent, settings)
+      ? this.capForControllerPowerSaving(this.capForFeedbackBoost(settings.classicRumbleGainPercent, settings), settings)
       : 0;
   }
 
@@ -1233,8 +1244,8 @@ export class BridgeService extends EventEmitter {
   }
 
   async setHapticsGain(percent: number): Promise<BridgeSnapshot> {
-    const value = Math.max(0, Math.min(200, Math.round(percent)));
     const currentSettings = this.settingsStore.get();
+    const value = Math.max(0, Math.min(this.feedbackGainMax(currentSettings), Math.round(percent)));
     const enableFromPositiveGain = value > 0 && !currentSettings.hapticsEnabled;
     const nextSettings = {
       ...currentSettings,
@@ -1268,12 +1279,38 @@ export class BridgeService extends EventEmitter {
   }
 
   async setClassicRumbleGain(percent: number): Promise<BridgeSnapshot> {
-    const value = Math.max(0, Math.min(200, Math.round(percent)));
-    const nextSettings = { ...this.settingsStore.get(), classicRumbleGainPercent: value };
+    const currentSettings = this.settingsStore.get();
+    const value = Math.max(0, Math.min(this.feedbackGainMax(currentSettings), Math.round(percent)));
+    const nextSettings = { ...currentSettings, classicRumbleGainPercent: value };
     const effectiveValue = this.effectiveClassicRumbleGain(nextSettings);
     await this.sendSettingCommand(COMMAND_ID.SET_CLASSIC_RUMBLE_GAIN, effectiveValue, customSettingUpdate({
       classicRumbleGainPercent: value
     }));
+    return this.getSnapshot();
+  }
+
+  async setFeedbackBoostEnabled(enabled: boolean): Promise<BridgeSnapshot> {
+    const currentSettings = this.settingsStore.get();
+    const update: Partial<CompanionSettings> = { feedbackBoostEnabled: enabled };
+    if (!enabled) {
+      update.hapticsGainPercent = Math.min(currentSettings.hapticsGainPercent, STANDARD_FEEDBACK_GAIN_PERCENT);
+      update.classicRumbleGainPercent = Math.min(
+        currentSettings.classicRumbleGainPercent,
+        STANDARD_FEEDBACK_GAIN_PERCENT
+      );
+    }
+    this.snapshot.settings = this.settingsStore.update(update);
+    if (this.snapshot.state === 'connected') {
+      await this.sendCommand(COMMAND_ID.SET_HAPTICS_GAIN, this.effectiveHapticsGain(this.snapshot.settings), {
+        expectSettingsRevisionChange: true
+      });
+      await this.sendCommand(
+        COMMAND_ID.SET_CLASSIC_RUMBLE_GAIN,
+        this.effectiveClassicRumbleGain(this.snapshot.settings),
+        { expectSettingsRevisionChange: true }
+      );
+    }
+    this.emitSnapshot();
     return this.getSnapshot();
   }
 

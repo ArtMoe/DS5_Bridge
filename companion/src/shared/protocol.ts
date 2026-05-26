@@ -175,6 +175,7 @@ export interface ButtonRemapProfile {
 export interface ControllerProfileSettings {
   hapticsEnabled: boolean;
   hapticsGainPercent: number;
+  feedbackBoostEnabled: boolean;
   classicRumbleEnabled: boolean;
   classicRumbleGainPercent: number;
   adaptiveTriggersEnabled: boolean;

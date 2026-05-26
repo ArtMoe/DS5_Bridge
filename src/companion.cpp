@@ -61,6 +61,8 @@ constexpr uint32_t kClassicRumbleTestDurationUs = 650000;
 constexpr uint8_t kClassicRumbleTestAmplitude = 160;
 constexpr uint32_t kAdaptiveTriggerTestDurationUs = 2500000;
 constexpr uint32_t kGameTriggerUpdateRecentUs = 2000000;
+constexpr uint16_t kMaxFeedbackGainPercent = 500;
+constexpr float kMaxHapticsGain = 5.0f;
 #if DS5_TRIGGER_TRACE_ENABLED
 constexpr uint8_t kTriggerTraceRecordSize = 38;
 constexpr uint8_t kTriggerTraceRingSize = 96;
@@ -1104,7 +1106,7 @@ uint16_t build_status(uint8_t *buffer, uint16_t reqlen) {
     buffer[9] = raw_power_state;
     buffer[10] = audio_recent() ? 1 : 0;
     buffer[11] = audio_haptics_ready() ? 1 : 0;
-    write_u16(buffer + 12, static_cast<uint16_t>(std::clamp(volume[1], 0.0f, 2.0f) * 100.0f));
+    write_u16(buffer + 12, static_cast<uint16_t>(std::clamp(volume[1], 0.0f, kMaxHapticsGain) * 100.0f));
     buffer[14] = mute[0] ? 0 : 1;
     buffer[15] = mute[1] ? 0 : 1;
     write_u16(buffer + 16, settings_revision);
@@ -1390,7 +1392,7 @@ void handle_command(uint8_t const *buffer, uint16_t bufsize) {
     const uint16_t value = read_u16(buffer + 8);
     switch (command_id) {
         case CommandSetHapticsGain:
-            if (value > 200) {
+            if (value > kMaxFeedbackGainPercent) {
                 set_ack(command_id, sequence, AckInvalidValue);
                 return;
             }
@@ -1488,11 +1490,11 @@ void handle_command(uint8_t const *buffer, uint16_t bufsize) {
             return;
 
         case CommandSetClassicRumbleGain:
-            if (value > 200) {
+            if (value > kMaxFeedbackGainPercent) {
                 set_ack(command_id, sequence, AckInvalidValue);
                 return;
             }
-            bt_set_classic_rumble_gain(static_cast<uint8_t>(value));
+            bt_set_classic_rumble_gain(value);
             if (value == 0) {
                 classic_rumble_test_active = false;
                 classic_rumble_test_until_us = 0;

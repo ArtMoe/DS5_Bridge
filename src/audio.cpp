@@ -40,6 +40,7 @@
 #define TEST_HAPTICS_COOLDOWN_US 500000
 #define TEST_HAPTICS_BASE_AMPLITUDE 72
 #define TEST_HAPTICS_NEUTRAL_PACKET_COUNT 5
+#define MAX_HAPTICS_GAIN 5.0f
 #define USB_AUDIO_ACTIVE_THRESHOLD 8
 #define AUDIO_LOOP_MAX_USB_READS 4
 #define AUDIO_DEBUG_RING_SIZE 96
@@ -1000,7 +1001,7 @@ static void apply_haptics_gain_to_packet(uint8_t *data) {
         return;
     }
 
-    const float gain = clamp(volume[1], 0.0f, 2.0f);
+    const float gain = clamp(volume[1], 0.0f, MAX_HAPTICS_GAIN);
     if (gain == 1.0f) {
         return;
     }
@@ -1674,7 +1675,7 @@ void audio_test_haptics_loop() {
     if (test_haptics_packets_remaining != 0) {
         const bool positive_phase = (test_haptics_packets_remaining & 1) != 0;
         const int amplitude = clamp(
-            static_cast<int>(TEST_HAPTICS_BASE_AMPLITUDE * clamp(volume[1], 0.0f, 2.0f)),
+            static_cast<int>(TEST_HAPTICS_BASE_AMPLITUDE * clamp(volume[1], 0.0f, MAX_HAPTICS_GAIN)),
             0,
             127
         );

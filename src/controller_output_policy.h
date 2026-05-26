@@ -3,8 +3,8 @@
 
 #include <cstdint>
 
-void controller_output_policy_set_classic_rumble_gain(uint8_t gain_percent);
-uint8_t controller_output_policy_classic_rumble_gain();
+void controller_output_policy_set_classic_rumble_gain(uint16_t gain_percent);
+uint16_t controller_output_policy_classic_rumble_gain();
 uint8_t controller_output_policy_scale_classic_rumble_byte(uint8_t value);
 bool controller_output_policy_apply_classic_rumble_gain_payload(uint8_t *payload, uint16_t len);
 bool controller_output_policy_sanitize_host_speaker_amp_payload(uint8_t *payload, uint16_t len);

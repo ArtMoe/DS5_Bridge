@@ -877,6 +877,37 @@ describe('BridgeService', () => {
     expect(snapshot.settings.classicRumbleGainPercent).toBe(140);
   });
 
+  it('allows boosted haptics and rumble gains up to 500 percent', async () => {
+    const service = serviceFixture();
+    const device = new MockHidDevice();
+    device.status = statusReport({ controllerConnected: false });
+    hidMock.state.devicesList = [companionDeviceInfo()];
+    hidMock.state.openDevices.set('companion-path', device);
+
+    await poll(service);
+    let snapshot = await service.setFeedbackBoostEnabled(true);
+    expect(snapshot.settings.feedbackBoostEnabled).toBe(true);
+
+    snapshot = await service.setHapticsGain(500);
+    let command = device.sentReports.at(-1);
+    expect(command?.[7]).toBe(COMMAND_ID.SET_HAPTICS_GAIN);
+    expect(command?.[9]).toBe(244);
+    expect(command?.[10]).toBe(1);
+    expect(snapshot.settings.hapticsGainPercent).toBe(500);
+
+    snapshot = await service.setClassicRumbleGain(500);
+    command = device.sentReports.at(-1);
+    expect(command?.[7]).toBe(COMMAND_ID.SET_CLASSIC_RUMBLE_GAIN);
+    expect(command?.[9]).toBe(244);
+    expect(command?.[10]).toBe(1);
+    expect(snapshot.settings.classicRumbleGainPercent).toBe(500);
+
+    snapshot = await service.setFeedbackBoostEnabled(false);
+    expect(snapshot.settings.feedbackBoostEnabled).toBe(false);
+    expect(snapshot.settings.hapticsGainPercent).toBe(200);
+    expect(snapshot.settings.classicRumbleGainPercent).toBe(200);
+  });
+
   it('sends and stores polling rate settings', async () => {
     const service = serviceFixture();
     const device = new MockHidDevice();

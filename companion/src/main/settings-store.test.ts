@@ -50,6 +50,7 @@ describe('SettingsStore', () => {
         micMuted: true,
         hostEncodedAudioEnabled: true,
         duplexMicEnabled: false,
+        feedbackBoostEnabled: false,
         lightbarColor: '#0000ff'
       }
     });
@@ -119,6 +120,31 @@ describe('SettingsStore', () => {
     const restartedSettings = new SettingsStore(userDataPath).get();
     expect(restartedSettings.selectedControllerProfileId).toBe('custom');
     expect(restartedSettings.speakerVolumePercent).toBe(35);
+  });
+
+  it('persists boosted feedback gains in controller profiles', () => {
+    const userDataPath = tempUserDataPath();
+    const store = new SettingsStore(userDataPath);
+
+    const updated = store.update({
+      feedbackBoostEnabled: true,
+      hapticsGainPercent: 500,
+      classicRumbleGainPercent: 480
+    });
+
+    expect(updated.feedbackBoostEnabled).toBe(true);
+    expect(updated.hapticsGainPercent).toBe(500);
+    expect(updated.classicRumbleGainPercent).toBe(480);
+    expect(updated.controllerProfiles.find((profile) => profile.id === 'custom')?.settings).toMatchObject({
+      feedbackBoostEnabled: true,
+      hapticsGainPercent: 500,
+      classicRumbleGainPercent: 480
+    });
+
+    const restartedSettings = new SettingsStore(userDataPath).get();
+    expect(restartedSettings.feedbackBoostEnabled).toBe(true);
+    expect(restartedSettings.hapticsGainPercent).toBe(500);
+    expect(restartedSettings.classicRumbleGainPercent).toBe(480);
   });
 
   it('saves, renames, updates, and deletes custom controller profiles while protecting default', () => {

@@ -21,6 +21,7 @@ export interface CompanionSettings {
   launchAtStartupEnabled: boolean;
   hapticsEnabled: boolean;
   hapticsGainPercent: number;
+  feedbackBoostEnabled: boolean;
   hapticsBufferLength: number;
   classicRumbleEnabled: boolean;
   classicRumbleGainPercent: number;
