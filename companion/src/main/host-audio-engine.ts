@@ -3,6 +3,7 @@ import { existsSync } from 'node:fs';
 import { homedir } from 'node:os';
 import path from 'node:path';
 import { EventEmitter } from 'node:events';
+import { CompanionDebugConfig, DEBUG_ENV } from './debug-config';
 
 export type HostAudioFramePayload = {
   frame: number[];
@@ -39,10 +40,10 @@ const HELPER_RELATIVE_PATH = path.join('native', 'HostAudioHelper', 'HostAudioHe
 const HELPER_TEST_AUDIO_FILE = 'test-speaker-tone-silence-tail.mp3';
 type HostAudioSource = 'usb-pcm' | 'usb-bulk-pcm' | 'raw-pcm-capture' | 'render-loopback';
 
-const HOST_AUDIO_SOURCE = normalizeHostAudioSource(process.env.DS5_BRIDGE_HOST_AUDIO_SOURCE);
+const HOST_AUDIO_SOURCE = normalizeHostAudioSource(CompanionDebugConfig.hostAudioSource);
 const BRIDGE_AUDIO_DEVICE_NAME = 'DS5 Bridge';
 const BRIDGE_RAW_PCM_DEVICE_NAME = 'DS5 Bridge Raw PCM';
-const HOST_AUDIO_AUTO_CAPTURE_ENABLED = process.env.DS5_BRIDGE_HOST_AUDIO_AUTO_CAPTURE !== '0';
+const HOST_AUDIO_AUTO_CAPTURE_ENABLED = CompanionDebugConfig.hostAudioAutoCaptureEnabled;
 const HOST_AUDIO_DIAGNOSTIC_STAMP = new Date().toISOString().replace(/[:.]/g, '-');
 const HOST_AUDIO_DIAGNOSTIC_DIR = path.join(homedir(), 'Desktop');
 const DEV_HELPER_RELATIVE_PATH = path.join(
@@ -327,18 +328,18 @@ function buildHostAudioHelperEnv(): NodeJS.ProcessEnv {
     return env;
   }
 
-  env.DS5_BRIDGE_HOST_AUDIO_DIAGNOSTICS ??= '0';
-  if (env.DS5_BRIDGE_HOST_AUDIO_DUMP === '1') {
-    env.DS5_BRIDGE_HOST_AUDIO_RAW_CAPTURE_DUMP ??= path.join(
+  env[DEBUG_ENV.hostAudioHelperDiagnostics] ??= CompanionDebugConfig.hostAudioHelperDiagnosticsEnabled ? '1' : '0';
+  if (CompanionDebugConfig.hostAudioDumpEnabled) {
+    env[DEBUG_ENV.hostAudioRawCaptureDump] ??= path.join(
       HOST_AUDIO_DIAGNOSTIC_DIR,
       `ds5-bridge-winusb-pcm-${HOST_AUDIO_DIAGNOSTIC_STAMP}.wav`
     );
-    env.DS5_BRIDGE_HOST_AUDIO_RAW_CAPTURE_DUMP_SECONDS ??= '20';
-    env.DS5_BRIDGE_HOST_AUDIO_FRAME_DUMP ??= path.join(
+    env[DEBUG_ENV.hostAudioRawCaptureDumpSeconds] ??= '20';
+    env[DEBUG_ENV.hostAudioFrameDump] ??= path.join(
       HOST_AUDIO_DIAGNOSTIC_DIR,
       `ds5-bridge-host-frames-${HOST_AUDIO_DIAGNOSTIC_STAMP}.bin`
     );
-    env.DS5_BRIDGE_HOST_AUDIO_FRAME_DUMP_LIMIT ??= '2500';
+    env[DEBUG_ENV.hostAudioFrameDumpLimit] ??= '2500';
   }
   return env;
 }

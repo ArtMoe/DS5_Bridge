@@ -87,37 +87,70 @@ if(ENABLE_COMPANION)
     )
 endif()
 
+# Diagnostics live in one place. Quick presets:
+#   -DDS5_DIAGNOSTICS_PRESET=off    release default
+#   -DDS5_DIAGNOSTICS_PRESET=audio  audio ring/stats reports
+#   -DDS5_DIAGNOSTICS_PRESET=traces audio + trigger + feedback trace reports
+#   -DDS5_DIAGNOSTICS_PRESET=all    traces + UART/BTstack logs
+#   -DDS5_DIAGNOSTICS_PRESET=custom honor the legacy individual flags below
+set(DS5_DIAGNOSTICS_PRESET "off" CACHE STRING "Diagnostics preset: off, audio, traces, all, custom")
+set_property(CACHE DS5_DIAGNOSTICS_PRESET PROPERTY STRINGS off audio traces all custom)
 option(ENABLE_DEBUG_LOGS "Enable UART stdio and verbose firmware/BTstack debug logging" OFF)
-if(ENABLE_DEBUG_LOGS)
+option(ENABLE_COMPANION_DEBUG "Legacy custom-mode alias for audio debug reports" OFF)
+option(ENABLE_AUDIO_DEBUG_REPORTS "Legacy custom-mode companion HID audio debug ring/stats reports" OFF)
+option(ENABLE_TRIGGER_TRACE_REPORTS "Legacy custom-mode companion HID adaptive trigger trace report" OFF)
+option(ENABLE_FEEDBACK_TRACE_REPORTS "Legacy custom-mode companion HID rumble/haptics feedback trace report" OFF)
+
+set(DS5_ENABLE_FIRMWARE_LOGS OFF)
+set(DS5_ENABLE_AUDIO_DEBUG_REPORTS OFF)
+set(DS5_ENABLE_TRIGGER_TRACE_REPORTS OFF)
+set(DS5_ENABLE_FEEDBACK_TRACE_REPORTS OFF)
+
+if(DS5_DIAGNOSTICS_PRESET STREQUAL "audio")
+    set(DS5_ENABLE_AUDIO_DEBUG_REPORTS ON)
+elseif(DS5_DIAGNOSTICS_PRESET STREQUAL "traces")
+    set(DS5_ENABLE_AUDIO_DEBUG_REPORTS ON)
+    set(DS5_ENABLE_TRIGGER_TRACE_REPORTS ON)
+    set(DS5_ENABLE_FEEDBACK_TRACE_REPORTS ON)
+elseif(DS5_DIAGNOSTICS_PRESET STREQUAL "all")
+    set(DS5_ENABLE_FIRMWARE_LOGS ON)
+    set(DS5_ENABLE_AUDIO_DEBUG_REPORTS ON)
+    set(DS5_ENABLE_TRIGGER_TRACE_REPORTS ON)
+    set(DS5_ENABLE_FEEDBACK_TRACE_REPORTS ON)
+elseif(DS5_DIAGNOSTICS_PRESET STREQUAL "custom")
+    set(DS5_ENABLE_FIRMWARE_LOGS ${ENABLE_DEBUG_LOGS})
+    set(DS5_ENABLE_AUDIO_DEBUG_REPORTS ${ENABLE_AUDIO_DEBUG_REPORTS})
+    set(DS5_ENABLE_TRIGGER_TRACE_REPORTS ${ENABLE_TRIGGER_TRACE_REPORTS})
+    set(DS5_ENABLE_FEEDBACK_TRACE_REPORTS ${ENABLE_FEEDBACK_TRACE_REPORTS})
+    if(ENABLE_COMPANION_DEBUG)
+        set(DS5_ENABLE_AUDIO_DEBUG_REPORTS ON)
+    endif()
+elseif(NOT DS5_DIAGNOSTICS_PRESET STREQUAL "off")
+    message(FATAL_ERROR "DS5_DIAGNOSTICS_PRESET must be one of: off, audio, traces, all, custom")
+endif()
+
+message(STATUS "DS5 diagnostics: preset=${DS5_DIAGNOSTICS_PRESET}; logs=${DS5_ENABLE_FIRMWARE_LOGS}; audio=${DS5_ENABLE_AUDIO_DEBUG_REPORTS}; trigger=${DS5_ENABLE_TRIGGER_TRACE_REPORTS}; feedback=${DS5_ENABLE_FEEDBACK_TRACE_REPORTS}")
+
+if(DS5_ENABLE_FIRMWARE_LOGS)
     target_compile_definitions(ds5-bridge PRIVATE
             DS5_ENABLE_DEBUG_LOGS
+            DS5_DEBUG_LOGS_ENABLED=1
     )
 endif()
 
-option(ENABLE_COMPANION_DEBUG "Enable companion debug/logging features (audio debug, trigger trace, feedback trace)" OFF)
-if(ENABLE_COMPANION_DEBUG)
-    option(ENABLE_AUDIO_DEBUG_REPORTS "Enable the companion HID audio debug ring report" ON)
-    option(ENABLE_TRIGGER_TRACE_REPORTS "Enable the companion HID adaptive trigger trace report" OFF)
-    option(ENABLE_FEEDBACK_TRACE_REPORTS "Enable the companion HID rumble/haptics feedback trace report" OFF)
-else()
-    set(ENABLE_AUDIO_DEBUG_REPORTS OFF)
-    set(ENABLE_TRIGGER_TRACE_REPORTS OFF)
-    set(ENABLE_FEEDBACK_TRACE_REPORTS OFF)
-endif()
-
-if(ENABLE_AUDIO_DEBUG_REPORTS)
+if(DS5_ENABLE_AUDIO_DEBUG_REPORTS)
     target_compile_definitions(ds5-bridge PRIVATE
             DS5_AUDIO_DEBUG_ENABLED=1
     )
 endif()
 
-if(ENABLE_TRIGGER_TRACE_REPORTS)
+if(DS5_ENABLE_TRIGGER_TRACE_REPORTS)
     target_compile_definitions(ds5-bridge PRIVATE
             DS5_TRIGGER_TRACE_ENABLED=1
     )
 endif()
 
-if(ENABLE_FEEDBACK_TRACE_REPORTS)
+if(DS5_ENABLE_FEEDBACK_TRACE_REPORTS)
     target_compile_definitions(ds5-bridge PRIVATE
             DS5_FEEDBACK_TRACE_ENABLED=1
     )
@@ -126,7 +159,7 @@ endif()
 pico_set_program_name(ds5-bridge "ds5-bridge")
 pico_set_program_version(ds5-bridge "1.0.1")
 
-if(ENABLE_DEBUG_LOGS)
+if(DS5_ENABLE_FIRMWARE_LOGS)
     pico_enable_stdio_uart(ds5-bridge 1)
 else()
     pico_enable_stdio_uart(ds5-bridge 0)

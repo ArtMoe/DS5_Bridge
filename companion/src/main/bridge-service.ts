@@ -66,6 +66,7 @@ import {
   type HostAudioStartFailureReason,
   type HostAudioFramePayload
 } from './host-audio-engine';
+import { CompanionDebugConfig } from './debug-config';
 import { HidDiscoveryClient } from './hid-discovery-client';
 import { SettingsStore, normalizeUiScalePercent } from './settings-store';
 
@@ -78,10 +79,10 @@ const HOST_AUDIO_CAPTURE_RETRY_MS = 5000;
 const AUDIO_DEBUG_READ_INTERVAL_MS = 500;
 const TRIGGER_TRACE_READ_INTERVAL_MS = 250;
 const FEEDBACK_TRACE_READ_INTERVAL_MS = 250;
-const AUDIO_DEBUG_DIAGNOSTICS_ENABLED = process.env.DS5_BRIDGE_AUDIO_DEBUG_DIAGNOSTICS === '1';
-const TRIGGER_TRACE_DIAGNOSTICS_ENABLED = false;
-const FEEDBACK_TRACE_DIAGNOSTICS_ENABLED = false;
-const MIC_KEEPALIVE_ENABLED = process.env.DS5_BRIDGE_MIC_KEEPALIVE === '1';
+const AUDIO_DEBUG_DIAGNOSTICS_ENABLED = CompanionDebugConfig.audioDebugDiagnosticsEnabled;
+const TRIGGER_TRACE_DIAGNOSTICS_ENABLED = CompanionDebugConfig.triggerTraceDiagnosticsEnabled;
+const FEEDBACK_TRACE_DIAGNOSTICS_ENABLED = CompanionDebugConfig.feedbackTraceDiagnosticsEnabled;
+const MIC_KEEPALIVE_ENABLED = CompanionDebugConfig.micKeepaliveEnabled;
 const HOST_AUDIO_MAX_QUEUED_FRAMES = 2;
 const HOST_AUDIO_STOP_FADE_MS = 40;
 const LOW_BATTERY_PERCENT = 20;

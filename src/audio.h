@@ -7,10 +7,7 @@
 #define DS5_BRIDGE_AUDIO_H
 
 #include <cstdint>
-
-#ifndef DS5_AUDIO_DEBUG_ENABLED
-#define DS5_AUDIO_DEBUG_ENABLED 0
-#endif
+#include "debug_config.h"
 
 enum AudioRuntimeMode : uint8_t {
     AudioRuntimeFallbackPicoLocal = 0,

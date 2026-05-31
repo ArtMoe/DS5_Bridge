@@ -7,9 +7,10 @@
 #include <cstddef>
 #include <cstdint>
 
+#include "debug_config.h"
 #include "hci_cmd.h"
 
-#ifdef DS5_ENABLE_DEBUG_LOGS
+#if DS5_DEBUG_LOGS_ENABLED
 #include <cstdio>
 #define DS5_LOG(...) do { printf(__VA_ARGS__); } while (0)
 #define DS5_HEXDUMP(data, size) do { printf_hexdump((data), (size)); } while (0)

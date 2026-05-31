@@ -25,19 +25,10 @@
 
 #include "bsp/board_api.h"
 #include "tusb.h"
+#include "debug_config.h"
 #include "host_pcm_iso.h"
 
 extern uint8_t usb_hid_polling_interval_ms_value;
-
-#ifndef DS5_AUDIO_DEBUG_ENABLED
-#define DS5_AUDIO_DEBUG_ENABLED 0
-#endif
-#ifndef DS5_TRIGGER_TRACE_ENABLED
-#define DS5_TRIGGER_TRACE_ENABLED 0
-#endif
-#ifndef DS5_FEEDBACK_TRACE_ENABLED
-#define DS5_FEEDBACK_TRACE_ENABLED 0
-#endif
 
 #define CONFIG_TOTAL_LEN_STANDARD 0x0148
 #define RAW_PCM_RETURN_DESC_LEN 0x0065

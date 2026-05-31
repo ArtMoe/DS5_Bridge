@@ -19,6 +19,8 @@ import {
 } from '../shared/protocol';
 
 const hidMock = vi.hoisted(() => {
+  process.env.DS5_BRIDGE_AUDIO_DEBUG_DIAGNOSTICS = '1';
+
   const state = {
     devicesList: [] as Array<Record<string, unknown>>,
     openDevices: new Map<string, MockHidDevice>()
@@ -864,8 +866,8 @@ describe('BridgeService', () => {
 
     expect(service.getSnapshot().settings.speakerVolumePercent).toBe(40);
     expect(service.getSnapshot().status?.speakerVolumePercent).toBe(40);
-    expect(device.sentReports.at(-1)?.[7]).toBe(COMMAND_ID.SET_SPEAKER_VOLUME);
-    expect(device.sentReports.at(-1)?.[9]).toBe(40);
+    const volumeCommand = device.sentReports.filter((report) => report[7] === COMMAND_ID.SET_SPEAKER_VOLUME).at(-1);
+    expect(volumeCommand?.[9]).toBe(40);
   });
 
   it('sends and stores classic rumble gain', async () => {
