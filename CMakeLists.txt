@@ -80,6 +80,7 @@ option(ENABLE_COMPANION "Enable the optional companion HID interface" OFF)
 if(ENABLE_COMPANION)
     target_sources(ds5-bridge PRIVATE
             src/companion.cpp
+            src/host_pcm_iso.cpp
     )
     target_compile_definitions(ds5-bridge PRIVATE
             ENABLE_COMPANION
@@ -96,8 +97,8 @@ endif()
 option(ENABLE_COMPANION_DEBUG "Enable companion debug/logging features (audio debug, trigger trace, feedback trace)" OFF)
 if(ENABLE_COMPANION_DEBUG)
     option(ENABLE_AUDIO_DEBUG_REPORTS "Enable the companion HID audio debug ring report" ON)
-    option(ENABLE_TRIGGER_TRACE_REPORTS "Enable the companion HID adaptive trigger trace report" ON)
-    option(ENABLE_FEEDBACK_TRACE_REPORTS "Enable the companion HID rumble/haptics feedback trace report" ON)
+    option(ENABLE_TRIGGER_TRACE_REPORTS "Enable the companion HID adaptive trigger trace report" OFF)
+    option(ENABLE_FEEDBACK_TRACE_REPORTS "Enable the companion HID rumble/haptics feedback trace report" OFF)
 else()
     set(ENABLE_AUDIO_DEBUG_REPORTS OFF)
     set(ENABLE_TRIGGER_TRACE_REPORTS OFF)

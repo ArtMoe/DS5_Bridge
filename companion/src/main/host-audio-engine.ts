@@ -1,5 +1,6 @@
 import { spawn, type ChildProcess, type ChildProcessWithoutNullStreams } from 'node:child_process';
 import { existsSync } from 'node:fs';
+import { homedir } from 'node:os';
 import path from 'node:path';
 import { EventEmitter } from 'node:events';
 
@@ -13,6 +14,7 @@ export type HostAudioStartFailureReason =
   | 'device-in-use'
   | 'device-invalidated'
   | 'unsupported-format'
+  | 'bulk-pcm-unavailable'
   | 'start-timeout'
   | 'helper-exit';
 
@@ -35,9 +37,14 @@ const HELPER_TEST_TONE_TIMEOUT_MS = 10000;
 const HELPER_STDERR_MAX_CHARS = 8192;
 const HELPER_RELATIVE_PATH = path.join('native', 'HostAudioHelper', 'HostAudioHelper.exe');
 const HELPER_TEST_AUDIO_FILE = 'test-speaker-tone-silence-tail.mp3';
+type HostAudioSource = 'usb-pcm' | 'usb-bulk-pcm' | 'raw-pcm-capture' | 'render-loopback';
+
 const HOST_AUDIO_SOURCE = normalizeHostAudioSource(process.env.DS5_BRIDGE_HOST_AUDIO_SOURCE);
 const BRIDGE_AUDIO_DEVICE_NAME = 'DS5 Bridge';
 const BRIDGE_RAW_PCM_DEVICE_NAME = 'DS5 Bridge Raw PCM';
+const HOST_AUDIO_AUTO_CAPTURE_ENABLED = process.env.DS5_BRIDGE_HOST_AUDIO_AUTO_CAPTURE !== '0';
+const HOST_AUDIO_DIAGNOSTIC_STAMP = new Date().toISOString().replace(/[:.]/g, '-');
+const HOST_AUDIO_DIAGNOSTIC_DIR = path.join(homedir(), 'Desktop');
 const DEV_HELPER_RELATIVE_PATH = path.join(
   'native',
   'HostAudioHelper',
@@ -142,7 +149,7 @@ export class HostAudioEngine extends EventEmitter {
 
   private async startInternal(hidPath: string | null, speakerVolumePercent: number): Promise<void> {
     const helperPath = resolveHelperPath();
-    const deviceName = hostAudioUsesRawPcmCapture() ? BRIDGE_RAW_PCM_DEVICE_NAME : BRIDGE_AUDIO_DEVICE_NAME;
+    const deviceName = HOST_AUDIO_SOURCE === 'raw-pcm-capture' ? BRIDGE_RAW_PCM_DEVICE_NAME : BRIDGE_AUDIO_DEVICE_NAME;
     const args = [
       '--device-name',
       deviceName,
@@ -155,6 +162,7 @@ export class HostAudioEngine extends EventEmitter {
       args.push('--hid-path', hidPath);
     }
     const helper = spawn(helperPath, args, {
+      env: buildHostAudioHelperEnv(),
       windowsHide: true,
       stdio: ['pipe', 'pipe', 'pipe']
     });
@@ -290,6 +298,9 @@ function parseCaptureUnavailableReason(line: string): HostAudioStartFailureReaso
   if (line.includes('reason=unsupported-format')) {
     return 'unsupported-format';
   }
+  if (line.includes('reason=bulk-pcm-unavailable')) {
+    return 'bulk-pcm-unavailable';
+  }
   return 'helper-exit';
 }
 
@@ -301,11 +312,33 @@ function hostAudioStartFailureMessage(reason: HostAudioStartFailureReason): stri
       return 'DualSense audio endpoint changed while host audio was starting.';
     case 'unsupported-format':
       return 'DualSense raw PCM capture endpoint format is not usable by Windows. Re-enumerate or clean stale DualSense audio devices.';
+    case 'bulk-pcm-unavailable':
+      return 'DS5 Bridge WinUSB PCM pipe is unavailable. Re-enumerate or clean stale DS5 Bridge devices, then Host Encoding will retry.';
     case 'start-timeout':
       return `Host audio helper did not start recording within ${HELPER_START_TIMEOUT_MS}ms.`;
     case 'helper-exit':
       return 'Host audio helper exited before recording started.';
   }
+}
+
+function buildHostAudioHelperEnv(): NodeJS.ProcessEnv {
+  const env: NodeJS.ProcessEnv = { ...process.env };
+  if (!isWinUsbPcmSource(HOST_AUDIO_SOURCE) || !HOST_AUDIO_AUTO_CAPTURE_ENABLED) {
+    return env;
+  }
+
+  env.DS5_BRIDGE_HOST_AUDIO_DIAGNOSTICS ??= '1';
+  env.DS5_BRIDGE_HOST_AUDIO_RAW_CAPTURE_DUMP ??= path.join(
+    HOST_AUDIO_DIAGNOSTIC_DIR,
+    `ds5-bridge-winusb-pcm-${HOST_AUDIO_DIAGNOSTIC_STAMP}.wav`
+  );
+  env.DS5_BRIDGE_HOST_AUDIO_RAW_CAPTURE_DUMP_SECONDS ??= '20';
+  env.DS5_BRIDGE_HOST_AUDIO_FRAME_DUMP ??= path.join(
+    HOST_AUDIO_DIAGNOSTIC_DIR,
+    `ds5-bridge-host-frames-${HOST_AUDIO_DIAGNOSTIC_STAMP}.bin`
+  );
+  env.DS5_BRIDGE_HOST_AUDIO_FRAME_DUMP_LIMIT ??= '2500';
+  return env;
 }
 
 export async function playHostAudioTestTone(speakerVolumePercent = 100): Promise<void> {
@@ -432,8 +465,18 @@ export class MicKeepaliveEngine extends EventEmitter {
   }
 }
 
-function normalizeHostAudioSource(value: string | undefined): 'raw-pcm-capture' | 'render-loopback' {
-  return value === 'render-loopback' ? 'render-loopback' : 'raw-pcm-capture';
+function normalizeHostAudioSource(value: string | undefined): HostAudioSource {
+  if (value === 'render-loopback' || value === 'raw-pcm-capture') {
+    return value;
+  }
+  if (value === 'usb-bulk-pcm' || value === 'usb-pcm') {
+    return 'usb-pcm';
+  }
+  return 'usb-pcm';
+}
+
+function isWinUsbPcmSource(value: HostAudioSource): boolean {
+  return value === 'usb-pcm' || value === 'usb-bulk-pcm';
 }
 
 export function hostAudioUsesRawPcmCapture(): boolean {

@@ -25,6 +25,7 @@
 
 #include "bsp/board_api.h"
 #include "tusb.h"
+#include "host_pcm_iso.h"
 
 extern uint8_t usb_hid_polling_interval_ms_value;
 
@@ -39,7 +40,13 @@ extern uint8_t usb_hid_polling_interval_ms_value;
 #endif
 
 #define CONFIG_TOTAL_LEN_STANDARD 0x0148
-#define CONFIG_TOTAL_LEN_COMPANION 0x0181
+#define VENDOR_PCM_DESC_LEN 0x0010
+#define CONFIG_TOTAL_LEN_COMPANION (0x0181 + VENDOR_PCM_DESC_LEN)
+#define VENDOR_PCM_INTERFACE_NUMBER HOST_PCM_ISO_INTERFACE_NUMBER
+#define VENDOR_PCM_EP_IN HOST_PCM_ISO_EP_IN
+#define VENDOR_PCM_MS_OS_VENDOR_REQUEST 0x20
+#define VENDOR_PCM_MS_OS_20_DESC_LEN 0x00B2
+#define BOS_TOTAL_LEN (TUD_BOS_DESC_LEN + TUD_BOS_MICROSOFT_OS_DESC_LEN)
 #define COMPANION_HID_REPORT_DESC_LEN \
     (0x0040 \
         + (DS5_TRIGGER_TRACE_ENABLED ? 0x0008 : 0) \
@@ -54,7 +61,11 @@ static tusb_desc_device_t const desc_device =
 {
     .bLength = sizeof(tusb_desc_device_t),
     .bDescriptorType = TUSB_DESC_DEVICE,
+#ifdef ENABLE_COMPANION
+    .bcdUSB = 0x0210,
+#else
     .bcdUSB = 0x0200,
+#endif
 
     // Use Interface Association Descriptor (IAD) for Audio
     // As required by USB Specs IAD's subclass must be common class (2) and protocol must be IAD (1)
@@ -101,8 +112,8 @@ uint8_t descriptor_configuration[] = {
     0x09, // bLength
     0x02, // bDescriptorType (CONFIGURATION)
 #ifdef ENABLE_COMPANION
-    CONFIG_TOTAL_LEN_COMPANION & 0xFF, (CONFIG_TOTAL_LEN_COMPANION >> 8) & 0xFF, // wTotalLength: 385
-    0x08, // bNumInterfaces: 8
+    CONFIG_TOTAL_LEN_COMPANION & 0xFF, (CONFIG_TOTAL_LEN_COMPANION >> 8) & 0xFF, // wTotalLength: 408
+    0x09, // bNumInterfaces: 9
 #else
     CONFIG_TOTAL_LEN_STANDARD & 0xFF, (CONFIG_TOTAL_LEN_STANDARD >> 8) & 0xFF, // wTotalLength: 328
     0x06, // bNumInterfaces: 6
@@ -533,6 +544,24 @@ uint8_t descriptor_configuration[] = {
     0x03, // bmAttributes: Interrupt
     0x08, 0x00, // wMaxPacketSize: 8
     0x01, // bInterval: 1
+
+    // --- INTERFACE DESCRIPTOR (8.0): Vendor Isochronous IN (Lossless PCM Mirror) ---
+    0x09, // bLength
+    0x04, // bDescriptorType (INTERFACE)
+    VENDOR_PCM_INTERFACE_NUMBER,
+    0x00, // bAlternateSetting
+    0x01, // bNumEndpoints: 1 IN
+    0xFF, // bInterfaceClass: Vendor Specific
+    0x00, // bInterfaceSubClass
+    0x00, // bInterfaceProtocol
+    0x05, // iInterface: DS5 Bridge PCM Iso
+
+    0x07, // bLength
+    0x05, // bDescriptorType (ENDPOINT)
+    VENDOR_PCM_EP_IN,
+    0x05, // bmAttributes: Isochronous, asynchronous
+    HOST_PCM_ISO_PACKET_BYTES & 0xFF, (HOST_PCM_ISO_PACKET_BYTES >> 8) & 0xFF,
+    0x01, // bInterval: 1ms
 #endif
 };
 
@@ -557,6 +586,83 @@ uint8_t const *tud_descriptor_configuration_cb(uint8_t index) {
     }
     return descriptor_configuration;
 }
+
+#ifdef ENABLE_COMPANION
+//--------------------------------------------------------------------+
+// BOS / Microsoft OS 2.0 descriptors for automatic WinUSB binding
+//--------------------------------------------------------------------+
+
+uint8_t const desc_bos[] = {
+    TUD_BOS_DESCRIPTOR(BOS_TOTAL_LEN, 1),
+    TUD_BOS_MS_OS_20_DESCRIPTOR(VENDOR_PCM_MS_OS_20_DESC_LEN, VENDOR_PCM_MS_OS_VENDOR_REQUEST)
+};
+
+uint8_t const *tud_descriptor_bos_cb(void) {
+    return desc_bos;
+}
+
+uint8_t const desc_ms_os_20[] = {
+    // Set header: length, type, Windows version, total length.
+    U16_TO_U8S_LE(0x000A), U16_TO_U8S_LE(MS_OS_20_SET_HEADER_DESCRIPTOR),
+    U32_TO_U8S_LE(0x06030000), U16_TO_U8S_LE(VENDOR_PCM_MS_OS_20_DESC_LEN),
+
+    // Configuration subset header.
+    U16_TO_U8S_LE(0x0008), U16_TO_U8S_LE(MS_OS_20_SUBSET_HEADER_CONFIGURATION),
+    0, 0, U16_TO_U8S_LE(VENDOR_PCM_MS_OS_20_DESC_LEN - 0x0A),
+
+    // Function subset header for the vendor PCM interface.
+    U16_TO_U8S_LE(0x0008), U16_TO_U8S_LE(MS_OS_20_SUBSET_HEADER_FUNCTION),
+    VENDOR_PCM_INTERFACE_NUMBER, 0,
+    U16_TO_U8S_LE(VENDOR_PCM_MS_OS_20_DESC_LEN - 0x0A - 0x08),
+
+    // Compatible ID: bind this interface to WinUSB.
+    U16_TO_U8S_LE(0x0014), U16_TO_U8S_LE(MS_OS_20_FEATURE_COMPATBLE_ID),
+    'W', 'I', 'N', 'U', 'S', 'B', 0x00, 0x00,
+    0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+
+    // Registry property: DeviceInterfaceGUIDs = {D5B7C5F4-8A68-4A86-9E31-1E5FA7B1D5B0}.
+    U16_TO_U8S_LE(VENDOR_PCM_MS_OS_20_DESC_LEN - 0x0A - 0x08 - 0x08 - 0x14),
+    U16_TO_U8S_LE(MS_OS_20_FEATURE_REG_PROPERTY),
+    U16_TO_U8S_LE(0x0007), U16_TO_U8S_LE(0x002A),
+    'D', 0x00, 'e', 0x00, 'v', 0x00, 'i', 0x00, 'c', 0x00,
+    'e', 0x00, 'I', 0x00, 'n', 0x00, 't', 0x00, 'e', 0x00,
+    'r', 0x00, 'f', 0x00, 'a', 0x00, 'c', 0x00, 'e', 0x00,
+    'G', 0x00, 'U', 0x00, 'I', 0x00, 'D', 0x00, 's', 0x00,
+    0x00, 0x00,
+    U16_TO_U8S_LE(0x0050),
+    '{', 0x00, 'D', 0x00, '5', 0x00, 'B', 0x00, '7', 0x00,
+    'C', 0x00, '5', 0x00, 'F', 0x00, '4', 0x00, '-', 0x00,
+    '8', 0x00, 'A', 0x00, '6', 0x00, '8', 0x00, '-', 0x00,
+    '4', 0x00, 'A', 0x00, '8', 0x00, '6', 0x00, '-', 0x00,
+    '9', 0x00, 'E', 0x00, '3', 0x00, '1', 0x00, '-', 0x00,
+    '1', 0x00, 'E', 0x00, '5', 0x00, 'F', 0x00, 'A', 0x00,
+    '7', 0x00, 'B', 0x00, '1', 0x00, 'D', 0x00, '5', 0x00,
+    'B', 0x00, '0', 0x00, '}', 0x00, 0x00, 0x00, 0x00, 0x00
+};
+
+TU_VERIFY_STATIC(sizeof(desc_ms_os_20) == VENDOR_PCM_MS_OS_20_DESC_LEN, "Incorrect MS OS 2.0 descriptor size");
+
+bool tud_vendor_control_xfer_cb(uint8_t rhport, uint8_t stage, tusb_control_request_t const *request) {
+    if (stage != CONTROL_STAGE_SETUP) {
+        return true;
+    }
+
+    if (
+        request->bmRequestType_bit.type == TUSB_REQ_TYPE_VENDOR
+        && request->bRequest == VENDOR_PCM_MS_OS_VENDOR_REQUEST
+        && request->wIndex == 7
+    ) {
+        return tud_control_xfer(
+            rhport,
+            request,
+            (void *)(uintptr_t)desc_ms_os_20,
+            VENDOR_PCM_MS_OS_20_DESC_LEN
+        );
+    }
+
+    return false;
+}
+#endif
 
 //--------------------------------------------------------------------+
 // HID Report Descriptor
@@ -1032,6 +1138,7 @@ enum {
     STRID_PRODUCT,
     STRID_SERIAL,
     STRID_RAW_PCM,
+    STRID_BULK_PCM,
 };
 
 // array of pointer to string descriptors
@@ -1046,6 +1153,7 @@ static char const *string_desc_arr[] =
 #endif
     NULL, // 3: Serials will use unique ID if possible
     "DS5 Bridge Raw PCM", // 4: Raw PCM Line endpoint
+    "DS5 Bridge PCM Iso", // 5: WinUSB lossless PCM mirror
 };
 
 static uint16_t _desc_str[60 + 1];

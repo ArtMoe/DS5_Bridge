@@ -502,6 +502,8 @@ function hostAudioCaptureIssueLabel(reason: HostAudioCaptureStatusReason): strin
       return 'Endpoint Changed';
     case 'unsupported-format':
       return 'Format Error';
+    case 'bulk-pcm-unavailable':
+      return 'PCM Pipe Missing';
     case 'start-timeout':
       return 'Retrying';
     case 'helper-exit':
@@ -517,6 +519,8 @@ function hostAudioCaptureIssueTooltip(reason: HostAudioCaptureStatusReason): str
       return 'Windows changed the DualSense audio endpoint while Host Encoding was starting. The app will retry automatically.';
     case 'unsupported-format':
       return 'Windows rejected the DualSense raw PCM capture format. Re-enumerate or clean stale DualSense audio devices.';
+    case 'bulk-pcm-unavailable':
+      return 'Windows did not expose the DS5 Bridge WinUSB PCM pipe. Re-enumerate or clean stale DS5 Bridge devices.';
     case 'start-timeout':
       return 'The host audio encoder did not start in time. The app will retry automatically.';
     case 'helper-exit':

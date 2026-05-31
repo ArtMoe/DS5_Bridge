@@ -100,13 +100,13 @@ export interface BridgeDiagnostics {
 }
 
 export interface HostAudioCaptureIssue {
-  reason: 'device-in-use' | 'device-invalidated' | 'unsupported-format' | 'start-timeout' | 'helper-exit';
+  reason: 'device-in-use' | 'device-invalidated' | 'unsupported-format' | 'bulk-pcm-unavailable' | 'start-timeout' | 'helper-exit';
   message: string;
   retryAt: number;
 }
 
 export interface HostAudioCaptureRetry {
-  reason: 'device-in-use' | 'device-invalidated' | 'unsupported-format' | 'start-timeout' | 'helper-exit';
+  reason: 'device-in-use' | 'device-invalidated' | 'unsupported-format' | 'bulk-pcm-unavailable' | 'start-timeout' | 'helper-exit';
   message: string;
   retryAt: number;
 }

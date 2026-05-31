@@ -446,7 +446,7 @@ describe('BridgeService', () => {
     );
   });
 
-  it('keeps audio debug diagnostics disabled during normal polling', async () => {
+  it('polls audio debug diagnostics during normal polling', async () => {
     const fixture = createService();
     tempDirs.push(fixture.tempDir);
     const device = new MockHidDevice();
@@ -470,12 +470,15 @@ describe('BridgeService', () => {
     await poll(fixture.service);
 
     const snapshot = fixture.service.getSnapshot();
-    expect(snapshot.diagnostics.audioDebugDroppedCount).toBe(0);
+    expect(snapshot.diagnostics.audioDebugDroppedCount).toBe(3);
     expect(snapshot.diagnostics.audioDebugLogPath).toBeNull();
-    expect(snapshot.diagnostics.audioDebugStats).toBeNull();
-    expect(snapshot.diagnostics.audioDebugLogLines).toEqual([]);
-    expect(device.featureReportIds).not.toContain(REPORT_ID.AUDIO_DEBUG);
-    expect(device.featureReportIds).not.toContain(REPORT_ID.AUDIO_STATS);
+    expect(snapshot.diagnostics.audioDebugStats?.usbAudioGapMaxUs).toBe(2100);
+    expect(snapshot.diagnostics.audioDebugLogLines).toEqual([
+      '#7 t=123456us [Audio] RESET: gap detected audio_fifo=1 opus_ready=2 gap_ms=255+ packet=9 skip=2',
+      '[AudioStats] version=1 usbAudioGapMaxUs=2100 usbAudioGapOver1500Count=0 opusEncodeMaxUs=0 opusEncodeOverBudgetCount=0 audio0x36EnqueueToSendMaxUs=0 audio0x36SendGapMaxUs=13000 audio0x36LateCountOver12000Us=0 audio0x36DropOldestCount=0 audioGenerationDropCount=0 nonAudioReportsBetweenAudioMax=3 btAudioQueueDepthMax=0 audio0x36EnqueuedCount=0 audio0x36SentCount=0 criticalStarvingAudioCount=0'
+    ]);
+    expect(device.featureReportIds).toContain(REPORT_ID.AUDIO_DEBUG);
+    expect(device.featureReportIds).toContain(REPORT_ID.AUDIO_STATS);
     expect(existsSync(path.join(fixture.tempDir, 'logs'))).toBe(false);
   });
 

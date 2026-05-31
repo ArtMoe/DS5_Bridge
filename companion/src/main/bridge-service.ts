@@ -78,7 +78,9 @@ const HOST_AUDIO_CAPTURE_RETRY_MS = 5000;
 const AUDIO_DEBUG_READ_INTERVAL_MS = 500;
 const TRIGGER_TRACE_READ_INTERVAL_MS = 250;
 const FEEDBACK_TRACE_READ_INTERVAL_MS = 250;
-const AUDIO_DEBUG_DIAGNOSTICS_ENABLED = false;
+const AUDIO_DEBUG_DIAGNOSTICS_ENABLED = true;
+const TRIGGER_TRACE_DIAGNOSTICS_ENABLED = false;
+const FEEDBACK_TRACE_DIAGNOSTICS_ENABLED = false;
 const HOST_AUDIO_MAX_QUEUED_FRAMES = 2;
 const HOST_AUDIO_STOP_FADE_MS = 40;
 const LOW_BATTERY_PERCENT = 20;
@@ -208,6 +210,8 @@ function hostAudioCaptureIssueMessage(
       return `DualSense audio endpoint changed while Host Encoding was starting. Host Encoding will retry in ${retrySeconds}s.`;
     case 'unsupported-format':
       return `DualSense raw PCM capture endpoint format is not usable by Windows. Re-enumerate or clean stale DualSense audio devices, then Host Encoding will retry in ${retrySeconds}s.`;
+    case 'bulk-pcm-unavailable':
+      return `DS5 Bridge WinUSB PCM pipe is unavailable. Re-enumerate or clean stale DS5 Bridge devices, then Host Encoding will retry in ${retrySeconds}s.`;
     case 'start-timeout':
     case 'helper-exit':
       return `${fallbackMessage} Host Encoding will retry in ${retrySeconds}s.`;
@@ -215,7 +219,10 @@ function hostAudioCaptureIssueMessage(
 }
 
 function shouldSurfaceHostAudioCaptureIssue(reason: HostAudioStartFailureReason): boolean {
-  return reason === 'device-in-use' || reason === 'device-invalidated' || reason === 'unsupported-format';
+  return reason === 'device-in-use'
+    || reason === 'device-invalidated'
+    || reason === 'unsupported-format'
+    || reason === 'bulk-pcm-unavailable';
 }
 
 function emptyDiagnostics(rawDevices: HidDeviceSummary[]): BridgeDiagnostics {
@@ -369,6 +376,12 @@ function formatUsbDebugEvent(prefix: string, args: number[]): string {
       return `${prefix} [USB] AUDIO_SET entity=${hexByte(arg1)} control=${hexByte(arg2)} request=${hexByte(arg3)} len=${arg4}`;
     case 4:
       return `${prefix} [USB] AUDIO_DISCARD reads=${arg1} maxReads=${arg2} runtime=${arg3} stillAvailable=${arg4 === 1 ? 'true' : 'false'}`;
+    case 8:
+      return `${prefix} [USB] BULK_PCM_PARTIAL headerWritten=${arg1} payloadWritten=${arg2} payloadBytes=${arg3}`;
+    case 9:
+      return `${prefix} [USB] BULK_PCM_DROP countLow=${arg1} available=${arg2} packetBytes=${arg3} sequenceLow=${arg4}`;
+    case 10:
+      return `${prefix} [USB] BULK_PCM_QUEUE_DROP countLow=${arg1} queue=${arg2}/${arg3} sequenceLow=${arg4}`;
     default:
       return `${prefix} [USB] type=${type} arg1=${arg1} arg2=${arg2} arg3=${arg3} arg4=${arg4}`;
   }
@@ -460,6 +473,21 @@ function formatAudioDebugEvent(event: AudioDebugEventPayload): string {
         const transport = arg0 === 0xfe ? 'fast' : 'chunked';
         return `${prefix} [HostPico] FRAME incomplete-${transport} sequence=${arg1} mask=${hexByte(arg2)} chunks=${arg3} expected=${limitedByte(arg4)}`;
       }
+      if (arg0 === 0xf0) {
+        return `${prefix} [HostPico] JITTER drop-oldest queue=${arg1} target=${arg2} dropped=${arg3} started=${arg4 === 1 ? 'true' : 'false'}`;
+      }
+      if (arg0 === 0xf1) {
+        return `${prefix} [HostPico] JITTER add-fail queue=${arg1} target=${arg2} dropped=${arg3}`;
+      }
+      if (arg0 === 0xf2) {
+        return `${prefix} [HostPico] JITTER start queue=${arg1} target=${arg2} packet=${arg3} duplex=${arg4 === 1 ? 'true' : 'false'}`;
+      }
+      if (arg0 === 0xf3) {
+        return `${prefix} [HostPico] JITTER underrun queue=${arg1} target=${arg2} dropped=${arg3} duplex=${arg4 === 1 ? 'true' : 'false'}`;
+      }
+      if (arg0 === 0xf4) {
+        return `${prefix} [HostPico] JITTER duplex-prebuffer queue=${arg1} target=${arg2} packet=${arg3} reportSeq=${arg4}`;
+      }
       return `${prefix} [HostPico] FRAME submitted audio_fifo=${arg0} received=${arg1} generation=${arg2} packet=${arg3} reportSeq=${arg4}`;
     case AUDIO_DEBUG_EVENT.MIC_PACKET:
       return formatMicDebugEvent(prefix, event.args);
@@ -469,6 +497,8 @@ function formatAudioDebugEvent(event: AudioDebugEventPayload): string {
       return formatHidDebugEvent(prefix, event.args);
     case AUDIO_DEBUG_EVENT.BT_EVENT:
       return formatBtDebugEvent(prefix, event.args);
+    case AUDIO_DEBUG_EVENT.CPU_LOAD:
+      return `${prefix} [CPU] core1Busy=${arg0}% core1Speaker=${arg1}% core1Mic=${arg2}% audioLoopMax=${scaled100Us(arg3)} audioLoopGapMax=${scaled100Us(arg4)}`;
     default:
       return `${prefix} [Audio] UNKNOWN code=${event.eventCode} args=${event.args.join(',')}`;
   }
@@ -1073,6 +1103,9 @@ export class BridgeService extends EventEmitter {
   }
 
   private readTriggerTraceThrottled(force = false): void {
+    if (!TRIGGER_TRACE_DIAGNOSTICS_ENABLED) {
+      return;
+    }
     if (!this.device) {
       return;
     }
@@ -1118,6 +1151,9 @@ export class BridgeService extends EventEmitter {
   }
 
   private readFeedbackTraceThrottled(force = false): void {
+    if (!FEEDBACK_TRACE_DIAGNOSTICS_ENABLED) {
+      return;
+    }
     if (!this.device) {
       return;
     }

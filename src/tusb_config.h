@@ -100,10 +100,20 @@
 #define CFG_TUD_CDC               1
 #define CFG_TUD_MSC               0
 #define CFG_TUD_MIDI              0
+#ifdef ENABLE_COMPANION
+#define CFG_TUD_VENDOR            1
+#else
 #define CFG_TUD_VENDOR            0
+#endif
 
 // HID buffer size Should be sufficient to hold ID (if any) + Data
 #define CFG_TUD_HID_EP_BUFSIZE    64
+
+// Lossless host PCM mirror. Full-speed bulk uses 64 byte USB packets, but the
+// software FIFO needs room for a few milliseconds of 48 kHz stereo PCM frames.
+#define CFG_TUD_VENDOR_EPSIZE     64
+#define CFG_TUD_VENDOR_RX_BUFSIZE 64
+#define CFG_TUD_VENDOR_TX_BUFSIZE 16384
 
 //--------------------------------------------------------------------
 // AUDIO CLASS DRIVER CONFIGURATION

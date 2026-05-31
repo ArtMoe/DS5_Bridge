@@ -9,6 +9,7 @@
 #include "controller_output_state.h"
 #include "dualsense_output.h"
 #include "host_audio_runtime.h"
+#include "host_pcm_iso.h"
 #ifdef ENABLE_COMPANION
 #include "companion.h"
 #endif
@@ -106,6 +107,7 @@ enum AudioDebugEventCode : uint8_t {
     AudioDebugUsbEvent = 20,
     AudioDebugHidEvent = 21,
     AudioDebugBtEvent = 22,
+    AudioDebugCpuLoad = 23,
 };
 
 enum HostAudioPacketType : uint8_t {
@@ -193,6 +195,9 @@ static uint8_t audio_debug_count = 0;
 static uint8_t audio_debug_head = 0;
 static uint8_t audio_debug_packet_log_budget = 0;
 static audio_debug_stats audio_stats{};
+static volatile uint32_t audio_loop_runtime_max_us = 0;
+static volatile uint32_t audio_loop_gap_max_us = 0;
+static uint32_t audio_loop_last_start_us = 0;
 static uint32_t last_usb_audio_read_us = 0;
 static uint32_t last_usb_discard_debug_us = 0;
 static uint32_t last_hid_output_debug_us = 0;
@@ -282,12 +287,22 @@ static void audio_debug_log_impl(
 #endif
 static void copy_routed_state_data(uint8_t *destination);
 
+static constexpr uint32_t CPU_DEBUG_INTERVAL_US = 1000000;
+
 static bool host_raw_pcm_return_requested() {
     return host_runtime.requested;
 }
 
 static bool host_raw_pcm_return_active() {
     return host_raw_pcm_return_requested() && usb_line_streaming_active();
+}
+
+static bool host_usb_pcm_return_active() {
+    return host_raw_pcm_return_requested() && host_pcm_iso_mounted();
+}
+
+static bool host_pcm_return_active() {
+    return host_raw_pcm_return_active() || host_usb_pcm_return_active();
 }
 
 static bool host_mic_path_active() {
@@ -398,6 +413,77 @@ static bool time_reached(uint32_t now, uint32_t target) {
 
 static uint8_t clamp_debug_u8(uint32_t value) {
     return value > 255 ? 255 : static_cast<uint8_t>(value);
+}
+
+static uint8_t percent_debug_u8(uint32_t part, uint32_t total) {
+    if (total == 0) {
+        return 0;
+    }
+    const uint32_t percent = static_cast<uint32_t>(
+        (static_cast<uint64_t>(part) * 100u + (total / 2u)) / total
+    );
+    return percent > 100 ? 100 : static_cast<uint8_t>(percent);
+}
+
+static uint8_t us_to_100us_debug_u8(uint32_t us) {
+    return clamp_debug_u8((us + 50u) / 100u);
+}
+
+static bool mic_debug_should_log(uint8_t type, uint32_t min_interval_us) {
+#if DS5_AUDIO_DEBUG_ENABLED
+    static uint32_t last_log_us[16]{};
+    const uint8_t index = type < count_of(last_log_us) ? type : static_cast<uint8_t>(count_of(last_log_us) - 1);
+    const uint32_t now = time_us_32();
+    if (last_log_us[index] == 0 || static_cast<uint32_t>(now - last_log_us[index]) >= min_interval_us) {
+        last_log_us[index] = now;
+        return true;
+    }
+#else
+    (void)type;
+    (void)min_interval_us;
+#endif
+    return false;
+}
+
+static void audio_loop_note_start(uint32_t now) {
+    if (audio_loop_last_start_us != 0) {
+        const uint32_t gap_us = static_cast<uint32_t>(now - audio_loop_last_start_us);
+        if (gap_us > audio_loop_gap_max_us) {
+            audio_loop_gap_max_us = gap_us;
+        }
+    }
+    audio_loop_last_start_us = now;
+}
+
+static void audio_loop_note_finish(uint32_t start_us) {
+    const uint32_t runtime_us = static_cast<uint32_t>(time_us_32() - start_us);
+    if (runtime_us > audio_loop_runtime_max_us) {
+        audio_loop_runtime_max_us = runtime_us;
+    }
+}
+
+struct AudioLoopTelemetryScope {
+    explicit AudioLoopTelemetryScope(uint32_t now) : start_us(now) {
+        audio_loop_note_start(now);
+    }
+
+    ~AudioLoopTelemetryScope() {
+        audio_loop_note_finish(start_us);
+    }
+
+    uint32_t start_us;
+};
+
+static uint32_t take_audio_loop_runtime_max_us() {
+    const uint32_t value = audio_loop_runtime_max_us;
+    audio_loop_runtime_max_us = 0;
+    return value;
+}
+
+static uint32_t take_audio_loop_gap_max_us() {
+    const uint32_t value = audio_loop_gap_max_us;
+    audio_loop_gap_max_us = 0;
+    return value;
 }
 
 static void copy_routed_state_data(uint8_t *destination) {
@@ -1257,6 +1343,7 @@ void audio_host_start_stream() {
     reset_controller_audio_report_counters();
     host_frames_received = 0;
     host_frames_dropped = 0;
+    host_pcm_iso_reset_stream();
     host_startup_drop_frames_remaining = HOST_STARTUP_DROP_FRAMES;
     audio_debug_reset_stats();
     bt_reset_output_debug_stats();
@@ -1276,6 +1363,7 @@ void audio_host_stop_stream(AudioFallbackReason reason) {
     host_runtime.stream_active = false;
     host_runtime.request_started_us = 0;
     host_runtime.last_frame_us = 0;
+    host_pcm_iso_reset_stream();
     clear_host_reassembly();
     enter_fallback(reason);
 }
@@ -1896,7 +1984,9 @@ static bool process_usb_audio_raw_pcm_return_packet() {
         audio_haptic_buf_pos = 0;
     }
 
-    if (host_raw_pcm_return_active()) {
+    if (host_usb_pcm_return_active()) {
+        (void)host_pcm_iso_write(line, static_cast<uint16_t>(frames), now);
+    } else if (host_raw_pcm_return_active()) {
         const uint16_t line_bytes = static_cast<uint16_t>(frames * HOST_RAW_PCM_RETURN_CHANNELS * sizeof(int16_t));
         tu_fifo_t *ep_in_fifo = tud_audio_n_get_ep_in_ff(HOST_RAW_PCM_AUDIO_FUNC_ID);
         if (ep_in_fifo != nullptr && tu_fifo_remaining(ep_in_fifo) < line_bytes) {
@@ -2029,7 +2119,7 @@ static void process_mic_usb_output() {
         mic_usb_playout_started = true;
     }
 
-    const uint8_t max_chunks = host_raw_pcm_return_active()
+    const uint8_t max_chunks = host_pcm_return_active()
         ? HOST_MIC_USB_FILL_MAX_CHUNKS_WITH_RAW_PCM
         : HOST_MIC_USB_FILL_MAX_CHUNKS;
     uint8_t chunks_written = 0;
@@ -2138,14 +2228,16 @@ void audio_mic_add_packet(uint8_t const *data, uint16_t len) {
     }
     if (queue_try_add(&mic_fifo, &packet)) {
         mic_packets_received++;
-        audio_debug_log(
-            AudioDebugMicPacket,
-            2,
-            clamp_debug_u8(mic_packets_received),
-            clamp_debug_u8(queue_get_level(&mic_fifo)),
-            0,
-            0
-        );
+        if (mic_packets_received <= 8 || mic_debug_should_log(2, 250000)) {
+            audio_debug_log(
+                AudioDebugMicPacket,
+                2,
+                clamp_debug_u8(mic_packets_received),
+                clamp_debug_u8(queue_get_level(&mic_fifo)),
+                0,
+                0
+            );
+        }
     } else {
         mic_packets_dropped++;
         audio_debug_log(AudioDebugMicPacket, 5, clamp_debug_u8(queue_get_level(&mic_fifo)), clamp_debug_u8(mic_packets_dropped), 0, 0);
@@ -2157,6 +2249,7 @@ void audio_mic_add_packet(uint8_t const *data, uint16_t len) {
 
 void audio_loop() {
     const uint32_t now = time_us_32();
+    AudioLoopTelemetryScope loop_telemetry(now);
     audio_host_poll();
 
     if (!bt_is_controller_connected()) {
@@ -2272,14 +2365,16 @@ static bool queue_mic_decoded_samples(int16_t const *decoded_mono, int decoded_s
     if (queue_is_full(&mic_decode_fifo)) {
         queue_try_remove(&mic_decode_fifo, NULL);
         mic_packets_dropped++;
-        audio_debug_log(
-            AudioDebugMicPacket,
-            7,
-            clamp_debug_u8(queue_get_level(&mic_decode_fifo)),
-            clamp_debug_u8(mic_packets_dropped),
-            0,
-            0
-        );
+        if (mic_debug_should_log(7, 250000)) {
+            audio_debug_log(
+                AudioDebugMicPacket,
+                7,
+                clamp_debug_u8(queue_get_level(&mic_decode_fifo)),
+                clamp_debug_u8(mic_packets_dropped),
+                0,
+                0
+            );
+        }
     }
     if (!queue_try_add(&mic_decode_fifo, &decoded)) {
         mic_packets_dropped++;
@@ -2466,12 +2561,46 @@ static void core1_entry() {
         mic_decoder = nullptr;
     }
 
+    uint32_t cpu_window_start_us = time_us_32();
+    uint32_t core1_sleep_us = 0;
+    uint32_t core1_speaker_us = 0;
+    uint32_t core1_mic_us = 0;
+
     while (true) {
+        const uint32_t speaker_start_us = time_us_32();
         const bool did_speaker = core1_process_speaker();
+        const uint32_t mic_start_us = time_us_32();
         const bool did_mic = core1_process_mic_burst();
         const bool did_mic_plc = core1_process_mic_plc();
+        const uint32_t work_end_us = time_us_32();
+        if (did_speaker) {
+            core1_speaker_us += static_cast<uint32_t>(mic_start_us - speaker_start_us);
+        }
+        if (did_mic || did_mic_plc) {
+            core1_mic_us += static_cast<uint32_t>(work_end_us - mic_start_us);
+        }
         if (!did_speaker && !did_mic && !did_mic_plc) {
+            const uint32_t sleep_start_us = time_us_32();
             sleep_us(250);
+            core1_sleep_us += static_cast<uint32_t>(time_us_32() - sleep_start_us);
+        }
+
+        const uint32_t now_us = time_us_32();
+        const uint32_t window_us = static_cast<uint32_t>(now_us - cpu_window_start_us);
+        if (window_us >= CPU_DEBUG_INTERVAL_US) {
+            const uint32_t busy_us = window_us > core1_sleep_us ? window_us - core1_sleep_us : 0;
+            audio_debug_log(
+                AudioDebugCpuLoad,
+                percent_debug_u8(busy_us, window_us),
+                percent_debug_u8(core1_speaker_us, window_us),
+                percent_debug_u8(core1_mic_us, window_us),
+                us_to_100us_debug_u8(take_audio_loop_runtime_max_us()),
+                us_to_100us_debug_u8(take_audio_loop_gap_max_us())
+            );
+            cpu_window_start_us = now_us;
+            core1_sleep_us = 0;
+            core1_speaker_us = 0;
+            core1_mic_us = 0;
         }
     }
 }

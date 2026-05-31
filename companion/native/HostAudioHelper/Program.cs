@@ -38,7 +38,8 @@ static class AudioConstants
     public const byte FastFrameFragmentType = 0x08;
     public const int FastPayloadBytes = 57;
     public const int HidReportBytes = 64;
-    public const int HidWriteTimeoutMilliseconds = 4;
+    public const int HidWriteTimeoutMilliseconds = 12;
+    public const int HidTimeoutLogIntervalMilliseconds = 1000;
     public const int CaptureCallbackGapWarningUs = 20000;
     public const int CaptureCallbackGapSoftWarningUs = 12000;
     public const int CaptureCallbackGapMediumWarningUs = 16000;
@@ -54,7 +55,9 @@ static class AudioConstants
     public const int WriterTakeTimeoutMilliseconds = 2;
     public const int RawPcmCaptureBufferMilliseconds = 10;
     public const int MaxQueuedPcmChunks = 32;
-    public static readonly bool DiagnosticsEnabled = false;
+    public const int BulkPcmMaxGapFillPackets = 6;
+    public static readonly bool DiagnosticsEnabled =
+        Environment.GetEnvironmentVariable("DS5_BRIDGE_HOST_AUDIO_DIAGNOSTICS") == "1";
     public const int MicKeepaliveBufferMilliseconds = 10;
     public const float SpeakerGainRampStepPermille = 1000f / (TargetSampleRate * 0.02f);
     public static readonly long FrameIntervalTicks = Stopwatch.Frequency * PicoInputBlockFrames / TargetSampleRate;
@@ -128,7 +131,9 @@ sealed class HostAudioHelper : IDisposable
     private AudioClient? directCaptureAudioClient;
     private AudioCaptureClient? directCaptureClient;
     private EventWaitHandle? directCaptureEvent;
+    private WinUsbPcmTransport? bulkPcmTransport;
     private Task? directCaptureTask;
+    private Task? bulkPcmTask;
     private Task? pcmEncoderTask;
     private HidStream? hidStream;
     private int picoBlockFrameIndex;
@@ -163,6 +168,8 @@ sealed class HostAudioHelper : IDisposable
     private long hidWriteOver4msEvents;
     private long hidWriteLateEvents;
     private long hidWriteLateMaxUs;
+    private long hidWriteTimeouts;
+    private long lastHidTimeoutLogTicks;
     private long lastHelperEventLogTicks;
     private ushort frameSequence;
     private int peakSamplePermille;
@@ -170,6 +177,14 @@ sealed class HostAudioHelper : IDisposable
     private long micCallbacks;
     private long micCapturedFrames;
     private int micPeakPermille;
+    private bool bulkPcmSequenceValid;
+    private ushort bulkPcmExpectedSequence;
+    private byte[]? bulkPcmLastPayload;
+    private long bulkPcmSequenceGaps;
+    private long bulkPcmGapFillPackets;
+    private long bulkPcmReadCalls;
+    private long bulkPcmReadBytes;
+    private long bulkPcmParsedPackets;
     private int targetSpeakerGainPermille;
     private float currentSpeakerGainPermille;
     private bool timerResolutionRaised;
@@ -244,6 +259,7 @@ sealed class HostAudioHelper : IDisposable
         try
         {
             directCaptureTask?.Wait(TimeSpan.FromSeconds(1));
+            bulkPcmTask?.Wait(TimeSpan.FromSeconds(1));
             pcmEncoderTask?.Wait(TimeSpan.FromSeconds(1));
         }
         catch (AggregateException)
@@ -257,6 +273,7 @@ sealed class HostAudioHelper : IDisposable
         hidStream?.Dispose();
         frameDump?.Dispose();
         rawCaptureDump?.Dispose();
+        bulkPcmTransport?.Dispose();
         enumerator?.Dispose();
         reportQueue.CompleteAdding();
         try
@@ -285,6 +302,13 @@ sealed class HostAudioHelper : IDisposable
         string deviceName = options.DeviceName ?? options.SourceArgument;
         try
         {
+            if (options.Source == HostAudioSource.UsbBulkPcm)
+            {
+                StartBulkPcmCapture();
+                Console.Error.WriteLine("status: recording-started");
+                return;
+            }
+
             var device = options.Source == HostAudioSource.RawPcmCapture
                 ? EndpointManager.SelectRawPcmCaptureEndpoint(enumerator, options.DeviceName)
                 : EndpointManager.SelectRenderEndpoint(enumerator, options.DeviceName);
@@ -312,6 +336,13 @@ sealed class HostAudioHelper : IDisposable
         }
         catch (COMException error) when (WriteWasapiStartFailure(error, deviceName))
         {
+            stopped.Set();
+            return;
+        }
+        catch (BulkPcmUnavailableException error)
+        {
+            Console.Error.WriteLine(
+                $"status: capture-unavailable reason=bulk-pcm-unavailable error='{EscapeStatusValue(error.Message)}'");
             stopped.Set();
             return;
         }
@@ -430,6 +461,128 @@ sealed class HostAudioHelper : IDisposable
         pcmEncoderTask = Task.Run(ProcessQueuedPcm);
         directCaptureTask = Task.Run(() => RunDirectRawPcmCapture(format));
         directCaptureAudioClient.Start();
+    }
+
+    private void StartBulkPcmCapture()
+    {
+        var format = new WaveFormat(
+            WinUsbPcmTransport.SampleRate,
+            WinUsbPcmTransport.BytesPerSample * 8,
+            WinUsbPcmTransport.Channels);
+        bulkPcmTransport = WinUsbPcmTransport.Open();
+        Console.Error.WriteLine(
+            $"status: host-capture-format source={options.SourceArgument} device='{WinUsbPcmTransport.FriendlyName}' sampleRate={format.SampleRate} channels={format.Channels} bits={format.BitsPerSample} encoding={format.Encoding} transport={bulkPcmTransport.TransportName} {bulkPcmTransport.TransportDetails}");
+        StartRawCaptureDump(format);
+
+        pcmEncoderTask = Task.Run(ProcessQueuedPcm);
+        bulkPcmTask = Task.Run(() => RunBulkPcmCapture(format));
+    }
+
+    private void RunBulkPcmCapture(WaveFormat format)
+    {
+        try
+        {
+            TrySetThreadPriority(ThreadPriority.Highest);
+            using var mmcss = MmcssRegistration.TryRegister("Pro Audio", "capture");
+            var transport = bulkPcmTransport ?? throw new InvalidOperationException("Bulk PCM transport was not initialized.");
+            var parser = new BulkPcmFrameParser();
+            var readBuffer = new byte[WinUsbPcmTransport.ReadBufferBytes];
+            while (!stopped.IsSet)
+            {
+                List<BulkPcmFrame> receivedFrames;
+                var bytesRead = 0;
+                if (transport.IsIsochronous)
+                {
+                    receivedFrames = transport.ReadIsoFrames();
+                    foreach (var frame in receivedFrames)
+                    {
+                        bytesRead += frame.Payload.Length;
+                    }
+                }
+                else
+                {
+                    bytesRead = transport.Read(readBuffer);
+                    if (bytesRead <= 0)
+                    {
+                        continue;
+                    }
+                    receivedFrames = parser.Push(readBuffer, bytesRead);
+                }
+                if (receivedFrames.Count == 0)
+                {
+                    continue;
+                }
+
+                Interlocked.Increment(ref bulkPcmReadCalls);
+                Interlocked.Add(ref bulkPcmReadBytes, bytesRead);
+
+                var packets = 0;
+                var frames = 0;
+                var bytes = 0;
+                foreach (var frame in receivedFrames)
+                {
+                    var insertedPackets = EnqueueBulkPcmFrame(frame, format);
+                    packets += 1 + insertedPackets;
+                    frames += frame.Frames * (1 + insertedPackets);
+                    bytes += frame.Payload.Length * (1 + insertedPackets);
+                }
+                NoteCaptureWake(packets, frames, bytes);
+            }
+        }
+        catch (Exception error) when (stopped.IsSet && (error is ObjectDisposedException || error is IOException))
+        {
+        }
+        catch (Exception error)
+        {
+            Console.Error.WriteLine($"error: bulk PCM capture stopped: {error.GetType().Name}: {error.Message}");
+            stopped.Set();
+        }
+    }
+
+    private int EnqueueBulkPcmFrame(BulkPcmFrame frame, WaveFormat format)
+    {
+        var insertedPackets = 0;
+        if (bulkPcmSequenceValid && frame.Sequence != bulkPcmExpectedSequence)
+        {
+            var missingPackets = unchecked((ushort)(frame.Sequence - bulkPcmExpectedSequence));
+            Interlocked.Increment(ref bulkPcmSequenceGaps);
+            Interlocked.Increment(ref captureDiscontinuityPackets);
+            LogHelperEvent("bulk-pcm-gap", $"expected={bulkPcmExpectedSequence} actual={frame.Sequence} missing={missingPackets}");
+            if (missingPackets <= AudioConstants.BulkPcmMaxGapFillPackets)
+            {
+                var fillPayload = new byte[frame.Payload.Length];
+                for (var index = 0; index < missingPackets; index++)
+                {
+                    EnqueuePcmChunk(new PcmCaptureChunk(
+                        ClonePayload(fillPayload, frame.Payload.Length),
+                        frame.Payload.Length,
+                        format,
+                        frame.Frames,
+                        AudioClientBufferFlags.Silent));
+                    insertedPackets++;
+                }
+                Interlocked.Add(ref bulkPcmGapFillPackets, insertedPackets);
+            }
+        }
+
+        bulkPcmSequenceValid = true;
+        bulkPcmExpectedSequence = unchecked((ushort)(frame.Sequence + 1));
+        bulkPcmLastPayload = ClonePayload(frame.Payload, frame.Payload.Length);
+        Interlocked.Increment(ref bulkPcmParsedPackets);
+        EnqueuePcmChunk(new PcmCaptureChunk(
+            frame.Payload,
+            frame.Payload.Length,
+            format,
+            frame.Frames,
+            AudioClientBufferFlags.None));
+        return insertedPackets;
+    }
+
+    private static byte[] ClonePayload(byte[] payload, int byteCount)
+    {
+        var clone = new byte[byteCount];
+        Buffer.BlockCopy(payload, 0, clone, 0, Math.Min(payload.Length, byteCount));
+        return clone;
     }
 
     private void RunDirectRawPcmCapture(WaveFormat format)
@@ -968,7 +1121,7 @@ sealed class HostAudioHelper : IDisposable
                 AudioConstants.SpeakerGainRampStepPermille
             );
             var speakerGain = currentGainPermille / 1000f;
-            var sourcePosition = frame * ratio;
+            var sourcePosition = (frame + 0.5) * ratio - 0.5;
             var sourceIndex = Math.Clamp((int)Math.Floor(sourcePosition), 0, AudioConstants.PicoInputBlockFrames - 1);
             var nextIndex = Math.Min(sourceIndex + 1, AudioConstants.PicoInputBlockFrames - 1);
             var fraction = Math.Clamp(sourcePosition - sourceIndex, 0, 1);
@@ -1158,16 +1311,20 @@ sealed class HostAudioHelper : IDisposable
                     }
                 }
 
+                var frameWritten = false;
                 if (hidStream is not null)
                 {
-                    if (!TryWriteFrameToHid(frame))
-                    {
-                        continue;
-                    }
+                    frameWritten = TryWriteFrameToHid(frame);
                 }
                 else
                 {
                     HostPacketizer.WriteStdoutFrame(stdout, writePrefix, frame);
+                    frameWritten = true;
+                }
+                if (!frameWritten)
+                {
+                    nextWriteTicks += AudioConstants.FrameIntervalTicks;
+                    continue;
                 }
                 if (AudioConstants.DiagnosticsEnabled)
                 {
@@ -1258,12 +1415,35 @@ sealed class HostAudioHelper : IDisposable
             }
             return true;
         }
+        catch (TimeoutException error)
+        {
+            NoteHidWriteTimeout(error);
+            return false;
+        }
         catch (Exception error)
         {
             Console.Error.WriteLine($"status: companion HID direct output failed: {error.GetType().Name}: {error.Message}; using stdout frame transport");
             DisableHidTransport();
             return false;
         }
+    }
+
+    private void NoteHidWriteTimeout(TimeoutException error)
+    {
+        var timeoutCount = Interlocked.Increment(ref hidWriteTimeouts);
+        Interlocked.Increment(ref hidWriteLateEvents);
+        UpdateMax(ref hidWriteLateMaxUs, AudioConstants.HidWriteTimeoutMilliseconds * 1000L);
+
+        var nowTicks = Stopwatch.GetTimestamp();
+        var previousTicks = Interlocked.Read(ref lastHidTimeoutLogTicks);
+        var minIntervalTicks = Stopwatch.Frequency * AudioConstants.HidTimeoutLogIntervalMilliseconds / 1000;
+        if (previousTicks != 0 && nowTicks - previousTicks < minIntervalTicks)
+        {
+            return;
+        }
+
+        Interlocked.Exchange(ref lastHidTimeoutLogTicks, nowTicks);
+        Console.Error.WriteLine($"status: companion HID direct output timeout count={timeoutCount}: {error.Message}; dropped frame and kept direct HID transport");
     }
 
     private static void RaiseSchedulingPriority()
@@ -1369,7 +1549,7 @@ sealed class HostAudioHelper : IDisposable
             var writerState = writerTask.IsFaulted ? "faulted" : writerTask.IsCompleted ? "stopped" : "running";
             var encoderState = pcmEncoderTask is null ? "inline" : pcmEncoderTask.IsFaulted ? "faulted" : pcmEncoderTask.IsCompleted ? "stopped" : "running";
             Console.Error.WriteLine(
-                $"stage=helper transport={(hidStream is null ? "stdout" : "hid")} writer={writerState} encoder={encoderState} callbacks={Interlocked.Read(ref capturedCallbacks)} capturedFrames={Interlocked.Read(ref capturedFrames)} encodedReports={Interlocked.Read(ref encodedReports)} queuedReports={reportQueue.Count} droppedReports={Interlocked.Read(ref droppedReports)} writtenReports={Interlocked.Read(ref writtenReports)} writtenFragments={Interlocked.Read(ref writtenFragments)} writeLateEvents={Interlocked.Read(ref writeLateEvents)} maxWriteLateUs={Interlocked.Read(ref maxWriteLateUs)} captureGapMaxUs={Interlocked.Read(ref captureCallbackGapMaxUs)} captureGapOver12ms={Interlocked.Read(ref captureCallbackGapOver12msEvents)} captureGapOver16ms={Interlocked.Read(ref captureCallbackGapOver16msEvents)} captureGapOver20ms={Interlocked.Read(ref captureCallbackGapEvents)} captureWakeCount={Interlocked.Read(ref captureWakeCount)} capturePacketsDrained={Interlocked.Read(ref capturePacketsDrained)} captureMaxPacketsPerWake={Interlocked.Read(ref captureMaxPacketsPerWake)} captureFramesDrained={Interlocked.Read(ref captureFramesDrained)} captureDiscontinuityPackets={Interlocked.Read(ref captureDiscontinuityPackets)} captureSilentPackets={Interlocked.Read(ref captureSilentPackets)} pcmQueuedChunks={Interlocked.Read(ref pcmQueuedChunks)} pcmDroppedChunks={Interlocked.Read(ref pcmDroppedChunks)} pcmQueueMaxChunks={Interlocked.Read(ref pcmQueueMaxChunks)} pcmQueueCurrentChunks={pcmQueue.Count} writerScheduleLateOver2ms={Interlocked.Read(ref writerScheduleLateOver2msEvents)} writerScheduleLateOver4ms={Interlocked.Read(ref writerScheduleLateOver4msEvents)} writerScheduleLateOver8ms={Interlocked.Read(ref writerScheduleLateEvents)} writerScheduleLateMaxUs={Interlocked.Read(ref writerScheduleLateMaxUs)} hidWriteOver2ms={Interlocked.Read(ref hidWriteOver2msEvents)} hidWriteOver4ms={Interlocked.Read(ref hidWriteOver4msEvents)} hidWriteOver8ms={Interlocked.Read(ref hidWriteLateEvents)} hidWriteMaxUs={Interlocked.Read(ref hidWriteLateMaxUs)} peakPermille={peak} micCallbacks={Interlocked.Read(ref micCallbacks)} micCapturedFrames={Interlocked.Read(ref micCapturedFrames)} micPeakPermille={micPeak}");
+                $"stage=helper transport={(hidStream is null ? "stdout" : "hid")} writer={writerState} encoder={encoderState} callbacks={Interlocked.Read(ref capturedCallbacks)} capturedFrames={Interlocked.Read(ref capturedFrames)} encodedReports={Interlocked.Read(ref encodedReports)} queuedReports={reportQueue.Count} droppedReports={Interlocked.Read(ref droppedReports)} writtenReports={Interlocked.Read(ref writtenReports)} writtenFragments={Interlocked.Read(ref writtenFragments)} writeLateEvents={Interlocked.Read(ref writeLateEvents)} maxWriteLateUs={Interlocked.Read(ref maxWriteLateUs)} captureGapMaxUs={Interlocked.Read(ref captureCallbackGapMaxUs)} captureGapOver12ms={Interlocked.Read(ref captureCallbackGapOver12msEvents)} captureGapOver16ms={Interlocked.Read(ref captureCallbackGapOver16msEvents)} captureGapOver20ms={Interlocked.Read(ref captureCallbackGapEvents)} captureWakeCount={Interlocked.Read(ref captureWakeCount)} capturePacketsDrained={Interlocked.Read(ref capturePacketsDrained)} captureMaxPacketsPerWake={Interlocked.Read(ref captureMaxPacketsPerWake)} captureFramesDrained={Interlocked.Read(ref captureFramesDrained)} captureDiscontinuityPackets={Interlocked.Read(ref captureDiscontinuityPackets)} captureSilentPackets={Interlocked.Read(ref captureSilentPackets)} bulkReadCalls={Interlocked.Read(ref bulkPcmReadCalls)} bulkReadBytes={Interlocked.Read(ref bulkPcmReadBytes)} bulkParsedPackets={Interlocked.Read(ref bulkPcmParsedPackets)} bulkSequenceGaps={Interlocked.Read(ref bulkPcmSequenceGaps)} bulkGapFillPackets={Interlocked.Read(ref bulkPcmGapFillPackets)} pcmQueuedChunks={Interlocked.Read(ref pcmQueuedChunks)} pcmDroppedChunks={Interlocked.Read(ref pcmDroppedChunks)} pcmQueueMaxChunks={Interlocked.Read(ref pcmQueueMaxChunks)} pcmQueueCurrentChunks={pcmQueue.Count} writerScheduleLateOver2ms={Interlocked.Read(ref writerScheduleLateOver2msEvents)} writerScheduleLateOver4ms={Interlocked.Read(ref writerScheduleLateOver4msEvents)} writerScheduleLateOver8ms={Interlocked.Read(ref writerScheduleLateEvents)} writerScheduleLateMaxUs={Interlocked.Read(ref writerScheduleLateMaxUs)} hidWriteOver2ms={Interlocked.Read(ref hidWriteOver2msEvents)} hidWriteOver4ms={Interlocked.Read(ref hidWriteOver4msEvents)} hidWriteOver8ms={Interlocked.Read(ref hidWriteLateEvents)} hidWriteTimeouts={Interlocked.Read(ref hidWriteTimeouts)} hidWriteMaxUs={Interlocked.Read(ref hidWriteLateMaxUs)} peakPermille={peak} micCallbacks={Interlocked.Read(ref micCallbacks)} micCapturedFrames={Interlocked.Read(ref micCapturedFrames)} micPeakPermille={micPeak}");
         }
     }
 
@@ -1449,7 +1629,7 @@ sealed class MmcssRegistration : IDisposable
     }
 }
 
-static class NativeMethods
+static partial class NativeMethods
 {
     [DllImport("avrt.dll", CharSet = CharSet.Unicode, SetLastError = true)]
     public static extern IntPtr AvSetMmThreadCharacteristics(string taskName, out int taskIndex);
@@ -1557,7 +1737,8 @@ sealed class FrameDumpWriter : IDisposable
 enum HostAudioSource
 {
     RenderLoopback,
-    RawPcmCapture
+    RawPcmCapture,
+    UsbBulkPcm
 }
 
 sealed record HelperOptions(
@@ -1576,7 +1757,12 @@ sealed record HelperOptions(
     int RawCaptureDumpSeconds,
     bool CaptureDumpOnly)
 {
-    public string SourceArgument => Source == HostAudioSource.RawPcmCapture ? "raw-pcm-capture" : "render-loopback";
+    public string SourceArgument => Source switch
+    {
+        HostAudioSource.RawPcmCapture => "raw-pcm-capture",
+        HostAudioSource.UsbBulkPcm => "usb-pcm",
+        _ => "render-loopback"
+    };
 
     public static HelperOptions Parse(string[] args)
     {
@@ -1671,9 +1857,18 @@ sealed record HelperOptions(
 
     private static HostAudioSource ParseSource(string value)
     {
-        return value.Equals("raw-pcm-capture", StringComparison.OrdinalIgnoreCase)
-            ? HostAudioSource.RawPcmCapture
-            : HostAudioSource.RenderLoopback;
+        if (value.Equals("raw-pcm-capture", StringComparison.OrdinalIgnoreCase))
+        {
+            return HostAudioSource.RawPcmCapture;
+        }
+        if (
+            value.Equals("usb-pcm", StringComparison.OrdinalIgnoreCase)
+            || value.Equals("usb-bulk-pcm", StringComparison.OrdinalIgnoreCase)
+        )
+        {
+            return HostAudioSource.UsbBulkPcm;
+        }
+        return HostAudioSource.RenderLoopback;
     }
 
     private static int ParseFrameDumpLimit(string? value)

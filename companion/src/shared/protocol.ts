@@ -47,7 +47,8 @@ export const AUDIO_DEBUG_EVENT = {
   MIC_PACKET: 19,
   USB_EVENT: 20,
   HID_EVENT: 21,
-  BT_EVENT: 22
+  BT_EVENT: 22,
+  CPU_LOAD: 23
 } as const;
 
 export const AUDIO_DEBUG_RECORD_SIZE = 14;
