@@ -4,7 +4,7 @@ export const REPORT_LENGTH = 64;
 export const PAYLOAD_LENGTH = 63;
 export const MAGIC = 'DS5B';
 export const PROTOCOL_MAJOR = 1;
-export const PROTOCOL_MINOR = 3;
+export const PROTOCOL_MINOR = 5;
 
 export const REPORT_ID = {
   STATUS: 0x01,
@@ -84,7 +84,9 @@ export const COMMAND_ID = {
   SET_MIC_MUTE: 0x1B,
   SET_IDLE_DISCONNECT_TIMEOUT: 0x1C,
   SET_SPEAKER_VOLUME_SHORTCUT_ENABLED: 0x1D,
-  SET_BUTTON_REMAP: 0x1E
+  SET_BUTTON_REMAP: 0x1E,
+  PREVIEW_ADAPTIVE_TRIGGER_EFFECT: 0x1F,
+  APPLY_ADAPTIVE_TRIGGER_EFFECT: 0x20
 } as const;
 
 export const HOST_AUDIO_PACKET_TYPE = {
@@ -122,6 +124,13 @@ export type MuteButtonMode = 'normal' | 'keyboard' | 'quiet';
 export type MuteKeyboardBehavior = 'tap' | 'hold';
 export type TriggerTestMode = 'feedback' | 'weapon' | 'vibration';
 export type TriggerTestTarget = 'both' | 'l2' | 'r2';
+export interface AdaptiveTriggerPreviewEffect {
+  mode: TriggerTestMode;
+  target: TriggerTestTarget;
+  startPercent: number;
+  wallPercent: number;
+  forcePercent: number;
+}
 export type PollingRateMode = '250' | '500' | '1000';
 export type HostAudioMode = 'fallback-pico-local' | 'host-encoded-active';
 export type HostAudioFallbackReason =

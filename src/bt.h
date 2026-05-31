@@ -57,6 +57,25 @@ void bt_set_classic_rumble_gain(uint16_t gain_percent);
 uint16_t bt_classic_rumble_gain();
 void bt_set_classic_rumble_output(uint8_t right, uint8_t left);
 void bt_set_adaptive_trigger_effect(uint8_t mode, uint8_t intensity_percent, uint8_t target = 0);
+void bt_set_custom_adaptive_trigger_effect(
+    uint8_t mode,
+    uint8_t start_percent,
+    uint8_t wall_percent,
+    uint8_t force_percent,
+    uint8_t target = 0
+);
+void bt_set_custom_adaptive_trigger_effects(
+    uint8_t right_mode,
+    uint8_t right_start_percent,
+    uint8_t right_wall_percent,
+    uint8_t right_force_percent,
+    bool right_active,
+    uint8_t left_mode,
+    uint8_t left_start_percent,
+    uint8_t left_wall_percent,
+    uint8_t left_force_percent,
+    bool left_active
+);
 void bt_replay_adaptive_trigger_effect(
     uint8_t const *right_trigger,
     bool right_valid,

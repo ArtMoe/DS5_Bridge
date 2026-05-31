@@ -1,5 +1,14 @@
 import { contextBridge, ipcRenderer } from 'electron';
-import type { BridgePresetId, MuteButtonMode, MuteKeyboardBehavior, PollingRateMode, RemapButtonId, TriggerTestMode, TriggerTestTarget } from './shared/protocol';
+import type {
+  AdaptiveTriggerPreviewEffect,
+  BridgePresetId,
+  MuteButtonMode,
+  MuteKeyboardBehavior,
+  PollingRateMode,
+  RemapButtonId,
+  TriggerTestMode,
+  TriggerTestTarget
+} from './shared/protocol';
 import type { BridgeDiagnostics, BridgeSnapshot, WindowsDeviceCleanupResult } from './shared/types';
 
 const api = {
@@ -106,6 +115,12 @@ const api = {
   testClassicRumble: (): Promise<BridgeSnapshot> => ipcRenderer.invoke('bridge:testClassicRumble'),
   testAdaptiveTriggers: (mode?: TriggerTestMode, target?: TriggerTestTarget): Promise<BridgeSnapshot> => (
     ipcRenderer.invoke('bridge:testAdaptiveTriggers', mode, target)
+  ),
+  previewAdaptiveTriggerEffect: (effect: AdaptiveTriggerPreviewEffect): Promise<BridgeSnapshot> => (
+    ipcRenderer.invoke('bridge:previewAdaptiveTriggerEffect', effect)
+  ),
+  applyAdaptiveTriggerEffect: (effect: AdaptiveTriggerPreviewEffect): Promise<BridgeSnapshot> => (
+    ipcRenderer.invoke('bridge:applyAdaptiveTriggerEffect', effect)
   ),
   resetAdaptiveTriggers: (): Promise<BridgeSnapshot> => ipcRenderer.invoke('bridge:resetAdaptiveTriggers'),
   restoreDefaults: (): Promise<BridgeSnapshot> => ipcRenderer.invoke('bridge:restoreDefaults'),

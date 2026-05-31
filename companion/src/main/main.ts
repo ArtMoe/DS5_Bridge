@@ -5,7 +5,16 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { BridgeService } from './bridge-service';
 import { SettingsStore } from './settings-store';
-import type { BridgePresetId, MuteButtonMode, MuteKeyboardBehavior, PollingRateMode, RemapButtonId, TriggerTestMode, TriggerTestTarget } from '../shared/protocol';
+import type {
+  AdaptiveTriggerPreviewEffect,
+  BridgePresetId,
+  MuteButtonMode,
+  MuteKeyboardBehavior,
+  PollingRateMode,
+  RemapButtonId,
+  TriggerTestMode,
+  TriggerTestTarget
+} from '../shared/protocol';
 import type { BridgeToast } from './bridge-service';
 import type { UiScalePercent } from '../shared/types';
 
@@ -591,6 +600,12 @@ function registerIpc(service: BridgeService): void {
   ipcMain.handle('bridge:testClassicRumble', () => service.testClassicRumble());
   ipcMain.handle('bridge:testAdaptiveTriggers', (_event, value?: TriggerTestMode, target?: TriggerTestTarget) => (
     service.testAdaptiveTriggers(value, target)
+  ));
+  ipcMain.handle('bridge:previewAdaptiveTriggerEffect', (_event, effect: AdaptiveTriggerPreviewEffect) => (
+    service.previewAdaptiveTriggerEffect(effect)
+  ));
+  ipcMain.handle('bridge:applyAdaptiveTriggerEffect', (_event, effect: AdaptiveTriggerPreviewEffect) => (
+    service.applyAdaptiveTriggerEffect(effect)
   ));
   ipcMain.handle('bridge:resetAdaptiveTriggers', () => service.resetAdaptiveTriggers());
   ipcMain.handle('bridge:restoreDefaults', async () => {

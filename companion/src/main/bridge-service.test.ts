@@ -1352,6 +1352,50 @@ describe('BridgeService', () => {
     expect(device.sentReports.at(-1)?.[10]).toBe(0x02);
   });
 
+  it('packs adaptive trigger lab preview parameters', async () => {
+    const service = serviceFixture();
+    const device = new MockHidDevice();
+    hidMock.state.devicesList = [companionDeviceInfo()];
+    hidMock.state.openDevices.set('companion-path', device);
+
+    await service.previewAdaptiveTriggerEffect({
+      mode: 'weapon',
+      target: 'both',
+      startPercent: 18,
+      wallPercent: 62,
+      forcePercent: 85
+    });
+
+    expect(device.sentReports.at(-1)?.[7]).toBe(COMMAND_ID.PREVIEW_ADAPTIVE_TRIGGER_EFFECT);
+    expect(device.sentReports.at(-1)?.[9]).toBe(0x01);
+    expect(device.sentReports.at(-1)?.[10]).toBe(0x00);
+    expect(device.sentReports.at(-1)?.[11]).toBe(18);
+    expect(device.sentReports.at(-1)?.[12]).toBe(62);
+    expect(device.sentReports.at(-1)?.[13]).toBe(85);
+  });
+
+  it('packs persistent adaptive trigger lab parameters', async () => {
+    const service = serviceFixture();
+    const device = new MockHidDevice();
+    hidMock.state.devicesList = [companionDeviceInfo()];
+    hidMock.state.openDevices.set('companion-path', device);
+
+    await service.applyAdaptiveTriggerEffect({
+      mode: 'vibration',
+      target: 'r2',
+      startPercent: 25,
+      wallPercent: 50,
+      forcePercent: 75
+    });
+
+    expect(device.sentReports.at(-1)?.[7]).toBe(COMMAND_ID.APPLY_ADAPTIVE_TRIGGER_EFFECT);
+    expect(device.sentReports.at(-1)?.[9]).toBe(0x02);
+    expect(device.sentReports.at(-1)?.[10]).toBe(0x02);
+    expect(device.sentReports.at(-1)?.[11]).toBe(25);
+    expect(device.sentReports.at(-1)?.[12]).toBe(50);
+    expect(device.sentReports.at(-1)?.[13]).toBe(75);
+  });
+
   it('rejects accepted setting commands that do not advance settings_revision', async () => {
     const service = serviceFixture();
     const device = new MockHidDevice();

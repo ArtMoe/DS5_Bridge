@@ -3,6 +3,7 @@
 // Modified for DS5 Bridge companion firmware and app integration.
 //
 
+#include <algorithm>
 #include <cstdio>
 #include <cstring>
 
@@ -547,6 +548,17 @@ static uint8_t trigger_strength_from_percent(uint8_t intensity_percent) {
     return strength == 0 ? 1 : strength;
 }
 
+static uint8_t trigger_position_from_percent(uint8_t percent) {
+    const uint8_t clamped = percent > 100 ? 100 : percent;
+    return static_cast<uint8_t>(std::min<uint16_t>(9, (static_cast<uint16_t>(clamped) + 5) / 10));
+}
+
+static uint8_t trigger_frequency_from_percent(uint8_t percent) {
+    const uint8_t clamped = percent > 100 ? 100 : percent;
+    const uint8_t frequency = static_cast<uint8_t>((static_cast<uint16_t>(clamped) * 28 + 50) / 100);
+    return frequency == 0 ? 1 : frequency;
+}
+
 static void set_trigger_off(uint8_t *trigger) {
     memset(trigger, 0, DS_TRIGGER_EFFECT_SIZE);
     trigger[0] = DS_TRIGGER_EFFECT_OFF;
@@ -671,6 +683,86 @@ void bt_set_adaptive_trigger_effect(uint8_t mode, uint8_t intensity_percent, uin
         apply_effect(right_trigger);
     }
     bt_write(report, sizeof(report));
+}
+
+static void set_custom_trigger_effect(
+    uint8_t *trigger,
+    uint8_t mode,
+    uint8_t start_percent,
+    uint8_t wall_percent,
+    uint8_t force_percent
+) {
+    const uint8_t strength = trigger_strength_from_percent(force_percent);
+    uint8_t start_position = trigger_position_from_percent(start_percent);
+    uint8_t wall_position = trigger_position_from_percent(wall_percent);
+    const uint8_t frequency = trigger_frequency_from_percent(wall_percent);
+
+    if (strength == 0) {
+        set_trigger_off(trigger);
+    } else if (mode == 1) {
+        start_position = std::min<uint8_t>(std::max<uint8_t>(start_position, 2), 7);
+        wall_position = std::min<uint8_t>(std::max<uint8_t>(wall_position, static_cast<uint8_t>(start_position + 1)), 8);
+        set_trigger_weapon(trigger, start_position, wall_position, strength);
+    } else if (mode == 2) {
+        set_trigger_vibration(trigger, start_position, strength, frequency);
+    } else {
+        set_trigger_feedback(trigger, start_position, strength);
+    }
+}
+
+void bt_set_custom_adaptive_trigger_effects(
+    uint8_t right_mode,
+    uint8_t right_start_percent,
+    uint8_t right_wall_percent,
+    uint8_t right_force_percent,
+    bool right_active,
+    uint8_t left_mode,
+    uint8_t left_start_percent,
+    uint8_t left_wall_percent,
+    uint8_t left_force_percent,
+    bool left_active
+) {
+    if (hid_interrupt_cid == 0) {
+        return;
+    }
+
+    uint8_t report[DS_OUTPUT_REPORT_BT_SIZE];
+    init_state_report(report);
+    report[3] = 0x04 | 0x08;
+    uint8_t *right_trigger = report + 3 + DS_TRIGGER_EFFECT_RIGHT_OFFSET;
+    uint8_t *left_trigger = report + 3 + DS_TRIGGER_EFFECT_LEFT_OFFSET;
+
+    right_active
+        ? set_custom_trigger_effect(right_trigger, right_mode, right_start_percent, right_wall_percent, right_force_percent)
+        : set_trigger_off(right_trigger);
+    left_active
+        ? set_custom_trigger_effect(left_trigger, left_mode, left_start_percent, left_wall_percent, left_force_percent)
+        : set_trigger_off(left_trigger);
+
+    bt_write(report, sizeof(report));
+}
+
+void bt_set_custom_adaptive_trigger_effect(
+    uint8_t mode,
+    uint8_t start_percent,
+    uint8_t wall_percent,
+    uint8_t force_percent,
+    uint8_t target
+) {
+    const bool left_active = target == DS_TRIGGER_TARGET_LEFT || target == DS_TRIGGER_TARGET_BOTH;
+    const bool right_active = target == DS_TRIGGER_TARGET_RIGHT || target == DS_TRIGGER_TARGET_BOTH;
+    bt_set_custom_adaptive_trigger_effects(
+        mode,
+        start_percent,
+        wall_percent,
+        force_percent,
+        right_active,
+        mode,
+        start_percent,
+        wall_percent,
+        force_percent,
+        left_active
+    );
 }
 
 void bt_replay_adaptive_trigger_effect(

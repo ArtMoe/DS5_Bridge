@@ -15,7 +15,7 @@ namespace {
 
 constexpr uint8_t kMagic[] = {'D', 'S', '5', 'B'};
 constexpr uint8_t kProtocolMajor = 1;
-constexpr uint8_t kProtocolMinor = 3;
+constexpr uint8_t kProtocolMinor = 5;
 constexpr uint8_t kFirmwareMajor = 1;
 constexpr uint8_t kFirmwareMinor = 1;
 constexpr uint8_t kFirmwarePatch = 0;
@@ -60,6 +60,7 @@ constexpr uint32_t kMuteLedFlashDurationUs = 120000;
 constexpr uint32_t kClassicRumbleTestDurationUs = 650000;
 constexpr uint8_t kClassicRumbleTestAmplitude = 160;
 constexpr uint32_t kAdaptiveTriggerTestDurationUs = 2500000;
+constexpr uint32_t kPersistentTriggerReapplyIntervalUs = 500000;
 constexpr uint32_t kGameTriggerUpdateRecentUs = 2000000;
 constexpr uint16_t kMaxFeedbackGainPercent = 500;
 constexpr float kMaxHapticsGain = 5.0f;
@@ -120,6 +121,8 @@ enum CommandId : uint8_t {
     CommandSetIdleDisconnectTimeout = 0x1C,
     CommandSetSpeakerVolumeShortcut = 0x1D,
     CommandSetButtonRemap = 0x1E,
+    CommandPreviewAdaptiveTriggerEffect = 0x1F,
+    CommandApplyAdaptiveTriggerEffect = 0x20,
 };
 
 enum AckResult : uint8_t {
@@ -285,6 +288,16 @@ uint8_t adaptive_trigger_test_mode = kTriggerTestModeFeedback;
 uint8_t adaptive_trigger_test_target = kTriggerTargetBoth;
 bool adaptive_trigger_test_active = false;
 uint32_t adaptive_trigger_test_until_us = 0;
+struct PersistentTriggerEffect {
+    bool active = false;
+    uint8_t mode = kTriggerTestModeFeedback;
+    uint8_t start_percent = 0;
+    uint8_t wall_percent = 0;
+    uint8_t force_percent = 0;
+};
+PersistentTriggerEffect persistent_trigger_effect_left;
+PersistentTriggerEffect persistent_trigger_effect_right;
+uint32_t persistent_trigger_effect_last_apply_us = 0;
 uint8_t cached_game_trigger_right[kTriggerEffectSize]{};
 uint8_t cached_game_trigger_left[kTriggerEffectSize]{};
 bool cached_game_trigger_right_valid = false;
@@ -307,6 +320,8 @@ struct LastAck {
 LastAck last_ack;
 
 void clear_cached_game_trigger_effects();
+void reset_adaptive_trigger_test();
+bool persistent_trigger_effect_any_active();
 
 uint16_t read_u16(uint8_t const *data) {
     return static_cast<uint16_t>(data[0]) | (static_cast<uint16_t>(data[1]) << 8);
@@ -620,6 +635,9 @@ void restore_defaults() {
     adaptive_trigger_test_mode = kTriggerTestModeFeedback;
     adaptive_trigger_test_target = kTriggerTargetBoth;
     adaptive_trigger_test_active = false;
+    persistent_trigger_effect_left = {};
+    persistent_trigger_effect_right = {};
+    persistent_trigger_effect_last_apply_us = 0;
     clear_cached_game_trigger_effects();
     bt_reset_adaptive_triggers();
     mute_button_mode = MuteButtonNormal;
@@ -961,6 +979,10 @@ bool valid_trigger_target(uint8_t target) {
     return target <= kTriggerTargetRight;
 }
 
+bool valid_trigger_percent(uint8_t percent) {
+    return percent <= 100;
+}
+
 bool valid_button_remap_payload(uint8_t const *payload, uint16_t len) {
     if (payload == nullptr || len < RemapButtonCount) {
         return false;
@@ -987,6 +1009,143 @@ bool schedule_adaptive_trigger_test(uint8_t mode, uint8_t target) {
     bt_set_adaptive_trigger_effect(adaptive_trigger_test_mode, trigger_effect_intensity_percent, adaptive_trigger_test_target);
     adaptive_trigger_test_active = trigger_effect_intensity_percent > 0;
     adaptive_trigger_test_until_us = time_us_32() + kAdaptiveTriggerTestDurationUs;
+    return true;
+}
+
+bool schedule_custom_adaptive_trigger_test(
+    uint8_t mode,
+    uint8_t target,
+    uint8_t start_percent,
+    uint8_t wall_percent,
+    uint8_t force_percent
+) {
+    if (
+        !bt_is_controller_connected()
+        || game_trigger_update_recent()
+        || adaptive_trigger_test_active
+    ) {
+        return false;
+    }
+
+    adaptive_trigger_test_mode = mode;
+    adaptive_trigger_test_target = target;
+    bt_set_custom_adaptive_trigger_effect(mode, start_percent, wall_percent, force_percent, target);
+    adaptive_trigger_test_active = force_percent > 0;
+    adaptive_trigger_test_until_us = time_us_32() + kAdaptiveTriggerTestDurationUs;
+    return true;
+}
+
+void clear_persistent_trigger_effect() {
+    persistent_trigger_effect_left = {};
+    persistent_trigger_effect_right = {};
+    persistent_trigger_effect_last_apply_us = 0;
+}
+
+bool persistent_trigger_effect_any_active() {
+    return persistent_trigger_effect_left.active || persistent_trigger_effect_right.active;
+}
+
+bool strip_persistent_trigger_effect_fields(uint8_t *payload, uint16_t len, uint8_t trigger_flags) {
+    if (payload == nullptr || len == 0 || !persistent_trigger_effect_any_active()) {
+        return false;
+    }
+
+    bool changed = false;
+    if (persistent_trigger_effect_right.active && (trigger_flags & kTriggerRightEffectFlag) != 0) {
+        payload[0] &= static_cast<uint8_t>(~kTriggerRightEffectFlag);
+        changed = true;
+    }
+    if (persistent_trigger_effect_left.active && (trigger_flags & kTriggerLeftEffectFlag) != 0) {
+        payload[0] &= static_cast<uint8_t>(~kTriggerLeftEffectFlag);
+        changed = true;
+    }
+    if (len > 1 && (payload[1] & kTriggerMotorPowerFlag) != 0) {
+        payload[1] &= static_cast<uint8_t>(~kTriggerMotorPowerFlag);
+        changed = true;
+    }
+    return changed;
+}
+
+void set_persistent_trigger_effect_state(
+    PersistentTriggerEffect &effect,
+    uint8_t mode,
+    uint8_t start_percent,
+    uint8_t wall_percent,
+    uint8_t force_percent
+) {
+    effect.mode = mode;
+    effect.start_percent = start_percent;
+    effect.wall_percent = wall_percent;
+    effect.force_percent = force_percent;
+    effect.active = force_percent > 0;
+}
+
+void apply_persistent_trigger_effect(bool force = false) {
+    if (!persistent_trigger_effect_any_active() || !bt_is_controller_connected()) {
+        return;
+    }
+
+    const uint32_t now = time_us_32();
+    if (
+        !force
+        && persistent_trigger_effect_last_apply_us != 0
+        && static_cast<uint32_t>(now - persistent_trigger_effect_last_apply_us) < kPersistentTriggerReapplyIntervalUs
+    ) {
+        return;
+    }
+
+    bt_set_custom_adaptive_trigger_effects(
+        persistent_trigger_effect_right.mode,
+        persistent_trigger_effect_right.start_percent,
+        persistent_trigger_effect_right.wall_percent,
+        persistent_trigger_effect_right.force_percent,
+        persistent_trigger_effect_right.active,
+        persistent_trigger_effect_left.mode,
+        persistent_trigger_effect_left.start_percent,
+        persistent_trigger_effect_left.wall_percent,
+        persistent_trigger_effect_left.force_percent,
+        persistent_trigger_effect_left.active
+    );
+    persistent_trigger_effect_last_apply_us = now;
+}
+
+bool set_persistent_trigger_effect(
+    uint8_t mode,
+    uint8_t target,
+    uint8_t start_percent,
+    uint8_t wall_percent,
+    uint8_t force_percent
+) {
+    if (!bt_is_controller_connected()) {
+        return false;
+    }
+
+    if (target == kTriggerTargetLeft || target == kTriggerTargetBoth) {
+        set_persistent_trigger_effect_state(
+            persistent_trigger_effect_left,
+            mode,
+            start_percent,
+            wall_percent,
+            force_percent
+        );
+    }
+    if (target == kTriggerTargetRight || target == kTriggerTargetBoth) {
+        set_persistent_trigger_effect_state(
+            persistent_trigger_effect_right,
+            mode,
+            start_percent,
+            wall_percent,
+            force_percent
+        );
+    }
+    persistent_trigger_effect_last_apply_us = 0;
+
+    if (persistent_trigger_effect_any_active()) {
+        adaptive_trigger_test_active = false;
+        apply_persistent_trigger_effect(true);
+    } else {
+        bt_reset_adaptive_triggers();
+    }
     return true;
 }
 
@@ -1017,6 +1176,7 @@ void classic_rumble_test_loop() {
 
 void reset_adaptive_trigger_test() {
     adaptive_trigger_test_active = false;
+    clear_persistent_trigger_effect();
     bt_reset_adaptive_triggers();
 }
 
@@ -1575,12 +1735,66 @@ void handle_command(uint8_t const *buffer, uint16_t bufsize) {
             return;
             }
 
+        case CommandPreviewAdaptiveTriggerEffect:
+            {
+            const uint8_t mode = static_cast<uint8_t>(value & 0xff);
+            const uint8_t target = static_cast<uint8_t>((value >> 8) & 0xff);
+            const uint8_t start_percent = buffer[10];
+            const uint8_t wall_percent = buffer[11];
+            const uint8_t force_percent = buffer[12];
+            if (
+                !valid_trigger_test_mode(mode)
+                || !valid_trigger_target(target)
+                || !valid_trigger_percent(start_percent)
+                || !valid_trigger_percent(wall_percent)
+                || !valid_trigger_percent(force_percent)
+            ) {
+                set_ack(command_id, sequence, AckInvalidValue);
+                return;
+            }
+            if (!bt_is_controller_connected()) {
+                set_ack(command_id, sequence, AckNotConnected);
+                return;
+            }
+            if (!schedule_custom_adaptive_trigger_test(mode, target, start_percent, wall_percent, force_percent)) {
+                set_ack(command_id, sequence, AckBusy);
+                return;
+            }
+            set_ack(command_id, sequence, AckOk);
+            return;
+            }
+
+        case CommandApplyAdaptiveTriggerEffect:
+            {
+            const uint8_t mode = static_cast<uint8_t>(value & 0xff);
+            const uint8_t target = static_cast<uint8_t>((value >> 8) & 0xff);
+            const uint8_t start_percent = buffer[10];
+            const uint8_t wall_percent = buffer[11];
+            const uint8_t force_percent = buffer[12];
+            if (
+                !valid_trigger_test_mode(mode)
+                || !valid_trigger_target(target)
+                || !valid_trigger_percent(start_percent)
+                || !valid_trigger_percent(wall_percent)
+                || !valid_trigger_percent(force_percent)
+            ) {
+                set_ack(command_id, sequence, AckInvalidValue);
+                return;
+            }
+            if (!set_persistent_trigger_effect(mode, target, start_percent, wall_percent, force_percent)) {
+                set_ack(command_id, sequence, AckNotConnected);
+                return;
+            }
+            set_ack(command_id, sequence, AckOk);
+            return;
+            }
+
         case CommandResetAdaptiveTriggers:
             if (value != 0) {
                 set_ack(command_id, sequence, AckInvalidValue);
                 return;
             }
-            if (game_trigger_update_recent()) {
+            if (game_trigger_update_recent() && !persistent_trigger_effect_any_active()) {
                 set_ack(command_id, sequence, AckBusy);
                 return;
             }
@@ -1957,6 +2171,7 @@ void companion_loop() {
     classic_rumble_test_loop();
     mute_keyboard_loop();
     adaptive_trigger_test_loop();
+    apply_persistent_trigger_effect();
 }
 
 void companion_process_controller_report(uint8_t *report, uint16_t len) {
@@ -2113,13 +2328,18 @@ bool companion_apply_trigger_effect_intensity(uint8_t *payload, uint16_t len) {
     }
 
     cache_game_trigger_effects(payload, len);
-    if (trigger_effect_intensity_percent >= 100) {
-        return false;
-    }
-
+    const uint8_t original_trigger_flags = len > 0 ? payload[0] & kTriggerEffectFlags : 0;
+    const bool persistentOverrideChanged = strip_persistent_trigger_effect_fields(payload, len, original_trigger_flags);
     const uint8_t trigger_flags = len > 0 ? payload[0] & kTriggerEffectFlags : 0;
     if (trigger_flags == 0) {
-        return false;
+        return persistentOverrideChanged;
+    }
+
+    if (
+        (persistent_trigger_effect_left.active && persistent_trigger_effect_right.active)
+        || trigger_effect_intensity_percent >= 100
+    ) {
+        return persistentOverrideChanged;
     }
 
     const bool right_trigger_active = trigger_effect_block_active(

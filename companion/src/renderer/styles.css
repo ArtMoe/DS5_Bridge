@@ -1632,6 +1632,10 @@ button {
     0 12px 30px rgba(0, 0, 0, 0.14);
 }
 
+.overview-quick-actions {
+  align-content: start;
+}
+
 .overview-panel-heading {
   display: flex;
   align-items: center;
@@ -2032,6 +2036,68 @@ button.overview-shortcut-chip {
   border-radius: 999px;
   background: rgba(142, 164, 194, 0.24);
   transform: translateY(-50%);
+}
+
+.triggers-heading-controls {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 10px;
+  min-height: 38px;
+  padding: 0 7px;
+  border: 1px solid rgba(142, 164, 194, 0.2);
+  border-radius: var(--control-radius);
+  background: rgba(4, 10, 17, 0.16);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.025);
+}
+
+.triggers-heading-controls .inline-switch {
+  position: relative;
+  min-height: 36px;
+  padding: 0;
+}
+
+.triggers-heading-controls .inline-switch + .inline-switch::before {
+  content: "";
+  position: absolute;
+  left: -6px;
+  top: 50%;
+  width: 1px;
+  height: 20px;
+  border-radius: 999px;
+  background: rgba(142, 164, 194, 0.24);
+  transform: translateY(-50%);
+}
+
+.triggers-heading-controls .trigger-lab-state {
+  max-width: none;
+}
+
+.trigger-lab-switch-control:hover .trigger-lab-override-tooltip {
+  opacity: 1;
+  transform: translate(-50%, 0);
+}
+
+.shortcut-glyph-tooltip.trigger-lab-override-tooltip {
+  left: 50%;
+  right: auto;
+  z-index: 40;
+  width: max-content;
+  max-width: min(360px, calc(100vw - 64px));
+  display: block;
+  text-align: left;
+  white-space: normal;
+  overflow-wrap: anywhere;
+  transform: translate(-50%, -4px);
+}
+
+.triggers-heading-controls .trigger-lab-switch.on {
+  border-color: rgba(95, 232, 117, 0.72);
+  background: rgba(30, 142, 76, 0.92);
+}
+
+.triggers-heading-controls .trigger-lab-switch.on span {
+  background: #ffffff;
 }
 
 .feature-card-grid {
@@ -3373,6 +3439,316 @@ button.feature-icon {
 
 .trigger-action-row {
   display: contents;
+}
+
+.trigger-lab-grid {
+  align-items: stretch;
+}
+
+.trigger-lab-card {
+  display: grid;
+  grid-template-rows: auto auto;
+  align-content: start;
+}
+
+.trigger-lab-card .feature-card-title {
+  margin-bottom: 14px;
+}
+
+.trigger-lab-card-active {
+  justify-self: end;
+  gap: 8px;
+  font-size: 12px;
+  font-weight: 760;
+}
+
+.trigger-lab-card-active .switch {
+  width: 42px;
+  height: 24px;
+  padding: 3px;
+}
+
+.trigger-lab-card-active .switch span {
+  width: 16px;
+  height: 16px;
+}
+
+.trigger-lab-card-active .switch.on {
+  border-color: rgba(95, 232, 117, 0.72);
+  background: rgba(30, 142, 76, 0.92);
+}
+
+.trigger-lab-card-active .switch.on span {
+  transform: translateX(18px);
+}
+
+.trigger-lab-trigger-badge {
+  overflow: hidden;
+}
+
+.trigger-lab-trigger-glyph {
+  width: 38px;
+  height: 38px;
+  display: block;
+  background: currentColor;
+  -webkit-mask-position: center;
+  mask-position: center;
+  -webkit-mask-repeat: no-repeat;
+  mask-repeat: no-repeat;
+  -webkit-mask-size: contain;
+  mask-size: contain;
+}
+
+.trigger-lab-editor {
+  display: grid;
+  align-content: start;
+  gap: 9px;
+  min-height: 0;
+}
+
+.trigger-lab-profile-row {
+  min-width: 0;
+  min-height: 30px;
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  align-items: center;
+  gap: 7px;
+}
+
+.trigger-lab-profile-select {
+  grid-column: 1 / span 2;
+}
+
+.trigger-lab-meter-row > span {
+  color: #c5cedd;
+  font-size: 12px;
+  font-weight: 720;
+}
+
+.trigger-lab-profile-select .custom-select-button {
+  height: 30px;
+  padding: 0 8px 0 10px;
+  font-size: 12px;
+  font-weight: 760;
+}
+
+.trigger-lab-profile-select .custom-select-button svg {
+  width: 15px;
+  height: 15px;
+}
+
+.trigger-lab-profile-select .custom-select-menu {
+  top: calc(100% + 4px);
+  padding: 4px;
+}
+
+.trigger-lab-profile-select.custom-select.menu-top .custom-select-menu {
+  top: auto;
+  bottom: calc(100% + 4px);
+}
+
+.trigger-lab-profile-select .custom-select-menu button {
+  min-height: 30px;
+  padding: 0 8px 0 10px;
+  font-size: 12px;
+  font-weight: 720;
+}
+
+.trigger-lab-profile-select .custom-select-menu-footer {
+  border-top: 1px solid rgba(142, 164, 194, 0.14);
+  margin-top: 4px;
+  padding-top: 4px;
+}
+
+.trigger-lab-profile-actions {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 4px;
+}
+
+.trigger-lab-profile-select .trigger-lab-profile-actions button {
+  width: auto;
+  min-width: 0;
+  min-height: 28px;
+  display: grid;
+  grid-template-columns: 1fr;
+  place-items: center;
+  padding: 0;
+  color: #c8d5e8;
+  text-align: center;
+}
+
+.trigger-lab-profile-select .trigger-lab-profile-actions button svg {
+  color: #8fbfff;
+  grid-column: 1;
+  justify-self: center;
+}
+
+.trigger-lab-profile-select .trigger-lab-profile-actions button:disabled {
+  opacity: 0.46;
+}
+
+.trigger-lab-meter-row > strong {
+  min-width: 0;
+  color: #f4f8ff;
+  font-size: 13px;
+  font-weight: 760;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.trigger-lab-chip {
+  min-width: 0;
+  min-height: 30px;
+  border: 1px solid rgba(142, 164, 194, 0.2);
+  border-radius: var(--control-radius);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0 8px;
+  color: #b9c8dc;
+  background: rgba(255, 255, 255, 0.035);
+  font-size: 12px;
+  font-weight: 720;
+  white-space: nowrap;
+}
+
+.trigger-lab-chip svg {
+  flex: 0 0 auto;
+}
+
+button.trigger-lab-chip {
+  cursor: pointer;
+  gap: 5px;
+}
+
+.trigger-lab-chip.compact {
+  width: 100%;
+  min-height: 24px;
+  padding: 0 8px;
+  display: grid;
+  grid-template-columns: 13px 40px;
+  justify-content: center;
+  column-gap: 5px;
+  font-size: 11px;
+}
+
+.trigger-lab-chip-label {
+  min-width: 0;
+  text-align: left;
+}
+
+.trigger-lab-chip.active {
+  color: #f7f9ff;
+  border-color: rgba(40, 124, 255, 0.58);
+  background: rgba(40, 124, 255, 0.16);
+  box-shadow: inset 0 -2px 0 rgba(40, 124, 255, 0.58);
+}
+
+.trigger-lab-mode-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 7px;
+}
+
+.trigger-lab-mode-button {
+  min-width: 0;
+  min-height: 32px;
+  border: 1px solid rgba(142, 164, 194, 0.2);
+  border-radius: var(--control-radius);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0 7px;
+  color: #dce6f5;
+  background: rgba(255, 255, 255, 0.035);
+  font-size: 11px;
+  font-weight: 760;
+  line-height: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.trigger-lab-mode-button.active {
+  color: #f7f9ff;
+  border-color: rgba(40, 124, 255, 0.62);
+  background:
+    linear-gradient(145deg, rgba(20, 76, 133, 0.48), rgba(15, 42, 70, 0.4)),
+    rgba(40, 124, 255, 0.1);
+  box-shadow: inset 0 -2px 0 rgba(40, 124, 255, 0.64);
+}
+
+.trigger-lab-button-row {
+  display: grid;
+  gap: 8px;
+  margin-top: 0;
+}
+
+.trigger-lab-button-row.two-up {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+.trigger-lab-button-row.three-up {
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 6px;
+}
+
+.trigger-lab-button-row button {
+  min-width: 0;
+  min-height: 30px;
+  border: 1px solid rgba(142, 164, 194, 0.2);
+  border-radius: var(--control-radius);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  padding: 0 7px;
+  color: #edf3ff;
+  background: rgba(255, 255, 255, 0.04);
+  font-size: 11px;
+  font-weight: 740;
+  white-space: nowrap;
+}
+
+.trigger-lab-meter-row {
+  min-width: 0;
+  display: grid;
+  align-items: start;
+  gap: 12px;
+  grid-template-columns: 56px minmax(0, 1fr) 42px;
+  min-height: 28px;
+}
+
+.trigger-lab-meter-row > strong {
+  justify-self: end;
+}
+
+.trigger-lab-meter {
+  min-width: 0;
+  gap: 0;
+  padding-top: 1px;
+}
+
+.trigger-lab-meter input[type="range"] {
+  height: 18px;
+}
+
+.trigger-lab-meter input[type="range"]::-webkit-slider-runnable-track {
+  background: linear-gradient(90deg, #2786ff 0%, #2786ff var(--range-fill, 50%), rgba(126, 145, 172, 0.34) var(--range-fill, 50%));
+}
+
+.trigger-lab-meter input[type="range"]::-webkit-slider-thumb {
+  background: #9aa6b7;
+  box-shadow:
+    0 0 0 1px rgba(8, 14, 24, 0.36),
+    0 2px 10px rgba(0, 0, 0, 0.3);
+}
+
+.trigger-lab-meter .range-ticks {
+  margin-top: -3px;
+  padding: 0 9px;
 }
 
 .apply-row {

@@ -33,6 +33,7 @@ import {
   pollingRateModeValue
 } from '../shared/protocol';
 import type {
+  AdaptiveTriggerPreviewEffect,
   AudioDebugEventPayload,
   AudioDebugStatsPayload,
   BridgePresetId,
@@ -282,6 +283,40 @@ function triggerTestTargetValue(target: TriggerTestTarget): number {
   if (target === 'l2') return 1;
   if (target === 'r2') return 2;
   return 0;
+}
+
+function normalizeTriggerTestMode(mode: unknown): TriggerTestMode {
+  if (mode === 'weapon' || mode === 'vibration') {
+    return mode;
+  }
+  return 'feedback';
+}
+
+function normalizeTriggerTestTarget(target: unknown): TriggerTestTarget {
+  if (target === 'l2' || target === 'r2') {
+    return target;
+  }
+  return 'both';
+}
+
+function normalizePercent(value: unknown): number {
+  const numericValue = Number(value);
+  return Number.isFinite(numericValue)
+    ? Math.max(0, Math.min(100, Math.round(numericValue)))
+    : 0;
+}
+
+function normalizeAdaptiveTriggerPreviewEffect(
+  effect: Partial<AdaptiveTriggerPreviewEffect> | null | undefined
+): AdaptiveTriggerPreviewEffect {
+  const candidate = effect ?? {};
+  return {
+    mode: normalizeTriggerTestMode(candidate.mode),
+    target: normalizeTriggerTestTarget(candidate.target),
+    startPercent: normalizePercent(candidate.startPercent),
+    wallPercent: normalizePercent(candidate.wallPercent),
+    forcePercent: normalizePercent(candidate.forcePercent)
+  };
 }
 
 function normalizePollingRateMode(mode: PollingRateMode): PollingRateMode {
@@ -1746,6 +1781,26 @@ export class BridgeService extends EventEmitter {
   ): Promise<BridgeSnapshot> {
     const value = triggerTestModeValue(mode) | (triggerTestTargetValue(target) << 8);
     await this.sendCommand(COMMAND_ID.TEST_ADAPTIVE_TRIGGERS, value, {
+      throwOnCommandError: false
+    });
+    return this.getSnapshot();
+  }
+
+  async previewAdaptiveTriggerEffect(effect: AdaptiveTriggerPreviewEffect): Promise<BridgeSnapshot> {
+    const normalized = normalizeAdaptiveTriggerPreviewEffect(effect);
+    const value = triggerTestModeValue(normalized.mode) | (triggerTestTargetValue(normalized.target) << 8);
+    await this.sendCommand(COMMAND_ID.PREVIEW_ADAPTIVE_TRIGGER_EFFECT, value, {
+      extraPayload: [normalized.startPercent, normalized.wallPercent, normalized.forcePercent],
+      throwOnCommandError: false
+    });
+    return this.getSnapshot();
+  }
+
+  async applyAdaptiveTriggerEffect(effect: AdaptiveTriggerPreviewEffect): Promise<BridgeSnapshot> {
+    const normalized = normalizeAdaptiveTriggerPreviewEffect(effect);
+    const value = triggerTestModeValue(normalized.mode) | (triggerTestTargetValue(normalized.target) << 8);
+    await this.sendCommand(COMMAND_ID.APPLY_ADAPTIVE_TRIGGER_EFFECT, value, {
+      extraPayload: [normalized.startPercent, normalized.wallPercent, normalized.forcePercent],
       throwOnCommandError: false
     });
     return this.getSnapshot();
