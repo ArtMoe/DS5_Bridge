@@ -1968,10 +1968,10 @@ button.overview-shortcut-chip {
   flex-wrap: nowrap;
   align-items: center;
   justify-content: flex-end;
-  gap: 0;
+  gap: 14px;
   min-width: 0;
   min-height: 38px;
-  padding: 0 7px 0 10px;
+  padding: 0 7px;
   border: 1px solid rgba(142, 164, 194, 0.2);
   border-radius: var(--control-radius);
   background: rgba(4, 10, 17, 0.16);
@@ -1979,14 +1979,9 @@ button.overview-shortcut-chip {
 }
 
 .audio-heading-controls .inline-switch {
+  position: relative;
   min-height: 36px;
   padding: 0;
-}
-
-.audio-heading-controls .inline-switch:first-child {
-  margin-left: -10px;
-  padding-left: 10px;
-  padding-right: 11px;
 }
 
 .audio-heading-controls .host-encoding-switch-warn {
@@ -2022,14 +2017,13 @@ button.overview-shortcut-chip {
 }
 
 .audio-heading-controls .inline-switch + .inline-switch {
-  position: relative;
-  margin-left: 22px;
+  margin-left: 0;
 }
 
 .audio-heading-controls .inline-switch + .inline-switch::before {
   content: "";
   position: absolute;
-  left: -11px;
+  left: -8px;
   top: 50%;
   width: 1px;
   height: 20px;
@@ -2042,7 +2036,7 @@ button.overview-shortcut-chip {
   display: flex;
   align-items: center;
   justify-content: flex-end;
-  gap: 10px;
+  gap: 14px;
   min-height: 38px;
   padding: 0 7px;
   border: 1px solid rgba(142, 164, 194, 0.2);
@@ -2060,7 +2054,7 @@ button.overview-shortcut-chip {
 .triggers-heading-controls .inline-switch + .inline-switch::before {
   content: "";
   position: absolute;
-  left: -6px;
+  left: -8px;
   top: 50%;
   width: 1px;
   height: 20px;
