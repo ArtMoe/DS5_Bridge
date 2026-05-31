@@ -22,8 +22,10 @@ static uint8_t host_pcm_iso_queue_count = 0;
 static uint16_t host_pcm_iso_pending_frames = 0;
 static uint16_t host_pcm_iso_tx_sequence = 0;
 static uint32_t host_pcm_iso_drops = 0;
+static uint8_t host_pcm_iso_rhport = 0;
 static uint8_t host_pcm_iso_ep_in = 0;
 static bool host_pcm_iso_configured = false;
+static bool host_pcm_iso_enabled = false;
 static bool host_pcm_iso_streaming = false;
 static CFG_TUD_MEM_ALIGN uint8_t host_pcm_iso_tx_buffer[HOST_PCM_ISO_PACKET_BYTES];
 
@@ -86,7 +88,7 @@ static void host_pcm_iso_fill_tx_packet() {
 }
 
 static bool host_pcm_iso_submit_packet(uint8_t rhport) {
-    if (!host_pcm_iso_mounted() || !usbd_edpt_ready(rhport, host_pcm_iso_ep_in)) {
+    if (!host_pcm_iso_enabled || !host_pcm_iso_mounted() || !usbd_edpt_ready(rhport, host_pcm_iso_ep_in)) {
         return false;
     }
 
@@ -98,6 +100,24 @@ extern "C" bool host_pcm_iso_mounted(void) {
     return host_pcm_iso_configured && host_pcm_iso_ep_in != 0;
 }
 
+extern "C" void host_pcm_iso_set_enabled(bool enabled) {
+    const uint32_t irq_state = save_and_disable_interrupts();
+    host_pcm_iso_enabled = enabled;
+    if (!enabled) {
+        host_pcm_iso_clear_locked();
+    }
+    restore_interrupts(irq_state);
+
+    if (!host_pcm_iso_mounted()) {
+        return;
+    }
+
+    usbd_sof_enable(host_pcm_iso_rhport, SOF_CONSUMER_USER, enabled);
+    if (enabled) {
+        (void)host_pcm_iso_submit_packet(host_pcm_iso_rhport);
+    }
+}
+
 extern "C" void host_pcm_iso_reset_stream(void) {
     const uint32_t irq_state = save_and_disable_interrupts();
     host_pcm_iso_clear_locked();
@@ -106,7 +126,7 @@ extern "C" void host_pcm_iso_reset_stream(void) {
 
 extern "C" bool host_pcm_iso_write(int16_t const *samples, uint16_t frames, uint32_t timestamp_us) {
     (void)timestamp_us;
-    if (samples == nullptr || frames == 0 || !host_pcm_iso_mounted()) {
+    if (samples == nullptr || frames == 0 || !host_pcm_iso_enabled || !host_pcm_iso_mounted()) {
         return false;
     }
 
@@ -143,22 +163,31 @@ extern "C" uint32_t host_pcm_iso_drop_count(void) {
 }
 
 static void host_pcm_iso_driver_init(void) {
+    host_pcm_iso_rhport = 0;
     host_pcm_iso_ep_in = 0;
     host_pcm_iso_configured = false;
+    host_pcm_iso_enabled = false;
     host_pcm_iso_reset_stream();
 }
 
 static bool host_pcm_iso_driver_deinit(void) {
+    if (host_pcm_iso_configured) {
+        usbd_sof_enable(host_pcm_iso_rhport, SOF_CONSUMER_USER, false);
+    }
+    host_pcm_iso_rhport = 0;
     host_pcm_iso_ep_in = 0;
     host_pcm_iso_configured = false;
+    host_pcm_iso_enabled = false;
     host_pcm_iso_reset_stream();
     return true;
 }
 
 static void host_pcm_iso_driver_reset(uint8_t rhport) {
     usbd_sof_enable(rhport, SOF_CONSUMER_USER, false);
+    host_pcm_iso_rhport = 0;
     host_pcm_iso_ep_in = 0;
     host_pcm_iso_configured = false;
+    host_pcm_iso_enabled = false;
     host_pcm_iso_reset_stream();
 }
 
@@ -205,10 +234,13 @@ static uint16_t host_pcm_iso_driver_open(uint8_t rhport, tusb_desc_interface_t c
         return 0;
     }
 
+    host_pcm_iso_rhport = rhport;
     host_pcm_iso_configured = true;
     host_pcm_iso_reset_stream();
-    usbd_sof_enable(rhport, SOF_CONSUMER_USER, true);
-    (void)host_pcm_iso_submit_packet(rhport);
+    usbd_sof_enable(rhport, SOF_CONSUMER_USER, host_pcm_iso_enabled);
+    if (host_pcm_iso_enabled) {
+        (void)host_pcm_iso_submit_packet(rhport);
+    }
     return consumed;
 }
 

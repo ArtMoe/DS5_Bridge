@@ -869,6 +869,7 @@ static void enter_fallback(AudioFallbackReason reason) {
         return;
     }
     const bool was_host_encoded = host_runtime.mode == AudioRuntimeHostEncodedActive;
+    host_pcm_iso_set_enabled(false);
     audio_debug_log(
         AudioDebugHostMode,
         static_cast<uint8_t>(AudioRuntimeFallbackPicoLocal),
@@ -1351,6 +1352,7 @@ bool audio_quiet_mode_enabled() {
 
 void audio_host_set_requested(bool enabled) {
     host_runtime.requested = enabled;
+    host_pcm_iso_set_enabled(enabled);
     if (!enabled) {
         host_runtime.request_started_us = 0;
         set_fallback_speaker_target_gain(1.0f);
@@ -1380,6 +1382,7 @@ void audio_host_start_stream() {
     host_runtime.requested = true;
     host_runtime.stream_active = true;
     set_fallback_speaker_target_gain(0.0f);
+    host_pcm_iso_set_enabled(true);
     host_runtime.stream_started_us = time_us_32();
     host_runtime.request_started_us = host_runtime.stream_started_us;
     host_runtime.last_heartbeat_us = host_runtime.stream_started_us;
@@ -1408,6 +1411,7 @@ void audio_host_stop_stream(AudioFallbackReason reason) {
     host_runtime.stream_active = false;
     host_runtime.request_started_us = 0;
     host_runtime.last_frame_us = 0;
+    host_pcm_iso_set_enabled(false);
     host_pcm_iso_reset_stream();
     clear_host_reassembly();
     enter_fallback(reason);
