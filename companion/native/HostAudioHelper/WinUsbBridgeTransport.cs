@@ -9,6 +9,7 @@ sealed class WinUsbBridgeTransport : IDisposable
     private const ushort BridgeInterfaceNumber = 0x0005;
     private const string BridgeInterfaceMarker = "mi_05";
     private const int ReportBytes = 64;
+    private const uint BridgeOutTransferTimeoutMs = 35;
     private static readonly Guid DeviceInterfaceGuid = new("E4C8B2A9-87F5-4C4C-9E52-2B4C1B8B4F62");
     private static readonly Guid LegacySharedDeviceInterfaceGuid = new("D5B7C5F4-8A68-4A86-9E31-1E5FA7B1D5B0");
 
@@ -67,7 +68,7 @@ sealed class WinUsbBridgeTransport : IDisposable
 
                     if (TryFindBulkOutPipe(winUsb, out var outPipe))
                     {
-                        var timeoutMs = 12u;
+                        var timeoutMs = BridgeOutTransferTimeoutMs;
                         _ = NativeMethods.WinUsb_SetPipePolicy(
                             winUsb,
                             outPipe.PipeId,
@@ -147,19 +148,29 @@ sealed class WinUsbBridgeTransport : IDisposable
         {
             throw new ArgumentException($"Bridge reports must be {ReportBytes} bytes.", nameof(report));
         }
-        if (!NativeMethods.WinUsb_WritePipe(
-                winUsbHandle,
-                outPipeId,
-                report,
-                ReportBytes,
-                out var transferred,
-                IntPtr.Zero))
+
+        for (var attempt = 0; attempt < 2; attempt++)
         {
-            throw new IOException($"WinUSB bridge write failed: {new Win32Exception(Marshal.GetLastWin32Error()).Message}");
-        }
-        if (transferred != ReportBytes)
-        {
-            throw new IOException($"WinUSB bridge write was short: {transferred}/{ReportBytes} bytes.");
+            if (NativeMethods.WinUsb_WritePipe(
+                    winUsbHandle,
+                    outPipeId,
+                    report,
+                    ReportBytes,
+                    out var transferred,
+                    IntPtr.Zero))
+            {
+                if (transferred != ReportBytes)
+                {
+                    throw new IOException($"WinUSB bridge write was short: {transferred}/{ReportBytes} bytes.");
+                }
+                return;
+            }
+
+            var error = Marshal.GetLastWin32Error();
+            if (error != NativeMethods.ErrorSemTimeout || attempt != 0)
+            {
+                throw new IOException($"WinUSB bridge write failed: {new Win32Exception(error).Message}", error);
+            }
         }
     }
 

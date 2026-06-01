@@ -63,6 +63,7 @@
 #define HOST_FRAME_REASSEMBLY_SIZE 448
 #define HOST_AUDIO_REPORT_SIZE REPORT_SIZE
 #define HOST_AUDIO_COMPACT_REPORT_SIZE (SAMPLE_SIZE + 200)
+#define HOST_FAST_DUPLICATE_IGNORE_US 50000
 #define HOST_RAW_PCM_RETURN_FRAMES 48
 #define HOST_RAW_PCM_RETURN_CHANNELS 2
 #define HOST_RAW_PCM_RETURN_PACKET_BYTES (HOST_RAW_PCM_RETURN_FRAMES * INPUT_CHANNELS * sizeof(int16_t))
@@ -241,6 +242,8 @@ static uint8_t host_reassembly_chunk_count = 0;
 static uint16_t host_reassembly_received_mask = 0;
 static uint16_t host_reassembly_expected_length = 0;
 static uint16_t host_reassembly_received_bytes = 0;
+static uint16_t host_last_completed_fast_sequence = 0;
+static uint32_t host_last_completed_fast_sequence_us = 0;
 static uint8_t host_reassembly_buffer[HOST_FRAME_REASSEMBLY_SIZE];
 static uint32_t host_frames_received = 0;
 static uint32_t host_frames_dropped = 0;
@@ -839,6 +842,23 @@ static void clear_host_reassembly() {
     memset(host_reassembly_buffer, 0, sizeof(host_reassembly_buffer));
 }
 
+static void clear_host_reassembly_history() {
+    clear_host_reassembly();
+    host_last_completed_fast_sequence = 0;
+    host_last_completed_fast_sequence_us = 0;
+}
+
+static bool is_recent_completed_fast_fragment(uint16_t sequence, uint32_t now) {
+    return host_last_completed_fast_sequence_us != 0
+        && host_last_completed_fast_sequence == sequence
+        && static_cast<uint32_t>(now - host_last_completed_fast_sequence_us) <= HOST_FAST_DUPLICATE_IGNORE_US;
+}
+
+static void note_completed_fast_frame(uint16_t sequence, uint32_t now) {
+    host_last_completed_fast_sequence = sequence;
+    host_last_completed_fast_sequence_us = now;
+}
+
 static void note_incomplete_host_reassembly(uint8_t reason) {
     if (host_reassembly_received_mask == 0) {
         return;
@@ -1435,7 +1455,7 @@ void audio_host_start_stream() {
     bt_reset_output_debug_stats();
     schedule_host_route_primer();
     host_runtime.bump_generation();
-    clear_host_reassembly();
+    clear_host_reassembly_history();
     if (audio_initialized) {
         host_runtime.mode = AudioRuntimeHostEncodedActive;
         host_runtime.fallback_reason = AudioFallbackNone;
@@ -1452,7 +1472,7 @@ void audio_host_stop_stream(AudioFallbackReason reason) {
     host_runtime.last_frame_us = 0;
     host_pcm_iso_set_enabled(false);
     host_pcm_iso_reset_stream();
-    clear_host_reassembly();
+    clear_host_reassembly_history();
     enter_fallback(reason);
     refresh_controller_mic_transport_state(true);
 }
@@ -1540,7 +1560,6 @@ static bool submit_host_audio_report(uint8_t const *report, uint16_t len) {
     (void)prime_host_audio_route_if_needed();
     if (host_startup_drop_frames_remaining != 0) {
         host_startup_drop_frames_remaining--;
-        host_frames_dropped++;
         host_runtime.last_frame_us = time_us_32();
         return true;
     }
@@ -1557,6 +1576,7 @@ bool audio_host_receive_packet(uint8_t const *data, uint16_t len) {
         }
 
         const uint16_t sequence = read_le_u16(data + HostFastPacketSequence);
+        const uint32_t now = time_us_32();
         const uint8_t fragment_index = data[HostFastPacketFragmentIndex];
         const uint8_t fragment_count = data[HostFastPacketFragmentCount];
         const uint8_t payload_length = data[HostFastPacketPayloadLength];
@@ -1571,6 +1591,11 @@ bool audio_host_receive_packet(uint8_t const *data, uint16_t len) {
             host_frames_dropped++;
             enter_fallback(AudioFallbackInvalidPacket);
             return false;
+        }
+
+        if (is_recent_completed_fast_fragment(sequence, now)) {
+            host_runtime.last_frame_us = now;
+            return true;
         }
 
         if (host_reassembly_sequence != sequence || host_reassembly_chunk_count != fragment_count) {
@@ -1596,7 +1621,7 @@ bool audio_host_receive_packet(uint8_t const *data, uint16_t len) {
         if (fragment_index + 1 == fragment_count) {
             host_reassembly_expected_length = received_end;
         }
-        host_runtime.last_frame_us = time_us_32();
+        host_runtime.last_frame_us = now;
         const uint16_t expected_mask = static_cast<uint16_t>((1u << fragment_count) - 1u);
         if (
             host_reassembly_received_mask != expected_mask
@@ -1607,6 +1632,9 @@ bool audio_host_receive_packet(uint8_t const *data, uint16_t len) {
         }
 
         const bool submitted = submit_host_audio_report(host_reassembly_buffer, HOST_AUDIO_COMPACT_REPORT_SIZE);
+        if (submitted) {
+            note_completed_fast_frame(sequence, now);
+        }
         clear_host_reassembly();
         return submitted;
     }
