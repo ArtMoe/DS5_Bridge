@@ -449,6 +449,36 @@ void host_audio_runtime_generation_never_wraps_to_zero() {
     EXPECT_EQ(runtime.stream_generation, 1);
 }
 
+void host_audio_runtime_blocks_local_haptics_only_while_stream_owns_audio_path() {
+    constexpr uint32_t kFrameRecentUs = 250'000;
+    constexpr uint32_t kStartGraceUs = 2'000'000;
+    HostAudioRuntimeState runtime{};
+    EXPECT_FALSE(runtime.blocks_local_haptics_test(10'000, kFrameRecentUs, kStartGraceUs));
+
+    runtime.requested = true;
+    runtime.request_started_us = 10'000;
+    EXPECT_TRUE(runtime.blocks_local_haptics_test(10'500, kFrameRecentUs, kStartGraceUs));
+    EXPECT_FALSE(runtime.blocks_local_haptics_test(10'000 + kStartGraceUs, kFrameRecentUs, kStartGraceUs));
+
+    runtime.request_started_us = 0;
+    runtime.last_frame_us = 20'000;
+    EXPECT_TRUE(runtime.blocks_local_haptics_test(20'000 + kFrameRecentUs - 1, kFrameRecentUs, kStartGraceUs));
+    EXPECT_FALSE(runtime.blocks_local_haptics_test(20'000 + kFrameRecentUs, kFrameRecentUs, kStartGraceUs));
+
+    runtime.mode = AudioRuntimeHostEncodedActive;
+    EXPECT_TRUE(runtime.blocks_local_haptics_test(20'000 + kFrameRecentUs, kFrameRecentUs, kStartGraceUs));
+
+    runtime.mode = AudioRuntimeFallbackPicoLocal;
+    runtime.stream_active = true;
+    EXPECT_TRUE(runtime.blocks_local_haptics_test(20'000 + kFrameRecentUs, kFrameRecentUs, kStartGraceUs));
+
+    runtime.requested = false;
+    EXPECT_TRUE(runtime.blocks_local_haptics_test(20'000 + kFrameRecentUs, kFrameRecentUs, kStartGraceUs));
+
+    runtime.stream_active = false;
+    EXPECT_FALSE(runtime.blocks_local_haptics_test(20'000 + kFrameRecentUs, kFrameRecentUs, kStartGraceUs));
+}
+
 struct TestCase {
     char const *name;
     void (*run)();
@@ -472,6 +502,7 @@ std::vector<TestCase> tests{
     {"host audio runtime heartbeat and start grace are strict windows", host_audio_runtime_heartbeat_and_start_grace_are_strict_windows},
     {"host audio runtime last contact uses newest timestamp across wraparound", host_audio_runtime_last_contact_uses_newest_timestamp_across_wraparound},
     {"host audio runtime generation never wraps to zero", host_audio_runtime_generation_never_wraps_to_zero},
+    {"host audio runtime blocks local haptics only while stream owns audio path", host_audio_runtime_blocks_local_haptics_only_while_stream_owns_audio_path},
 };
 
 } // namespace

@@ -38,4 +38,24 @@ describe('renderer behavior guards', () => {
     expect(appSource).toContain('Controller identity based profiles');
     expect(appSource).toContain('paired directly to Windows over Bluetooth may need to be paired again');
   });
+
+  it('treats host encoded audio as haptic-test audio activity', () => {
+    expect(appSource).toContain('const feedbackAudioActive = audioStreamActive');
+    expect(appSource).toContain('|| hostAudioActive');
+    expect(appSource).toContain('Boolean(hostAudioEnabled && hostAudioStatus?.streamActive)');
+    expect(appSource).toContain('|| feedbackAudioActive');
+  });
+
+  it('keeps haptic test and cooldown labels ahead of audio-busy labels', () => {
+    const start = appSource.indexOf('<button className="primary-action" type="button" disabled={activeFeedbackTestUnavailable}');
+    expect(start).toBeGreaterThanOrEqual(0);
+    const end = appSource.indexOf('</button>', start);
+    const buttonSource = appSource.slice(start, end);
+
+    expect(buttonSource).toContain('feedbackAudioLabel');
+    expect(buttonSource.indexOf('testLocked')).toBeLessThan(buttonSource.indexOf('feedbackAudioActive'));
+    expect(buttonSource.indexOf('snapshot.status?.testHapticsCooldown')).toBeLessThan(
+      buttonSource.lastIndexOf('feedbackAudioActive')
+    );
+  });
 });
