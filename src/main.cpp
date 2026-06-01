@@ -384,6 +384,7 @@ int main() {
         watchdog_update();
         cyw43_arch_poll();
         tud_task();
+        interrupt_loop();
         usb_pm_poll();
         audio_loop();
         bt_lightbar_loop();
