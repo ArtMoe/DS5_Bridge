@@ -379,6 +379,14 @@ static void start_inquiry_if_needed() {
     inquiry_active = true;
 }
 
+static void notify_controller_usb_transport_ready() {
+    if (controller_usb_transport_ready_notified) {
+        return;
+    }
+    controller_usb_transport_ready_notified = true;
+    usb_handle_controller_transport_ready();
+}
+
 static uint8_t clamp_output_trace_u8(uint32_t value) {
     return static_cast<uint8_t>(value > 255 ? 255 : value);
 }
@@ -1579,9 +1587,8 @@ static void l2cap_packet_handler(uint8_t packet_type, uint16_t channel, uint8_t 
                     controller_type_check_pending = false;
                     DS5_LOG("[L2CAP] Connected controller detected as DualSense\n");
                 }
-                if (!controller_type_check_pending && !controller_usb_transport_ready_notified) {
-                    controller_usb_transport_ready_notified = true;
-                    usb_handle_controller_transport_ready();
+                if (!controller_type_check_pending) {
+                    notify_controller_usb_transport_ready();
                 }
             }
             if (size >= 2 && packet[0] == 0xA3) {
@@ -1637,6 +1644,7 @@ static void l2cap_packet_handler(uint8_t packet_type, uint16_t channel, uint8_t 
                     reset_lightbar_setup();
                     bt_set_lightbar_color(0x00, 0x00, 0xff, 100);
                     bt_schedule_lightbar_restore(250);
+                    notify_controller_usb_transport_ready();
                 } else {
                     DS5_LOG("[L2CAP] Unknown Channel psm: 0x%02X", psm);
                 }
