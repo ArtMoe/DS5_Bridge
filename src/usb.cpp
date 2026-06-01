@@ -35,6 +35,7 @@ static uint32_t usb_controller_connect_at_us = 0;
 static bool usb_controller_transport_ready = false;
 static volatile bool usb_mounted = false;
 static uint32_t usb_controller_last_attach_us = 0;
+static uint8_t usb_controller_enumeration_retry_count = 0;
 
 extern "C" {
 uint8_t usb_hid_polling_interval_ms_value = 1;
@@ -48,6 +49,7 @@ uint8_t usb_hid_polling_interval_ms_value = 1;
 #define USB_RECONNECT_HOLD_US           150000
 #define USB_CONTROLLER_REATTACH_HOLD_US 3000000
 #define USB_CONTROLLER_ENUMERATION_RETRY_US 3000000
+#define USB_CONTROLLER_ENUMERATION_HARD_RESET_RETRIES 2
 
 enum UsbAudioDebugKind : uint8_t {
     UsbAudioDebugSetInterface = 1,
@@ -115,6 +117,12 @@ static void usb_deinit_device_stack() {
     tusb_deinit(BOARD_TUD_RHPORT);
 }
 
+static void usb_mark_device_stack_detached() {
+    usb_mounted = false;
+    usb_suspended = false;
+    usb_suspend_disconnect_requested = false;
+}
+
 void usb_device_stack_init_disconnected() {
     if (!tud_inited()) {
         tusb_rhport_init_t dev_init = {
@@ -123,10 +131,15 @@ void usb_device_stack_init_disconnected() {
         };
         tusb_init(BOARD_TUD_RHPORT, &dev_init);
     }
-    usb_mounted = false;
-    usb_suspended = false;
+    usb_mark_device_stack_detached();
     usb_reset_audio_class_state();
     tud_disconnect();
+}
+
+static void usb_hard_reset_device_stack() {
+    usb_reset_audio_class_state();
+    usb_deinit_device_stack();
+    usb_mark_device_stack_detached();
 }
 
 static void usb_connect_controller_transport(uint32_t now) {
@@ -196,6 +209,7 @@ void usb_handle_controller_transport_disconnect() {
     usb_reconnect_connect_pending = false;
     usb_controller_connect_pending = false;
     usb_controller_transport_ready = false;
+    usb_controller_enumeration_retry_count = 0;
     usb_mounted = false;
     usb_suspended = false;
     usb_suspend_disconnect_requested = false;
@@ -206,6 +220,7 @@ void usb_handle_controller_transport_disconnect() {
 
 void usb_handle_controller_transport_ready() {
     const uint32_t now = time_us_32();
+    usb_controller_enumeration_retry_count = 0;
     usb_reset_audio_class_state();
     if (!time_reached(now, usb_controller_connect_at_us)) {
         usb_controller_connect_pending = true;
@@ -218,6 +233,7 @@ extern "C" void tud_mount_cb(void) {
     usb_mounted = true;
     usb_suspended = false;
     usb_suspend_disconnect_requested = false;
+    usb_controller_enumeration_retry_count = 0;
 }
 
 extern "C" void tud_umount_cb(void) {
@@ -288,10 +304,16 @@ void usb_pm_poll() {
         && !usb_reconnect_connect_pending
         && time_reached(now, usb_controller_last_attach_us + USB_CONTROLLER_ENUMERATION_RETRY_US)
     ) {
+        usb_controller_enumeration_retry_count++;
         usb_controller_connect_pending = true;
         usb_controller_connect_at_us = now + USB_RECONNECT_HOLD_US;
         usb_controller_last_attach_us = now;
-        usb_device_stack_init_disconnected();
+        if (usb_controller_enumeration_retry_count >= USB_CONTROLLER_ENUMERATION_HARD_RESET_RETRIES) {
+            usb_controller_enumeration_retry_count = 0;
+            usb_hard_reset_device_stack();
+        } else {
+            usb_device_stack_init_disconnected();
+        }
         return;
     }
 

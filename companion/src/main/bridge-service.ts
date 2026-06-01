@@ -1944,6 +1944,12 @@ export class BridgeService extends EventEmitter {
     await this.device.sendFeatureReport(buildCommandReport(commandId, sequence, value, options.extraPayload));
     const ack = parseAckReport(await this.device.getFeatureReport(REPORT_ID.ACK, REPORT_LENGTH));
     this.snapshot.diagnostics.lastAck = ack;
+    if (ack.commandId !== (commandId & 0xff) || ack.commandSequence !== sequence) {
+      const message = `Stale companion ACK: expected command 0x${(commandId & 0xff).toString(16).padStart(2, '0')} sequence ${sequence}, received command 0x${ack.commandId.toString(16).padStart(2, '0')} sequence ${ack.commandSequence}.`;
+      this.snapshot.diagnostics.lastError = message;
+      this.emitSnapshot();
+      throw new Error(message);
+    }
     this.snapshot.diagnostics.settingsRevision = ack.settingsRevision;
     this.snapshot.diagnostics.lastError = ack.resultCode === ACK_RESULT.OK ? null : ackUserMessage(ack.resultCode);
     this.emitSnapshot();
