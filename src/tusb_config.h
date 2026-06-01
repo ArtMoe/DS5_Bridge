@@ -97,7 +97,7 @@
 #define CFG_TUD_AUDIO             2
 #endif
 #ifdef ENABLE_COMPANION
-#define CFG_TUD_HID               3
+#define CFG_TUD_HID               2
 #else
 #define CFG_TUD_HID               1
 #endif

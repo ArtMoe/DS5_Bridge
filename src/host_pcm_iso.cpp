@@ -289,23 +289,20 @@ static void host_pcm_iso_driver_sof(uint8_t rhport, uint32_t frame_count) {
     (void)host_pcm_iso_submit_packet(rhport);
 }
 
-extern "C" usbd_class_driver_t const *usbd_app_driver_get_cb(uint8_t *driver_count) {
-    static usbd_class_driver_t const drivers[] = {
-        {
-            .name = "HOST_PCM_ISO",
-            .init = host_pcm_iso_driver_init,
-            .deinit = host_pcm_iso_driver_deinit,
-            .reset = host_pcm_iso_driver_reset,
-            .open = host_pcm_iso_driver_open,
-            .control_xfer_cb = host_pcm_iso_driver_control_xfer_cb,
-            .xfer_cb = host_pcm_iso_driver_xfer_cb,
-            .xfer_isr = host_pcm_iso_driver_xfer_isr,
-            .sof = host_pcm_iso_driver_sof,
-        },
+extern "C" usbd_class_driver_t const *host_pcm_iso_usb_driver(void) {
+    static usbd_class_driver_t const driver = {
+        .name = "HOST_PCM_ISO",
+        .init = host_pcm_iso_driver_init,
+        .deinit = host_pcm_iso_driver_deinit,
+        .reset = host_pcm_iso_driver_reset,
+        .open = host_pcm_iso_driver_open,
+        .control_xfer_cb = host_pcm_iso_driver_control_xfer_cb,
+        .xfer_cb = host_pcm_iso_driver_xfer_cb,
+        .xfer_isr = host_pcm_iso_driver_xfer_isr,
+        .sof = host_pcm_iso_driver_sof,
     };
 
-    *driver_count = static_cast<uint8_t>(sizeof(drivers) / sizeof(drivers[0]));
-    return drivers;
+    return &driver;
 }
 
 #endif // ENABLE_COMPANION

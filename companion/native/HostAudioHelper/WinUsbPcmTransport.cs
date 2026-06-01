@@ -24,6 +24,7 @@ sealed class WinUsbPcmTransport : IDisposable
     public const int IsoHeaderBytes = 4;
     public const int IsoPacketBytes = IsoHeaderBytes + IsoFramesPerPacket * FrameBytes;
     private const int IsoTransferCount = 3;
+    private const string PcmInterfaceMarker = "mi_06";
     public const string FriendlyName = "DS5 Bridge PCM Iso";
     private static readonly Guid DeviceInterfaceGuid = new("D5B7C5F4-8A68-4A86-9E31-1E5FA7B1D5B0");
 
@@ -127,6 +128,11 @@ sealed class WinUsbPcmTransport : IDisposable
         Exception? lastError = null;
         foreach (var path in NativeMethods.EnumerateDeviceInterfacePaths(DeviceInterfaceGuid))
         {
+            if (!IsPcmInterfacePath(path))
+            {
+                continue;
+            }
+
             SafeFileHandle? device = null;
             IntPtr winUsb = IntPtr.Zero;
             try
@@ -195,6 +201,11 @@ sealed class WinUsbPcmTransport : IDisposable
             lastError is null
                 ? "DS5 Bridge WinUSB PCM interface was not found."
                 : $"DS5 Bridge WinUSB PCM interface could not be opened: {lastError.Message}");
+    }
+
+    private static bool IsPcmInterfacePath(string path)
+    {
+        return path.Contains(PcmInterfaceMarker, StringComparison.OrdinalIgnoreCase);
     }
 
     public int Read(byte[] buffer)

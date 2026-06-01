@@ -486,7 +486,7 @@ export function hostAudioUsesRawPcmCapture(): boolean {
   return HOST_AUDIO_SOURCE === 'raw-pcm-capture';
 }
 
-function resolveHelperPath(): string {
+export function resolveHostAudioHelperPath(): string {
   const packagedCandidate = process.resourcesPath ? path.join(process.resourcesPath, HELPER_RELATIVE_PATH) : null;
   const devCandidates = [
     path.resolve(process.cwd(), DEV_HELPER_RELATIVE_PATH),
@@ -502,6 +502,10 @@ function resolveHelperPath(): string {
     throw new Error(`Host audio helper is missing. Run npm run build:host-audio from companion/.`);
   }
   return helperPath;
+}
+
+function resolveHelperPath(): string {
+  return resolveHostAudioHelperPath();
 }
 
 function resolveHelperTestAudioPath(helperPath: string): string {

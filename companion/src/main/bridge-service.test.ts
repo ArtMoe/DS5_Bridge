@@ -41,10 +41,28 @@ const hidMock = vi.hoisted(() => {
   };
 });
 
+const winUsbTransportMock = vi.hoisted(() => ({
+  open: vi.fn(async () => {
+    const listedPath = hidMock.state.devicesList[0]?.path;
+    const device = (typeof listedPath === 'string' ? hidMock.state.openDevices.get(listedPath) : null)
+      ?? hidMock.state.openDevices.values().next().value;
+    if (!device) {
+      throw new Error('No WinUSB bridge transport');
+    }
+    return device;
+  })
+}));
+
 vi.mock('node-hid', () => ({
   default: {
     devices: hidMock.devices,
     HID: hidMock.HID
+  }
+}));
+
+vi.mock('./winusb-companion-transport', () => ({
+  WinUsbCompanionTransport: {
+    open: winUsbTransportMock.open
   }
 }));
 
@@ -92,10 +110,13 @@ const FULL_REAPPLY_COMMANDS = [
 ];
 
 class MockHidDevice extends EventEmitter {
+  path = 'winusb-path';
   status = statusReport();
   audioDebugReports: number[][] = [];
   audioStatsReports: number[][] = [];
   hostAudioStatusReports: number[][] = [];
+  shortcutEvents: number[] = [];
+  shortcutReadError: Error | null = null;
   featureReportIds: number[] = [];
   sentReports: number[][] = [];
   outReports: number[][] = [];
@@ -135,6 +156,12 @@ class MockHidDevice extends EventEmitter {
     if (reportId === REPORT_ID.HOST_AUDIO_STATUS) {
       return [...(this.hostAudioStatusReports.shift() ?? hostAudioStatusReport())];
     }
+    if (reportId === REPORT_ID.INPUT) {
+      if (this.shortcutReadError) {
+        throw this.shortcutReadError;
+      }
+      return shortcutEventReport(this.shortcutEvents.shift() ?? 0);
+    }
     throw new Error(`Unexpected report ID: ${reportId}`);
   }
 
@@ -146,6 +173,10 @@ class MockHidDevice extends EventEmitter {
   write(report: number[]): number {
     this.outReports.push([...report]);
     return report.length;
+  }
+
+  queueShortcutEvent(event: number): void {
+    this.shortcutEvents.push(event);
   }
 
   close(): void {
@@ -246,6 +277,13 @@ function ackReport(options: {
   report[9] = options.result;
   writeU16(report, 11, options.settingsRevision);
   writeU32(report, 13, 12);
+  return report;
+}
+
+function shortcutEventReport(event = 0): number[] {
+  const report = new Array<number>(REPORT_LENGTH).fill(0);
+  report[0] = REPORT_ID.INPUT;
+  report[1] = event;
   return report;
 }
 
@@ -374,6 +412,10 @@ async function pollAndPublishErrors(service: BridgeService): Promise<void> {
   }
 }
 
+async function pollShortcut(service: BridgeService): Promise<void> {
+  await (service as unknown as { pollShortcutEvent(): Promise<void> }).pollShortcutEvent();
+}
+
 async function flushReapply(): Promise<void> {
   await new Promise((resolve) => setTimeout(resolve, 0));
 }
@@ -387,6 +429,7 @@ describe('BridgeService', () => {
     hidMock.state.openDevices.clear();
     hidMock.devices.mockClear();
     hidMock.HID.mockClear();
+    winUsbTransportMock.open.mockClear();
     tempDirs = [];
     services = [];
   });
@@ -424,7 +467,7 @@ describe('BridgeService', () => {
     expect(service.getSnapshot().message).toBe('Companion firmware required');
   });
 
-  it('treats HID read errors as disconnects instead of fatal main-process errors', async () => {
+  it('treats WinUSB transport close as a bridge disconnect', async () => {
     const service = serviceFixture();
     const device = new MockHidDevice();
     hidMock.state.devicesList = [companionDeviceInfo()];
@@ -432,10 +475,34 @@ describe('BridgeService', () => {
 
     await poll(service);
 
-    device.emit('error', new Error('could not read from HID device'));
+    device.emit('close');
 
     expect(service.getSnapshot().state).toBe('no-bridge');
     expect(service.getSnapshot().message).toBe('No bridge detected');
+  });
+
+  it('does not mark the bridge disconnected when optional shortcut feature polling fails', async () => {
+    const service = serviceFixture();
+    const device = new MockHidDevice();
+    device.shortcutReadError = new Error('could not read from HID device');
+    hidMock.state.devicesList = [companionDeviceInfo()];
+    hidMock.state.openDevices.set('companion-path', device);
+
+    await poll(service);
+
+    expect(service.getSnapshot().state).toBe('connected');
+    expect(service.getSnapshot().message).toBe('Companion firmware connected');
+  });
+
+  it('does not start the companion interrupt input read loop', async () => {
+    const service = serviceFixture();
+    const device = new MockHidDevice();
+    hidMock.state.devicesList = [companionDeviceInfo()];
+    hidMock.state.openDevices.set('companion-path', device);
+
+    await poll(service);
+
+    expect(device.listenerCount('data')).toBe(0);
   });
 
   it('blocks emergency Windows device repair while a controller is connected to the bridge', async () => {
@@ -821,7 +888,8 @@ describe('BridgeService', () => {
     await poll(service);
     await service.setSleepKeybindEnabled(true);
 
-    device.emit('data', Buffer.from([REPORT_ID.INPUT, SHORTCUT_EVENT.SLEEP_CONTROLLER]));
+    device.queueShortcutEvent(SHORTCUT_EVENT.SLEEP_CONTROLLER);
+    await pollShortcut(service);
     await flushReapply();
     await flushReapply();
 
@@ -860,7 +928,8 @@ describe('BridgeService', () => {
     await service.setSpeakerVolumeShortcutEnabled(true);
     expect(service.getSnapshot().settings.speakerEnabled).toBe(true);
 
-    device.emit('data', Buffer.from([REPORT_ID.INPUT, SHORTCUT_EVENT.CONTROLLER_VOLUME_UP]));
+    device.queueShortcutEvent(SHORTCUT_EVENT.CONTROLLER_VOLUME_UP);
+    await pollShortcut(service);
     await flushReapply();
     await flushReapply();
 
@@ -997,8 +1066,7 @@ describe('BridgeService', () => {
     await poll(service);
     expect(toasts).toEqual([]);
 
-    hidMock.state.devicesList = [];
-    await poll(service);
+    device.emit('close');
     expect(toasts.at(-1)?.body).toBe('Controller disconnected');
 
     device.status = statusReport({ controllerConnected: true, uptimeSeconds: 1 });

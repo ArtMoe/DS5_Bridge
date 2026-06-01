@@ -3,13 +3,10 @@ import { EventEmitter } from 'node:events';
 import { existsSync, readFileSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
-import HID from 'node-hid';
 import {
   ACK_RESULT,
   AUDIO_DEBUG_EVENT,
   COMMAND_ID,
-  COMPANION_USAGE,
-  COMPANION_USAGE_PAGE,
   REPORT_ID,
   REPORT_LENGTH,
   MUTE_KEYBOARD_HOLD_FLAG,
@@ -70,6 +67,7 @@ import {
 import { CompanionDebugConfig } from './debug-config';
 import { HidDiscoveryClient } from './hid-discovery-client';
 import { SettingsStore, normalizeUiScalePercent } from './settings-store';
+import { WinUsbCompanionTransport } from './winusb-companion-transport';
 
 const POLL_INTERVAL_MS = 500;
 const HOST_AUDIO_HEARTBEAT_MS = 250;
@@ -106,7 +104,6 @@ const DUALSENSE_PRODUCT_IDS = new Set([0x0ce6, 0x0df2]);
 const WINDOWS_DEVICE_CLEANUP_RELATIVE_PATH = path.join('tools', 'windows', 'clean-ds5bridge-devices.ps1');
 const POWERSHELL_ERROR_OUTPUT_MAX_CHARS = 8192;
 const CLEANUP_LOG_EXCERPT_MAX_CHARS = 3000;
-type DiscoveredHidDevice = HidDeviceSummary;
 type BridgeDiagnosticsWithoutAudioLog = Omit<
   BridgeDiagnostics,
   | 'audioDebugLogPath'
@@ -183,10 +180,6 @@ const PRESET_SETTINGS: Record<Exclude<BridgePresetId, 'custom'>, Partial<Compani
     lightbarOverrideEnabled: true
   }
 };
-
-function isCompanionCandidate(device: HidDeviceSummary): boolean {
-  return device.usagePage === COMPANION_USAGE_PAGE && device.usage === COMPANION_USAGE && Boolean(device.path);
-}
 
 function isDualSenseDevice(device: HidDeviceSummary): boolean {
   return device.vendorId === SONY_VENDOR_ID
@@ -378,16 +371,6 @@ function formatMicDebugEvent(prefix: string, args: number[]): string {
     default:
       return `${prefix} [HostPico] MIC type=${type} arg1=${arg1} arg2=${arg2} arg3=${arg3} arg4=${arg4}`;
   }
-}
-
-function isExpectedHidDisconnectError(error: unknown): boolean {
-  if (!(error instanceof Error)) {
-    return false;
-  }
-  const message = error.message.toLowerCase();
-  return message.includes('could not read from hid device')
-    || message.includes('cannot read from hid device')
-    || message.includes('hid device disconnected');
 }
 
 function parseShortcutEvent(data: Buffer | number[]): ShortcutEvent | null {
@@ -866,7 +849,7 @@ async function runElevatedWindowsDeviceCleanup(scriptPath: string, logPath: stri
 }
 
 export class BridgeService extends EventEmitter {
-  private device: HID.HID | null = null;
+  private device: WinUsbCompanionTransport | null = null;
   private devicePath: string | null = null;
   private pollTimer: NodeJS.Timeout | null = null;
   private hostAudioHeartbeatTimer: NodeJS.Timeout | null = null;
@@ -916,6 +899,7 @@ export class BridgeService extends EventEmitter {
   private controllerPowerSavingActive: boolean | null = null;
   private previousControllerConnected: boolean | null = null;
   private lowBatteryToastActive = false;
+  private shortcutFeaturePollingAvailable = true;
   private volumeShortcutQueue: Promise<void> = Promise.resolve();
   private readonly shortcutActionHandlers: Record<ShortcutEvent, () => Promise<void>> = {
     [SHORTCUT_EVENT.CONTROLLER_VOLUME_DOWN]: () => this.applyControllerVolumeShortcut(-10),
@@ -952,28 +936,31 @@ export class BridgeService extends EventEmitter {
     });
   }
 
-  private readonly handleCompanionInputData = (data: Buffer | number[]): void => {
-    const event = parseShortcutEvent(data);
-    if (event === null) {
-      return;
-    }
+  private enqueueShortcutEvent(event: ShortcutEvent): void {
     this.volumeShortcutQueue = this.volumeShortcutQueue
       .catch(() => {
         // Keep later shortcut events alive after a failed command.
       })
       .then(() => this.dispatchShortcutAction(event));
-  };
+  }
 
-  private readonly handleCompanionDeviceError = (error: Error): void => {
-    if (!isExpectedHidDisconnectError(error)) {
-      this.publishError(error);
+  private async pollShortcutEvent(): Promise<void> {
+    const device = this.device;
+    if (!device || !this.shortcutFeaturePollingAvailable) {
       return;
     }
 
-    this.closeDevice();
-    this.markBridgeUnavailableAfterDisconnect([]);
-    this.emitSnapshot();
-  };
+    try {
+      const event = parseShortcutEvent(await device.getFeatureReport(REPORT_ID.INPUT, REPORT_LENGTH));
+      if (event !== null) {
+        this.enqueueShortcutEvent(event);
+      }
+    } catch {
+      // Shortcut polling is optional and should never make the bridge look
+      // disconnected on its own.
+      this.shortcutFeaturePollingAvailable = false;
+    }
+  }
 
   start(): void {
     this.poll().catch((error) => this.publishError(error));
@@ -1074,7 +1061,7 @@ export class BridgeService extends EventEmitter {
     };
   }
 
-  private readAudioDebugEvents(): void {
+  private async readAudioDebugEvents(): Promise<void> {
     if (!AUDIO_DEBUG_DIAGNOSTICS_ENABLED) {
       return;
     }
@@ -1083,7 +1070,7 @@ export class BridgeService extends EventEmitter {
     }
 
     try {
-      const debug = parseAudioDebugReport(this.device.getFeatureReport(REPORT_ID.AUDIO_DEBUG, REPORT_LENGTH));
+      const debug = parseAudioDebugReport(await this.device.getFeatureReport(REPORT_ID.AUDIO_DEBUG, REPORT_LENGTH));
       this.audioDebugDroppedCount = debug.droppedCount;
       this.appendAudioDebugLines(debug.events.map(formatAudioDebugEvent));
     } catch {
@@ -1091,7 +1078,7 @@ export class BridgeService extends EventEmitter {
     }
   }
 
-  private readAudioDebugStats(): void {
+  private async readAudioDebugStats(): Promise<void> {
     if (!AUDIO_DEBUG_DIAGNOSTICS_ENABLED) {
       return;
     }
@@ -1100,7 +1087,7 @@ export class BridgeService extends EventEmitter {
     }
 
     try {
-      const stats = parseAudioStatsReport(this.device.getFeatureReport(REPORT_ID.AUDIO_STATS, REPORT_LENGTH));
+      const stats = parseAudioStatsReport(await this.device.getFeatureReport(REPORT_ID.AUDIO_STATS, REPORT_LENGTH));
       this.audioDebugStats = stats;
       const signature = JSON.stringify(stats);
       if (signature !== this.lastAudioStatsSignature) {
@@ -1112,7 +1099,7 @@ export class BridgeService extends EventEmitter {
     }
   }
 
-  private readAudioDebugThrottled(force = false): void {
+  private async readAudioDebugThrottled(force = false): Promise<void> {
     if (!AUDIO_DEBUG_DIAGNOSTICS_ENABLED) {
       return;
     }
@@ -1121,8 +1108,8 @@ export class BridgeService extends EventEmitter {
       return;
     }
     this.lastAudioDebugReadAt = now;
-    this.readAudioDebugEvents();
-    this.readAudioDebugStats();
+    await this.readAudioDebugEvents();
+    await this.readAudioDebugStats();
   }
 
   private appendTriggerTraceLines(lines: string[]): void {
@@ -1140,7 +1127,7 @@ export class BridgeService extends EventEmitter {
     };
   }
 
-  private readTriggerTraceThrottled(force = false): void {
+  private async readTriggerTraceThrottled(force = false): Promise<void> {
     if (!TRIGGER_TRACE_DIAGNOSTICS_ENABLED) {
       return;
     }
@@ -1159,7 +1146,7 @@ export class BridgeService extends EventEmitter {
     try {
       const lines: string[] = [];
       for (let readIndex = 0; readIndex < TRIGGER_TRACE_MAX_READS_PER_POLL; readIndex += 1) {
-        const trace = parseTriggerTraceReport(this.device.getFeatureReport(REPORT_ID.TRIGGER_TRACE, REPORT_LENGTH));
+        const trace = parseTriggerTraceReport(await this.device.getFeatureReport(REPORT_ID.TRIGGER_TRACE, REPORT_LENGTH));
         this.triggerTraceSupported = true;
         this.triggerTraceDroppedCount = trace.droppedCount;
         if (trace.events.length === 0) {
@@ -1188,7 +1175,7 @@ export class BridgeService extends EventEmitter {
     };
   }
 
-  private readFeedbackTraceThrottled(force = false): void {
+  private async readFeedbackTraceThrottled(force = false): Promise<void> {
     if (!FEEDBACK_TRACE_DIAGNOSTICS_ENABLED) {
       return;
     }
@@ -1207,7 +1194,7 @@ export class BridgeService extends EventEmitter {
     try {
       const lines: string[] = [];
       for (let readIndex = 0; readIndex < FEEDBACK_TRACE_MAX_READS_PER_POLL; readIndex += 1) {
-        const trace = parseFeedbackTraceReport(this.device.getFeatureReport(REPORT_ID.FEEDBACK_TRACE, REPORT_LENGTH));
+        const trace = parseFeedbackTraceReport(await this.device.getFeatureReport(REPORT_ID.FEEDBACK_TRACE, REPORT_LENGTH));
         this.feedbackTraceSupported = true;
         this.feedbackTraceDroppedCount = trace.droppedCount;
         if (trace.events.length === 0) {
@@ -1221,7 +1208,7 @@ export class BridgeService extends EventEmitter {
     }
   }
 
-  private readHostAudioStatus(): void {
+  private async readHostAudioStatus(): Promise<void> {
     if (!this.device) {
       this.hostAudioStatus = null;
       return;
@@ -1229,7 +1216,7 @@ export class BridgeService extends EventEmitter {
 
     try {
       const status = parseHostAudioStatusReport(
-        this.device.getFeatureReport(REPORT_ID.HOST_AUDIO_STATUS, REPORT_LENGTH)
+        await this.device.getFeatureReport(REPORT_ID.HOST_AUDIO_STATUS, REPORT_LENGTH)
       );
       this.hostAudioStatus = status;
       this.lastHostAudioStatusReadAt = Date.now();
@@ -1238,11 +1225,11 @@ export class BridgeService extends EventEmitter {
     }
   }
 
-  private readHostAudioStatusThrottled(force = false, intervalMs = HOST_AUDIO_STATUS_READ_INTERVAL_MS): void {
+  private async readHostAudioStatusThrottled(force = false, intervalMs = HOST_AUDIO_STATUS_READ_INTERVAL_MS): Promise<void> {
     if (!force && Date.now() - this.lastHostAudioStatusReadAt < intervalMs) {
       return;
     }
-    this.readHostAudioStatus();
+    await this.readHostAudioStatus();
   }
 
   private isControllerPowerSavingActive(settings: CompanionSettings): boolean {
@@ -1496,7 +1483,7 @@ export class BridgeService extends EventEmitter {
       hostEncodedAudioEnabled: enabled,
       duplexMicEnabled: enabled ? this.snapshot.settings.duplexMicEnabled : false
     }));
-    this.readHostAudioStatus();
+    await this.readHostAudioStatus();
     await this.updateHostAudioEngine();
     this.emitSnapshot();
     return this.getSnapshot();
@@ -1518,7 +1505,7 @@ export class BridgeService extends EventEmitter {
         expectSettingsRevisionChange: true
       });
     }
-    this.sendHostAudioStreamReport(
+    await this.sendHostAudioStreamReport(
       nextEnabled ? HOST_AUDIO_PACKET_TYPE.SET_DUPLEX_ENABLED : HOST_AUDIO_PACKET_TYPE.SET_DUPLEX_DISABLED
     );
     this.snapshot.settings = this.settingsStore.update(customSettingUpdate({
@@ -1530,7 +1517,7 @@ export class BridgeService extends EventEmitter {
     } else {
       await this.micKeepaliveEngine.stop();
     }
-    this.readHostAudioStatus();
+    await this.readHostAudioStatus();
     this.emitSnapshot();
     return this.getSnapshot();
   }
@@ -1954,8 +1941,8 @@ export class BridgeService extends EventEmitter {
 
     const sequence = this.nextSequence();
     const previousSettingsRevision = this.snapshot.diagnostics.settingsRevision;
-    this.device.sendFeatureReport(buildCommandReport(commandId, sequence, value, options.extraPayload));
-    const ack = parseAckReport(this.device.getFeatureReport(REPORT_ID.ACK, REPORT_LENGTH));
+    await this.device.sendFeatureReport(buildCommandReport(commandId, sequence, value, options.extraPayload));
+    const ack = parseAckReport(await this.device.getFeatureReport(REPORT_ID.ACK, REPORT_LENGTH));
     this.snapshot.diagnostics.lastAck = ack;
     this.snapshot.diagnostics.settingsRevision = ack.settingsRevision;
     this.snapshot.diagnostics.lastError = ack.resultCode === ACK_RESULT.OK ? null : ackUserMessage(ack.resultCode);
@@ -1980,21 +1967,19 @@ export class BridgeService extends EventEmitter {
     return ack;
   }
 
-  private writeHostAudioStreamReport(report: number[]): boolean {
+  private async writeHostAudioStreamReport(report: number[]): Promise<boolean> {
     if (!this.device) {
       return false;
     }
     try {
-      this.device.write(report);
+      await this.device.write(report);
       return true;
     } catch {
-      // Older firmware exposes only feature reports. The status path will show
-      // fallback if the interrupt OUT stream is unavailable.
       return false;
     }
   }
 
-  private sendHostAudioStreamReport(packetType: number): boolean {
+  private sendHostAudioStreamReport(packetType: number): Promise<boolean> {
     return this.writeHostAudioStreamReport(buildHostAudioStreamReport({ packetType }));
   }
 
@@ -2020,21 +2005,21 @@ export class BridgeService extends EventEmitter {
     }
     this.hostAudioReportQueue.push(...reports);
     this.logHostAudioStage('enqueue');
-    this.pumpHostAudioReports();
+    void this.pumpHostAudioReports();
   }
 
-  private pumpHostAudioReports(): void {
+  private async pumpHostAudioReports(): Promise<void> {
     if (this.hostAudioWritePumpActive) {
       return;
     }
     this.hostAudioWritePumpActive = true;
-    const pump = () => {
+    const pump = async () => {
       const report = this.hostAudioReportQueue.shift();
       if (!report) {
         this.hostAudioWritePumpActive = false;
         return;
       }
-      if (!this.writeHostAudioStreamReport(report)) {
+      if (!(await this.writeHostAudioStreamReport(report))) {
         this.hostAudioReportQueue = [];
         this.hostAudioWritePumpActive = false;
         this.hostAudioCommandActive = false;
@@ -2043,9 +2028,13 @@ export class BridgeService extends EventEmitter {
       }
       this.hostAudioChunkWriteCount++;
       this.logHostAudioStage('write');
-      setImmediate(pump);
+      setImmediate(() => {
+        void pump();
+      });
     };
-    setImmediate(pump);
+    setImmediate(() => {
+      void pump();
+    });
   }
 
   private logHostAudioStage(stage: string): void {
@@ -2141,7 +2130,7 @@ export class BridgeService extends EventEmitter {
     await this.sendCommand(COMMAND_ID.STOP_HOST_AUDIO, 0, { throwOnCommandError: false });
     await this.sendCommand(COMMAND_ID.SET_HOST_AUDIO_ENABLED, 0, { throwOnCommandError: false });
     await this.sendCommand(COMMAND_ID.SET_DUPLEX_ENABLED, 0, { throwOnCommandError: false });
-    this.readHostAudioStatus();
+    await this.readHostAudioStatus();
   }
 
   private async updateHostAudioEngine(): Promise<void> {
@@ -2160,12 +2149,12 @@ export class BridgeService extends EventEmitter {
     const duplexEnabled = settings.duplexMicEnabled;
     const captureReady = await this.ensureHostAudioCapture(speakerVolumePercent);
     if (!captureReady) {
-      this.readHostAudioStatus();
+      await this.readHostAudioStatus();
       return;
     }
     if (this.hostAudioCommandActive) {
       await this.hostAudioEngine.start(this.devicePath, speakerVolumePercent);
-      this.readHostAudioStatus();
+      await this.readHostAudioStatus();
       return;
     }
 
@@ -2175,12 +2164,12 @@ export class BridgeService extends EventEmitter {
     await this.sendCommand(COMMAND_ID.START_HOST_AUDIO, 0, { throwOnCommandError: false });
     await this.sendCommand(COMMAND_ID.SET_DUPLEX_ENABLED, duplexEnabled ? 1 : 0, { throwOnCommandError: false });
     await this.sendCommand(COMMAND_ID.HOST_AUDIO_HEARTBEAT, 0, { throwOnCommandError: false });
-    this.sendHostAudioStreamReport(HOST_AUDIO_PACKET_TYPE.HELLO);
-    this.sendHostAudioStreamReport(
+    await this.sendHostAudioStreamReport(HOST_AUDIO_PACKET_TYPE.HELLO);
+    await this.sendHostAudioStreamReport(
       duplexEnabled ? HOST_AUDIO_PACKET_TYPE.SET_DUPLEX_ENABLED : HOST_AUDIO_PACKET_TYPE.SET_DUPLEX_DISABLED
     );
-    this.sendHostAudioStreamReport(HOST_AUDIO_PACKET_TYPE.HEARTBEAT);
-    this.readHostAudioStatus();
+    await this.sendHostAudioStreamReport(HOST_AUDIO_PACKET_TYPE.HEARTBEAT);
+    await this.readHostAudioStatus();
   }
 
   private async stopHostAudioSession(expectSettingsRevisionChange: boolean): Promise<void> {
@@ -2197,7 +2186,7 @@ export class BridgeService extends EventEmitter {
     this.hostAudioCommandActive = false;
     await this.hostAudioEngine.stop();
     await this.micKeepaliveEngine.stop();
-    this.readHostAudioStatus();
+    await this.readHostAudioStatus();
   }
 
   private async fadeOutHostAudioSpeaker(): Promise<void> {
@@ -2249,12 +2238,12 @@ export class BridgeService extends EventEmitter {
         if (this.hostAudioCommandActive) {
           await this.deactivateHostAudioFirmwareAfterCaptureFailure();
         }
-        this.readHostAudioStatusThrottled(!this.hostAudioCommandActive);
+        await this.readHostAudioStatusThrottled(!this.hostAudioCommandActive);
         return;
       }
       const helperWasActive = this.hostAudioEngine.isActive();
       if (!helperWasActive) {
-        this.readHostAudioStatusThrottled(!this.hostAudioCommandActive);
+        await this.readHostAudioStatusThrottled(!this.hostAudioCommandActive);
       }
       if (!this.hostAudioCommandActive || (!helperWasActive && this.hostAudioStatus?.streamActive === false)) {
         const speakerVolumePercent = settings.speakerEnabled ? settings.speakerVolumePercent : 0;
@@ -2266,21 +2255,22 @@ export class BridgeService extends EventEmitter {
         this.hostAudioCommandActive = true;
         await this.sendCommand(COMMAND_ID.START_HOST_AUDIO, 0, { throwOnCommandError: false });
         await this.sendCommand(COMMAND_ID.SET_DUPLEX_ENABLED, settings.duplexMicEnabled ? 1 : 0, { throwOnCommandError: false });
-        this.readHostAudioStatus();
+        await this.readHostAudioStatus();
       } else {
         await this.updateHostAudioEngine();
       }
       const helperIsActive = this.hostAudioEngine.isActive();
       if (!helperIsActive) {
-        this.sendHostAudioStreamReport(HOST_AUDIO_PACKET_TYPE.HEARTBEAT);
+        await this.sendHostAudioStreamReport(HOST_AUDIO_PACKET_TYPE.HEARTBEAT);
       }
       if (this.hostAudioCommandActive) {
         await this.sendCommand(COMMAND_ID.HOST_AUDIO_HEARTBEAT, 0, { throwOnCommandError: false });
       }
-      this.readHostAudioStatusThrottled(
+      await this.readHostAudioStatusThrottled(
         false,
         helperIsActive ? HOST_AUDIO_HELPER_STATUS_READ_INTERVAL_MS : HOST_AUDIO_STATUS_READ_INTERVAL_MS
       );
+      await this.pollShortcutEvent();
     } finally {
       this.hostAudioHeartbeatBusy = false;
     }
@@ -2302,19 +2292,13 @@ export class BridgeService extends EventEmitter {
     this.lastHostAudioActivePollAt = now;
 
     const rawDevices = await this.hidDiscovery.listDevices();
-    const devices = rawDevices;
-    const companionDevices = devices.filter(isCompanionCandidate);
-
-    if (companionDevices.length === 0) {
-      this.closeDevice();
-      const normalFirmwarePresent = devices.some(isDualSenseDevice);
-      this.markBridgeUnavailableAfterDisconnect(rawDevices, normalFirmwarePresent);
-      this.emitSnapshot();
-      return;
-    }
-
-    const status = await this.openAndReadStatus(companionDevices);
-    if (!status) {
+    let status: BridgeStatusPayload | null;
+    try {
+      status = await this.openAndReadStatus();
+    } catch (error) {
+      if (!(error instanceof ProtocolError)) {
+        throw error;
+      }
       this.noteControllerUnavailableForToasts();
       this.snapshot = {
         state: 'incompatible',
@@ -2324,10 +2308,17 @@ export class BridgeService extends EventEmitter {
         diagnostics: this.withAudioDebugDiagnostics({
           ...emptyDiagnostics(rawDevices),
           hidPath: this.devicePath,
-          lastError: 'No companion device returned a supported DS5B status report',
+          lastError: error.message,
           lastPollAt: Date.now()
         })
       };
+      this.emitSnapshot();
+      return;
+    }
+    if (!status) {
+      this.closeDevice();
+      const normalFirmwarePresent = rawDevices.some(isDualSenseDevice);
+      this.markBridgeUnavailableAfterDisconnect(rawDevices, normalFirmwarePresent);
       this.emitSnapshot();
       return;
     }
@@ -2354,16 +2345,16 @@ export class BridgeService extends EventEmitter {
       return;
     }
 
-    this.readTriggerTraceThrottled();
-    this.readFeedbackTraceThrottled();
+    await this.readTriggerTraceThrottled();
+    await this.readFeedbackTraceThrottled();
     if (hostAudioActive) {
-      this.readAudioDebugThrottled();
+      await this.readAudioDebugThrottled();
     }
     if (hostAudioActive && !this.hostAudioEngine.isActive()) {
-      this.readHostAudioStatusThrottled();
+      await this.readHostAudioStatusThrottled();
     } else if (!hostAudioActive) {
-      this.readAudioDebugThrottled(true);
-      this.readHostAudioStatus();
+      await this.readAudioDebugThrottled(true);
+      await this.readHostAudioStatus();
     }
     this.maybeEmitStatusToasts(status);
 
@@ -2415,41 +2406,42 @@ export class BridgeService extends EventEmitter {
       this.reapplyAttempt = 0;
       this.nextReapplyAt = 0;
     }
+    if (!hostAudioActive) {
+      await this.pollShortcutEvent();
+    }
   }
 
   private async ensureCompanionDevice(): Promise<void> {
     if (this.device) {
       return;
     }
-    const devices = (await this.hidDiscovery.listDevices()).filter(isCompanionCandidate);
-    await this.openAndReadStatus(devices);
+    await this.openAndReadStatus();
   }
 
-  private async openAndReadStatus(devices: DiscoveredHidDevice[]) {
-    for (const candidate of devices) {
-      if (!candidate.path) {
-        continue;
-      }
-      try {
-        if (this.devicePath !== candidate.path) {
+  private async openAndReadStatus() {
+    try {
+      if (!this.device) {
+        this.device = await WinUsbCompanionTransport.open();
+        this.device.on('error', (error: Error) => this.publishError(error));
+        this.device.on('close', () => {
           this.closeDevice();
-          this.device = new HID.HID(candidate.path);
-          this.device.on('data', this.handleCompanionInputData);
-          this.device.on('error', this.handleCompanionDeviceError);
-          this.devicePath = candidate.path;
-          this.lastUptimeSeconds = null;
-          this.sessionKey = null;
-          this.sessionPath = null;
-          this.resetStartupReapplyState();
-        }
-        const status = parseStatusReport(this.device!.getFeatureReport(REPORT_ID.STATUS, REPORT_LENGTH));
-        return status;
-      } catch (error) {
-        if (error instanceof ProtocolError && error.code === 'bad-version') {
-          throw error;
-        }
-        this.closeDevice();
+          this.markBridgeUnavailableAfterDisconnect([]);
+          this.emitSnapshot();
+        });
+        this.devicePath = this.device.path;
+        this.shortcutFeaturePollingAvailable = true;
+        this.lastUptimeSeconds = null;
+        this.sessionKey = null;
+        this.sessionPath = null;
+        this.resetStartupReapplyState();
       }
+      const status = parseStatusReport(await this.device.getFeatureReport(REPORT_ID.STATUS, REPORT_LENGTH));
+      return status;
+    } catch (error) {
+      if (error instanceof ProtocolError) {
+        throw error;
+      }
+      this.closeDevice();
     }
     return null;
   }
@@ -2667,16 +2659,16 @@ export class BridgeService extends EventEmitter {
   }
 
   private closeDevice(): void {
-    if (this.device) {
+    const device = this.device;
+    this.device = null;
+    if (device) {
       try {
-        this.device.removeAllListeners('data');
-        this.device.removeAllListeners('error');
-        this.device.close();
+        device.removeAllListeners();
+        device.close();
       } catch {
-        // Ignore close races while Windows removes the HID path.
+        // Ignore close races while Windows removes the WinUSB path.
       }
     }
-    this.device = null;
     this.devicePath = null;
     this.hostAudioCommandActive = false;
     this.hostAudioStatus = null;

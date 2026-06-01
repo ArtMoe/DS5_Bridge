@@ -80,7 +80,9 @@ option(ENABLE_COMPANION "Enable the optional companion HID interface" OFF)
 if(ENABLE_COMPANION)
     target_sources(ds5-bridge PRIVATE
             src/companion.cpp
+            src/host_bridge.cpp
             src/host_pcm_iso.cpp
+            src/usb_app_drivers.cpp
     )
     target_compile_definitions(ds5-bridge PRIVATE
             ENABLE_COMPANION

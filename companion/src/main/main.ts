@@ -62,6 +62,14 @@ function createRuntimeIcon(): Electron.NativeImage {
   return createImageAsset(APP_MARK_PNG);
 }
 
+function sendToMainWindow(channel: string, ...args: unknown[]): void {
+  const window = mainWindow;
+  if (!window || window.isDestroyed() || window.webContents.isDestroyed()) {
+    return;
+  }
+  window.webContents.send(channel, ...args);
+}
+
 async function createTrayIcon(): Promise<Electron.NativeImage> {
   const icon = createRuntimeIcon();
   if (!icon.isEmpty()) {
@@ -686,7 +694,7 @@ app.whenReady().then(async () => {
   tray.on('click', showWindowCentered);
 
   bridgeService.on('snapshot', (snapshot) => {
-    mainWindow?.webContents.send('bridge:snapshot', snapshot);
+    sendToMainWindow('bridge:snapshot', snapshot);
   });
   bridgeService.on('toast', (toast) => {
     showBridgeNotification(toast);

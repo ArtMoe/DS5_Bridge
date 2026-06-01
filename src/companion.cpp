@@ -1332,6 +1332,17 @@ uint16_t build_ack(uint8_t *buffer, uint16_t reqlen) {
     return COMPANION_PAYLOAD_SIZE;
 }
 
+uint16_t build_shortcut_event(uint8_t *buffer, uint16_t reqlen) {
+    if (reqlen < COMPANION_PAYLOAD_SIZE) {
+        return 0;
+    }
+
+    memset(buffer, 0, COMPANION_PAYLOAD_SIZE);
+    buffer[0] = pending_shortcut_event;
+    pending_shortcut_event = 0;
+    return COMPANION_PAYLOAD_SIZE;
+}
+
 #if DS5_AUDIO_DEBUG_ENABLED
 uint16_t build_audio_debug(uint8_t *buffer, uint16_t reqlen) {
     if (reqlen < COMPANION_PAYLOAD_SIZE) {
@@ -2161,12 +2172,6 @@ void companion_init() {
 }
 
 void companion_loop() {
-    if (pending_shortcut_event != 0 && tud_hid_n_ready(COMPANION_HID_INSTANCE)) {
-        const uint8_t event = pending_shortcut_event;
-        if (tud_hid_n_report(COMPANION_HID_INSTANCE, COMPANION_REPORT_INPUT, &event, 1)) {
-            pending_shortcut_event = 0;
-        }
-    }
     audio_test_haptics_loop();
     classic_rumble_test_loop();
     mute_keyboard_loop();
@@ -2411,14 +2416,6 @@ bool companion_lightbar_override_enabled() {
 }
 
 uint16_t companion_get_report(uint8_t report_id, hid_report_type_t report_type, uint8_t *buffer, uint16_t reqlen) {
-    if (report_type == HID_REPORT_TYPE_INPUT && report_id == COMPANION_REPORT_INPUT) {
-        if (reqlen < 1) {
-            return 0;
-        }
-        buffer[0] = 0;
-        return 1;
-    }
-
     if (report_type != HID_REPORT_TYPE_FEATURE) {
         return 0;
     }
@@ -2428,6 +2425,8 @@ uint16_t companion_get_report(uint8_t report_id, hid_report_type_t report_type, 
             return build_status(buffer, reqlen);
         case COMPANION_REPORT_ACK:
             return build_ack(buffer, reqlen);
+        case COMPANION_REPORT_INPUT:
+            return build_shortcut_event(buffer, reqlen);
 #if DS5_AUDIO_DEBUG_ENABLED
         case COMPANION_REPORT_AUDIO_DEBUG:
             return build_audio_debug(buffer, reqlen);

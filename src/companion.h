@@ -5,8 +5,7 @@
 #include "tusb.h"
 #include "debug_config.h"
 
-#define COMPANION_HID_INSTANCE 1
-#define KEYBOARD_HID_INSTANCE 2
+#define KEYBOARD_HID_INSTANCE 1
 #define COMPANION_REPORT_STATUS 0x01
 #define COMPANION_REPORT_COMMAND 0x02
 #define COMPANION_REPORT_ACK 0x03

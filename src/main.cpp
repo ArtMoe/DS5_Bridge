@@ -182,9 +182,6 @@ uint16_t tud_hid_get_report_cb(uint8_t itf, uint8_t report_id, hid_report_type_t
     (void) reqlen;
 
 #ifdef ENABLE_COMPANION
-    if (itf == COMPANION_HID_INSTANCE) {
-        return companion_get_report(report_id, report_type, buffer, reqlen);
-    }
     if (itf == KEYBOARD_HID_INSTANCE) {
         return 0;
     }
@@ -222,10 +219,6 @@ void tud_hid_set_report_cb(uint8_t itf, uint8_t report_id, hid_report_type_t rep
     (void) bufsize;
 
 #ifdef ENABLE_COMPANION
-    if (itf == COMPANION_HID_INSTANCE) {
-        companion_set_report(report_id, report_type, buffer, bufsize);
-        return;
-    }
     if (itf == KEYBOARD_HID_INSTANCE) {
         return;
     }

@@ -10,6 +10,11 @@ using NAudio.CoreAudioApi;
 using NAudio.Wave;
 
 var options = HelperOptions.Parse(args);
+if (options.CompanionTransportServer)
+{
+    await CompanionTransportServer.RunAsync();
+    return;
+}
 if (options.PlayTestTone)
 {
     HostAudioTestTone.Play(options);
@@ -135,6 +140,7 @@ sealed class HostAudioHelper : IDisposable
     private Task? directCaptureTask;
     private Task? bulkPcmTask;
     private Task? pcmEncoderTask;
+    private WinUsbBridgeTransport? bridgeTransport;
     private HidStream? hidStream;
     private int picoBlockFrameIndex;
     private bool picoBlockHasHaptics;
@@ -274,6 +280,7 @@ sealed class HostAudioHelper : IDisposable
         frameDump?.Dispose();
         rawCaptureDump?.Dispose();
         bulkPcmTransport?.Dispose();
+        bridgeTransport?.Dispose();
         enumerator?.Dispose();
         reportQueue.CompleteAdding();
         try
@@ -298,7 +305,7 @@ sealed class HostAudioHelper : IDisposable
             return;
         }
 
-        TryOpenCompanionHid();
+        TryOpenCompanionOutput();
         string deviceName = options.DeviceName ?? options.SourceArgument;
         try
         {
@@ -425,8 +432,17 @@ sealed class HostAudioHelper : IDisposable
         }
     }
 
-    private void TryOpenCompanionHid()
+    private void TryOpenCompanionOutput()
     {
+        bridgeTransport = WinUsbBridgeTransport.TryOpen();
+        if (bridgeTransport is not null)
+        {
+            if (AudioConstants.DiagnosticsEnabled)
+            {
+                Console.Error.WriteLine($"status: WinUSB bridge direct output active path='{bridgeTransport.DevicePath}'");
+            }
+            return;
+        }
         hidStream = PicoTransport.TryOpenDirectHid(options.HidPath);
     }
 
@@ -1316,7 +1332,7 @@ sealed class HostAudioHelper : IDisposable
                 }
 
                 var frameWritten = false;
-                if (hidStream is not null)
+                if (bridgeTransport is not null || hidStream is not null)
                 {
                     frameWritten = TryWriteFrameToHid(frame);
                 }
@@ -1378,6 +1394,22 @@ sealed class HostAudioHelper : IDisposable
 
     private bool TryWriteHidReport(byte[] report)
     {
+        var winUsb = bridgeTransport;
+        if (winUsb is not null)
+        {
+            try
+            {
+                winUsb.WriteReport(report);
+                return true;
+            }
+            catch (Exception error)
+            {
+                Console.Error.WriteLine($"status: WinUSB bridge direct output failed: {error.GetType().Name}: {error.Message}; using stdout frame transport");
+                DisableBridgeTransport();
+                return false;
+            }
+        }
+
         var stream = hidStream;
         if (stream is null)
         {
@@ -1507,6 +1539,19 @@ sealed class HostAudioHelper : IDisposable
         PicoTransport.DisposeQuietly(stream);
     }
 
+    private void DisableBridgeTransport()
+    {
+        var transport = bridgeTransport;
+        bridgeTransport = null;
+        try
+        {
+            transport?.Dispose();
+        }
+        catch
+        {
+        }
+    }
+
     private static void UpdateMax(ref long target, long value)
     {
         while (true)
@@ -1552,8 +1597,9 @@ sealed class HostAudioHelper : IDisposable
             var micPeak = Interlocked.Exchange(ref micPeakPermille, 0);
             var writerState = writerTask.IsFaulted ? "faulted" : writerTask.IsCompleted ? "stopped" : "running";
             var encoderState = pcmEncoderTask is null ? "inline" : pcmEncoderTask.IsFaulted ? "faulted" : pcmEncoderTask.IsCompleted ? "stopped" : "running";
+            var outputTransport = bridgeTransport is not null ? "winusb" : hidStream is not null ? "hid" : "stdout";
             Console.Error.WriteLine(
-                $"stage=helper transport={(hidStream is null ? "stdout" : "hid")} writer={writerState} encoder={encoderState} callbacks={Interlocked.Read(ref capturedCallbacks)} capturedFrames={Interlocked.Read(ref capturedFrames)} encodedReports={Interlocked.Read(ref encodedReports)} queuedReports={reportQueue.Count} droppedReports={Interlocked.Read(ref droppedReports)} writtenReports={Interlocked.Read(ref writtenReports)} writtenFragments={Interlocked.Read(ref writtenFragments)} writeLateEvents={Interlocked.Read(ref writeLateEvents)} maxWriteLateUs={Interlocked.Read(ref maxWriteLateUs)} captureGapMaxUs={Interlocked.Read(ref captureCallbackGapMaxUs)} captureGapOver12ms={Interlocked.Read(ref captureCallbackGapOver12msEvents)} captureGapOver16ms={Interlocked.Read(ref captureCallbackGapOver16msEvents)} captureGapOver20ms={Interlocked.Read(ref captureCallbackGapEvents)} captureWakeCount={Interlocked.Read(ref captureWakeCount)} capturePacketsDrained={Interlocked.Read(ref capturePacketsDrained)} captureMaxPacketsPerWake={Interlocked.Read(ref captureMaxPacketsPerWake)} captureFramesDrained={Interlocked.Read(ref captureFramesDrained)} captureDiscontinuityPackets={Interlocked.Read(ref captureDiscontinuityPackets)} captureSilentPackets={Interlocked.Read(ref captureSilentPackets)} bulkReadCalls={Interlocked.Read(ref bulkPcmReadCalls)} bulkReadBytes={Interlocked.Read(ref bulkPcmReadBytes)} bulkParsedPackets={Interlocked.Read(ref bulkPcmParsedPackets)} bulkSequenceGaps={Interlocked.Read(ref bulkPcmSequenceGaps)} bulkGapFillPackets={Interlocked.Read(ref bulkPcmGapFillPackets)} pcmQueuedChunks={Interlocked.Read(ref pcmQueuedChunks)} pcmDroppedChunks={Interlocked.Read(ref pcmDroppedChunks)} pcmQueueMaxChunks={Interlocked.Read(ref pcmQueueMaxChunks)} pcmQueueCurrentChunks={pcmQueue.Count} writerScheduleLateOver2ms={Interlocked.Read(ref writerScheduleLateOver2msEvents)} writerScheduleLateOver4ms={Interlocked.Read(ref writerScheduleLateOver4msEvents)} writerScheduleLateOver8ms={Interlocked.Read(ref writerScheduleLateEvents)} writerScheduleLateMaxUs={Interlocked.Read(ref writerScheduleLateMaxUs)} hidWriteOver2ms={Interlocked.Read(ref hidWriteOver2msEvents)} hidWriteOver4ms={Interlocked.Read(ref hidWriteOver4msEvents)} hidWriteOver8ms={Interlocked.Read(ref hidWriteLateEvents)} hidWriteTimeouts={Interlocked.Read(ref hidWriteTimeouts)} hidWriteMaxUs={Interlocked.Read(ref hidWriteLateMaxUs)} peakPermille={peak} micCallbacks={Interlocked.Read(ref micCallbacks)} micCapturedFrames={Interlocked.Read(ref micCapturedFrames)} micPeakPermille={micPeak}");
+                $"stage=helper transport={outputTransport} writer={writerState} encoder={encoderState} callbacks={Interlocked.Read(ref capturedCallbacks)} capturedFrames={Interlocked.Read(ref capturedFrames)} encodedReports={Interlocked.Read(ref encodedReports)} queuedReports={reportQueue.Count} droppedReports={Interlocked.Read(ref droppedReports)} writtenReports={Interlocked.Read(ref writtenReports)} writtenFragments={Interlocked.Read(ref writtenFragments)} writeLateEvents={Interlocked.Read(ref writeLateEvents)} maxWriteLateUs={Interlocked.Read(ref maxWriteLateUs)} captureGapMaxUs={Interlocked.Read(ref captureCallbackGapMaxUs)} captureGapOver12ms={Interlocked.Read(ref captureCallbackGapOver12msEvents)} captureGapOver16ms={Interlocked.Read(ref captureCallbackGapOver16msEvents)} captureGapOver20ms={Interlocked.Read(ref captureCallbackGapEvents)} captureWakeCount={Interlocked.Read(ref captureWakeCount)} capturePacketsDrained={Interlocked.Read(ref capturePacketsDrained)} captureMaxPacketsPerWake={Interlocked.Read(ref captureMaxPacketsPerWake)} captureFramesDrained={Interlocked.Read(ref captureFramesDrained)} captureDiscontinuityPackets={Interlocked.Read(ref captureDiscontinuityPackets)} captureSilentPackets={Interlocked.Read(ref captureSilentPackets)} bulkReadCalls={Interlocked.Read(ref bulkPcmReadCalls)} bulkReadBytes={Interlocked.Read(ref bulkPcmReadBytes)} bulkParsedPackets={Interlocked.Read(ref bulkPcmParsedPackets)} bulkSequenceGaps={Interlocked.Read(ref bulkPcmSequenceGaps)} bulkGapFillPackets={Interlocked.Read(ref bulkPcmGapFillPackets)} pcmQueuedChunks={Interlocked.Read(ref pcmQueuedChunks)} pcmDroppedChunks={Interlocked.Read(ref pcmDroppedChunks)} pcmQueueMaxChunks={Interlocked.Read(ref pcmQueueMaxChunks)} pcmQueueCurrentChunks={pcmQueue.Count} writerScheduleLateOver2ms={Interlocked.Read(ref writerScheduleLateOver2msEvents)} writerScheduleLateOver4ms={Interlocked.Read(ref writerScheduleLateOver4msEvents)} writerScheduleLateOver8ms={Interlocked.Read(ref writerScheduleLateEvents)} writerScheduleLateMaxUs={Interlocked.Read(ref writerScheduleLateMaxUs)} hidWriteOver2ms={Interlocked.Read(ref hidWriteOver2msEvents)} hidWriteOver4ms={Interlocked.Read(ref hidWriteOver4msEvents)} hidWriteOver8ms={Interlocked.Read(ref hidWriteLateEvents)} hidWriteTimeouts={Interlocked.Read(ref hidWriteTimeouts)} hidWriteMaxUs={Interlocked.Read(ref hidWriteLateMaxUs)} peakPermille={peak} micCallbacks={Interlocked.Read(ref micCallbacks)} micCapturedFrames={Interlocked.Read(ref micCapturedFrames)} micPeakPermille={micPeak}");
         }
     }
 
@@ -1750,6 +1796,7 @@ sealed record HelperOptions(
     string? HidPath,
     HostAudioSource Source,
     bool ListDevices,
+    bool CompanionTransportServer,
     bool MicKeepaliveOnly,
     string? MicDeviceName,
     int SpeakerVolumePercent,
@@ -1786,6 +1833,7 @@ sealed record HelperOptions(
             20
         );
         var listDevices = false;
+        var companionTransportServer = false;
         var micKeepaliveOnly = false;
         var playTestTone = false;
         var captureDumpOnly = false;
@@ -1830,6 +1878,9 @@ sealed record HelperOptions(
                 case "--list-devices":
                     listDevices = true;
                     break;
+                case "--companion-transport":
+                    companionTransportServer = true;
+                    break;
                 case "--mic-keepalive-only":
                     micKeepaliveOnly = true;
                     break;
@@ -1847,6 +1898,7 @@ sealed record HelperOptions(
             hidPath,
             source,
             listDevices,
+            companionTransportServer,
             micKeepaliveOnly,
             micDeviceName,
             speakerVolumePercent,
