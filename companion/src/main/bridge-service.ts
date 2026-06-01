@@ -881,6 +881,7 @@ export class BridgeService extends EventEmitter {
   private hostAudioStatus: HostAudioStatusPayload | null = null;
   private lastAudioStatsSignature: string | null = null;
   private hostAudioCommandActive = false;
+  private commandQueue: Promise<unknown> = Promise.resolve();
   private hostAudioHeartbeatBusy = false;
   private hostAudioReportQueue: number[][] = [];
   private hostAudioWritePumpActive = false;
@@ -1933,44 +1934,52 @@ export class BridgeService extends EventEmitter {
     }
   }
 
+  private enqueueCommand<T>(operation: () => Promise<T>): Promise<T> {
+    const run = this.commandQueue.then(operation, operation);
+    this.commandQueue = run.catch(() => undefined);
+    return run;
+  }
+
   private async sendCommand(commandId: number, value: number, options: CommandOptions = {}) {
-    await this.ensureCompanionDevice();
-    if (!this.device) {
-      throw new Error('No companion bridge is connected.');
-    }
-
-    const sequence = this.nextSequence();
-    const previousSettingsRevision = this.snapshot.diagnostics.settingsRevision;
-    await this.device.sendFeatureReport(buildCommandReport(commandId, sequence, value, options.extraPayload));
-    const ack = parseAckReport(await this.device.getFeatureReport(REPORT_ID.ACK, REPORT_LENGTH));
-    this.snapshot.diagnostics.lastAck = ack;
-    if (ack.commandId !== (commandId & 0xff) || ack.commandSequence !== sequence) {
-      const message = `Stale companion ACK: expected command 0x${(commandId & 0xff).toString(16).padStart(2, '0')} sequence ${sequence}, received command 0x${ack.commandId.toString(16).padStart(2, '0')} sequence ${ack.commandSequence}.`;
-      this.snapshot.diagnostics.lastError = message;
-      this.emitSnapshot();
-      throw new Error(message);
-    }
-    this.snapshot.diagnostics.settingsRevision = ack.settingsRevision;
-    this.snapshot.diagnostics.lastError = ack.resultCode === ACK_RESULT.OK ? null : ackUserMessage(ack.resultCode);
-    this.emitSnapshot();
-
-    if (ack.resultCode !== ACK_RESULT.OK) {
-      if (options.throwOnCommandError === false) {
-        return ack;
+    return this.enqueueCommand(async () => {
+      await this.ensureCompanionDevice();
+      if (!this.device) {
+        throw new Error('No companion bridge is connected.');
       }
-      throw new Error(ackUserMessage(ack.resultCode));
-    }
-    if (
-      options.expectSettingsRevisionChange
-      && previousSettingsRevision !== null
-      && ack.settingsRevision === previousSettingsRevision
-    ) {
-      const message = 'Firmware accepted the setting but did not advance settings_revision.';
-      this.snapshot.diagnostics.lastError = message;
+
+      const sequence = this.nextSequence();
+      const previousSettingsRevision = this.snapshot.diagnostics.settingsRevision;
+      await this.device.sendFeatureReport(buildCommandReport(commandId, sequence, value, options.extraPayload));
+      const ack = parseAckReport(await this.device.getFeatureReport(REPORT_ID.ACK, REPORT_LENGTH));
+      this.snapshot.diagnostics.lastAck = ack;
+      if (ack.commandId !== (commandId & 0xff) || ack.commandSequence !== sequence) {
+        const message = `Stale companion ACK: expected command 0x${(commandId & 0xff).toString(16).padStart(2, '0')} sequence ${sequence}, received command 0x${ack.commandId.toString(16).padStart(2, '0')} sequence ${ack.commandSequence}.`;
+        this.snapshot.diagnostics.lastError = message;
+        this.emitSnapshot();
+        throw new Error(message);
+      }
+      this.snapshot.diagnostics.settingsRevision = ack.settingsRevision;
+      this.snapshot.diagnostics.lastError = ack.resultCode === ACK_RESULT.OK ? null : ackUserMessage(ack.resultCode);
       this.emitSnapshot();
-      throw new Error(message);
-    }
-    return ack;
+
+      if (ack.resultCode !== ACK_RESULT.OK) {
+        if (options.throwOnCommandError === false) {
+          return ack;
+        }
+        throw new Error(ackUserMessage(ack.resultCode));
+      }
+      if (
+        options.expectSettingsRevisionChange
+        && previousSettingsRevision !== null
+        && ack.settingsRevision === previousSettingsRevision
+      ) {
+        const message = 'Firmware accepted the setting but did not advance settings_revision.';
+        this.snapshot.diagnostics.lastError = message;
+        this.emitSnapshot();
+        throw new Error(message);
+      }
+      return ack;
+    });
   }
 
   private async writeHostAudioStreamReport(report: number[]): Promise<boolean> {

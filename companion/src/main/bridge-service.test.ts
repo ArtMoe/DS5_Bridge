@@ -733,6 +733,34 @@ describe('BridgeService', () => {
     expect(snapshot.diagnostics.lastError).toContain('expected command 0x01 sequence');
   });
 
+  it('serializes overlapping companion commands before reading ACK reports', async () => {
+    const service = serviceFixture();
+    const device = new MockHidDevice();
+    const internals = service as unknown as {
+      device: MockHidDevice;
+      sendCommand(commandId: number, value: number, options?: { extraPayload?: number[] }): Promise<{
+        commandId: number;
+        commandSequence: number;
+      }>;
+    };
+    internals.device = device;
+
+    const [lightbarAck, hostAudioAck] = await Promise.all([
+      internals.sendCommand(COMMAND_ID.SET_LIGHTBAR_COLOR, 60, { extraPayload: [1, 2, 3] }),
+      internals.sendCommand(COMMAND_ID.SET_HOST_AUDIO_ENABLED, 1)
+    ]);
+
+    expect(lightbarAck.commandId).toBe(COMMAND_ID.SET_LIGHTBAR_COLOR);
+    expect(hostAudioAck.commandId).toBe(COMMAND_ID.SET_HOST_AUDIO_ENABLED);
+    expect(lightbarAck.commandSequence).toBe(1);
+    expect(hostAudioAck.commandSequence).toBe(2);
+    expect(device.sentReports.map((report) => report[7])).toEqual([
+      COMMAND_ID.SET_LIGHTBAR_COLOR,
+      COMMAND_ID.SET_HOST_AUDIO_ENABLED
+    ]);
+    expect(service.getSnapshot().diagnostics.lastError).toBeNull();
+  });
+
   it('sends and stores mute button keyboard bindings', async () => {
     const service = serviceFixture();
     const device = new MockHidDevice();
