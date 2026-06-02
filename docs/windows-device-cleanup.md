@@ -16,7 +16,7 @@ Common identity-changing fields in this project are:
 - Host persona: DualSense mode and Xbox compatibility mode intentionally expose
   different game-facing interface descriptors.
 - Product string: for example `DualSense Wireless Controller`,
-  `DualSense Edge Wireless Controller`, or `Wireless Controller`.
+  `DualSense Edge Wireless Controller`, or `Xbox 360 Controller for Windows`.
 - USB port/location when no serial number is exposed.
 
 Audio devices are cached separately. Windows creates MMDevice endpoint records
@@ -88,11 +88,13 @@ By default, the script lists or removes non-present instances matching:
 - `VID_054C&PID_0CE6`.
 - `VID_054C&PID_0DF2`.
 - The temporary Xbox persona test identity `VID_045E&PID_028E`.
+- The composite-safe Xbox persona test identity `VID_1209&PID_DB05`.
 - DualSense-named Windows audio endpoints.
 - DS5 Bridge-named Windows audio endpoints and System devices.
 - DS5 Bridge USB descriptor cache keys for the historical `0x0100`, current
-  `0x0151`, and Xbox-persona `0x0152` USB device revisions.
-- The temporary Xbox persona test cache key `045E028E0114`.
+  `0x0151`, and Xbox-persona `0x0152`/`0x0153` USB device revisions.
+- The temporary Xbox persona test cache keys `045E028E0114`, `045E028E0154`,
+  `1209DB050155`, and `1209DB050156`.
 
 It does not remove currently present `Status = OK` entries unless
 `-IncludePresent` is supplied.

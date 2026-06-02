@@ -10,7 +10,8 @@ sealed class EndpointManager
     private static readonly string[] BridgeEndpointAliases =
     [
         "DS5 Bridge",
-        "DualSense Wireless Controller"
+        "DualSense Wireless Controller",
+        "Xbox 360 Controller for Windows"
     ];
 
     public static MMDevice SelectRenderEndpoint(MMDeviceEnumerator enumerator, string? deviceName)

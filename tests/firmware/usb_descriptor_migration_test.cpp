@@ -11,7 +11,7 @@
 namespace {
 
 constexpr uint16_t kExpectedUsbDeviceRevision = 0x0151;
-constexpr uint64_t kExpectedCompanionDescriptorHash = 0x6770da2ccfc65c21ull;
+constexpr uint64_t kExpectedCompanionDescriptorHash = 0x33997ef9784d7e4eull;
 
 std::string read_text(std::filesystem::path const &path) {
     std::ifstream input(path, std::ios::binary);
@@ -138,6 +138,58 @@ void assert_xusb_descriptor_uses_endpoint_constants(std::string const &source) {
     }
 }
 
+void assert_xusb_persona_strings_are_xbox_facing(std::string const &source) {
+    if (source.find("#define XUSB360_VENDOR_ID 0x1209") == std::string::npos) {
+        throw std::runtime_error("Xbox persona must expose a non-Sony composite-safe USB vendor ID");
+    }
+
+    if (source.find("#define XUSB360_PRODUCT_ID 0xDB05") == std::string::npos) {
+        throw std::runtime_error("Xbox persona must expose a non-Sony composite-safe USB product ID");
+    }
+
+    if (source.find("#define XUSB360_USB_BCD_DEVICE 0x0156") == std::string::npos) {
+        throw std::runtime_error("Xbox persona USB revision must be bumped for Windows descriptor cache separation");
+    }
+
+    if (source.find("#define XUSB360_STRING_MANUFACTURER \"Microsoft Corporation\"") == std::string::npos) {
+        throw std::runtime_error("Xbox persona must expose an Xbox-facing manufacturer string");
+    }
+
+    if (source.find("#define XUSB360_STRING_PRODUCT \"Xbox 360 Controller for Windows\"") == std::string::npos) {
+        throw std::runtime_error("Xbox persona must expose an Xbox-facing product string");
+    }
+
+    if (source.find("STRID_XUSB_GAMEPAD, // iInterface: Xbox 360 Controller for Windows") == std::string::npos) {
+        throw std::runtime_error("Xbox persona game interface must expose an Xbox-facing interface string");
+    }
+
+    const std::string device_callback = extract_between(
+        source,
+        "uint8_t const *tud_descriptor_device_cb(void) {",
+        "\n}\n\n//--------------------------------------------------------------------+\n// Configuration Descriptor"
+    );
+    if (
+        device_callback.find("desc_device_runtime.idVendor = XUSB360_VENDOR_ID") == std::string::npos
+        || device_callback.find("desc_device_runtime.idProduct = XUSB360_PRODUCT_ID") == std::string::npos
+    ) {
+        throw std::runtime_error("Xbox persona must override the runtime USB VID/PID");
+    }
+
+    const std::string string_helper = extract_between(
+        source,
+        "static char const *descriptor_string_for_index(uint8_t index) {",
+        "\n}\n\n// Invoked when received GET STRING DESCRIPTOR request"
+    );
+    if (
+        string_helper.find("index == STRID_MANUFACTURER && host_persona_active() == HostPersonaModeXusb360")
+            == std::string::npos
+        || string_helper.find("index == STRID_PRODUCT && host_persona_active() == HostPersonaModeXusb360")
+            == std::string::npos
+    ) {
+        throw std::runtime_error("Xbox persona strings must only override manufacturer/product while Xbox mode is active");
+    }
+}
+
 } // namespace
 
 int main() {
@@ -146,6 +198,7 @@ int main() {
         const uint16_t bcd_device = parse_bcd_device(source);
         const uint64_t descriptor_hash = companion_descriptor_hash(source);
         assert_xusb_descriptor_uses_endpoint_constants(source);
+        assert_xusb_persona_strings_are_xbox_facing(source);
 
         if (bcd_device != kExpectedUsbDeviceRevision) {
             std::cerr << "USB bcdDevice changed unexpectedly. Expected 0x" << std::hex

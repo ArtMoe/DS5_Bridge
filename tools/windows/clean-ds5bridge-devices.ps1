@@ -30,8 +30,9 @@ if ($Force) {
 
 $sonyDualSenseVidPidPattern = '(?i)VID_054C&(PID_0CE6|PID_0DF2)'
 $temporaryXboxPersonaVidPidPattern = '(?i)VID_045E&PID_028E'
+$compositeXboxPersonaVidPidPattern = '(?i)VID_1209&PID_DB05'
 $usbFlagsRoot = 'HKLM:\SYSTEM\CurrentControlSet\Control\UsbFlags'
-$usbFlagsKeyPattern = '(?i)^(054C0CE6|054C0DF2)(0100|0151|0152)$|^045E028E0114$'
+$usbFlagsKeyPattern = '(?i)^(054C0CE6|054C0DF2)(0100|0151|0152|0153)$|^045E028E(0114|0154)$|^1209DB05015(5|6)$'
 $dualsenseNamePattern = '(?i)(DualSense|DualSense Edge|Wireless Controller)'
 $ds5BridgeNamePattern = '(?i)(DS5[ _-]?Bridge|Xbox 360 Controller for Windows)'
 $maxCleanupPasses = 8
@@ -64,6 +65,9 @@ function Get-DeviceCategory {
     }
     if ($instanceId -match $temporaryXboxPersonaVidPidPattern) {
         return 'Temporary Xbox persona test identity'
+    }
+    if ($instanceId -match $compositeXboxPersonaVidPidPattern) {
+        return 'Composite Xbox persona test identity'
     }
     if ($instanceId -match $sonyDualSenseVidPidPattern) {
         return 'USB/HID bridge stack'
@@ -100,6 +104,9 @@ function Test-TargetDevice {
         return $true
     }
     if ($instanceId -match $temporaryXboxPersonaVidPidPattern) {
+        return $true
+    }
+    if ($instanceId -match $compositeXboxPersonaVidPidPattern) {
         return $true
     }
     if ($isAudioEndpoint -and $friendlyName -match $dualsenseNamePattern) {

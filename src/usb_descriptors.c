@@ -64,7 +64,11 @@ extern void host_bridge_set_report(uint8_t const *report, uint16_t len);
 #define XUSB360_EP_SIZE 0x20
 #define XUSB360_EP_IN_INTERVAL 0x04
 #define XUSB360_EP_OUT_INTERVAL 0x08
-#define XUSB360_USB_BCD_DEVICE 0x0152
+#define XUSB360_VENDOR_ID 0x1209
+#define XUSB360_PRODUCT_ID 0xDB05
+#define XUSB360_USB_BCD_DEVICE 0x0156
+#define XUSB360_STRING_MANUFACTURER "Microsoft Corporation"
+#define XUSB360_STRING_PRODUCT "Xbox 360 Controller for Windows"
 
 #ifdef ENABLE_COMPANION
 #define GAMEPAD_INTERFACE_NUMBER 0x03
@@ -72,6 +76,18 @@ extern void host_bridge_set_report(uint8_t const *report, uint16_t len);
 #else
 #define GAMEPAD_INTERFACE_NUMBER 0x05
 #endif
+
+enum {
+    STRID_LANGID = 0,
+    STRID_MANUFACTURER,
+    STRID_PRODUCT,
+    STRID_SERIAL,
+    STRID_RAW_PCM,
+    STRID_BULK_PCM,
+    STRID_KEYBOARD,
+    STRID_BRIDGE_CONTROL,
+    STRID_XUSB_GAMEPAD,
+};
 
 //--------------------------------------------------------------------+
 // Device Descriptors
@@ -125,6 +141,8 @@ static tusb_desc_device_t desc_device_runtime;
 uint8_t const *tud_descriptor_device_cb(void) {
     desc_device_runtime = desc_device;
     if (host_persona_active() == HostPersonaModeXusb360) {
+        desc_device_runtime.idVendor = XUSB360_VENDOR_ID;
+        desc_device_runtime.idProduct = XUSB360_PRODUCT_ID;
         desc_device_runtime.bcdDevice = XUSB360_USB_BCD_DEVICE;
     }
     return (uint8_t const *) &desc_device_runtime;
@@ -647,7 +665,7 @@ static uint16_t build_xusb_configuration_descriptor(void) {
         0xFF, // bInterfaceClass: Vendor Specific
         0x5D, // bInterfaceSubClass: XUSB
         0x01, // bInterfaceProtocol
-        0x00, // iInterface
+        STRID_XUSB_GAMEPAD, // iInterface: Xbox 360 Controller for Windows
 
         // XUSB class-specific interface descriptor.
         0x11, 0x21, 0x00, 0x01,
@@ -1361,16 +1379,6 @@ uint8_t const *tud_hid_descriptor_report_cb(uint8_t itf) {
 // String Descriptors
 //--------------------------------------------------------------------+
 
-// String Descriptor Index
-enum {
-    STRID_LANGID = 0,
-    STRID_MANUFACTURER,
-    STRID_PRODUCT,
-    STRID_SERIAL,
-    STRID_RAW_PCM,
-    STRID_BULK_PCM,
-};
-
 // array of pointer to string descriptors
 static char const *string_desc_arr[] =
 {
@@ -1386,9 +1394,25 @@ static char const *string_desc_arr[] =
     "DS5 Bridge PCM Iso", // 5: WinUSB PCM interface
     "DS5 Bridge Keyboard", // 6: Keyboard HID interface
     "DS5 Bridge Control", // 7: WinUSB companion/control interface
+    XUSB360_STRING_PRODUCT, // 8: XUSB game-facing interface
 };
 
 static uint16_t _desc_str[60 + 1];
+
+static char const *descriptor_string_for_index(uint8_t index) {
+    if (index == STRID_MANUFACTURER && host_persona_active() == HostPersonaModeXusb360) {
+        return XUSB360_STRING_MANUFACTURER;
+    }
+
+    if (index == STRID_PRODUCT && host_persona_active() == HostPersonaModeXusb360) {
+        return XUSB360_STRING_PRODUCT;
+    }
+
+    if (!(index < sizeof(string_desc_arr) / sizeof(string_desc_arr[0]))) {
+        return NULL;
+    }
+    return string_desc_arr[index];
+}
 
 // Invoked when received GET STRING DESCRIPTOR request
 // Application return pointer to descriptor, whose contents must exist long enough for transfer to complete
@@ -1425,9 +1449,8 @@ uint16_t const *tud_descriptor_string_cb(uint8_t index, uint16_t langid) {
             // Note: the 0xEE index string is a Microsoft OS 1.0 Descriptors.
             // https://docs.microsoft.com/en-us/windows-hardware/drivers/usbcon/microsoft-defined-usb-descriptors
 
-            if (!(index < sizeof(string_desc_arr) / sizeof(string_desc_arr[0]))) return NULL;
-
-            const char *str = string_desc_arr[index];
+            const char *str = descriptor_string_for_index(index);
+            if (str == NULL) return NULL;
 
             // Cap at max char
             chr_count = strlen(str);
