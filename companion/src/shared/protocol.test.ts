@@ -20,6 +20,7 @@ import {
   buildCommandReport,
   buildHostAudioFastFrameReports,
   buildHostAudioFrameChunkReports,
+  hostPersonaModeValue,
   normalizeBridgePresetId,
   parseAudioDebugReport,
   parseAudioStatsReport,
@@ -126,6 +127,8 @@ describe('companion protocol', () => {
     report[45] = 0xd8;
     report[46] = 1;
     report[47] = 1;
+    report[48] = 2;
+    report[49] = 0x07;
     report[60] = 1;
     report[61] = 0x68;
     report[62] = 0x82;
@@ -156,6 +159,15 @@ describe('companion protocol', () => {
     expect(status.muteKeyboardModifiers).toBe(0x02);
     expect(status.muteKeyboardBehavior).toBe('hold');
     expect(status.quietModeEnabled).toBe(true);
+    expect(status.firmwareFlags.hostPersonaControl).toBe(true);
+    expect(status.hostPersonaMode).toBe('ds4');
+    expect(status.supportedHostPersonaModes).toEqual(['dualsense', 'xbox', 'ds4']);
+  });
+
+  it('encodes host persona command values', () => {
+    expect(hostPersonaModeValue('dualsense')).toBe(0);
+    expect(hostPersonaModeValue('xbox')).toBe(1);
+    expect(hostPersonaModeValue('ds4')).toBe(2);
   });
 
   it('parses an ACK report', () => {

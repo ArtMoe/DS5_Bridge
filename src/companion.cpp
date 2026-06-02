@@ -744,6 +744,9 @@ uint8_t supported_host_persona_mask() {
     if (host_persona_is_supported(HostPersonaModeXusb360)) {
         mask |= 1 << HostPersonaModeXusb360;
     }
+    if (host_persona_is_supported(HostPersonaModeDs4)) {
+        mask |= 1 << HostPersonaModeDs4;
+    }
     return mask;
 }
 
@@ -1972,7 +1975,7 @@ void handle_command(uint8_t const *buffer, uint16_t bufsize) {
             return;
 
         case CommandSetHostPersona:
-            if (value > HostPersonaModeXusb360) {
+            if (!host_persona_is_supported(static_cast<HostPersonaMode>(value))) {
                 set_ack(command_id, sequence, AckInvalidValue);
                 return;
             }

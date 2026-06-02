@@ -190,6 +190,53 @@ void assert_xusb_persona_strings_are_xbox_facing(std::string const &source) {
     }
 }
 
+void assert_ds4_persona_identity_is_ds4_facing(std::string const &source) {
+    if (source.find("#define DS4_VENDOR_ID 0x054C") == std::string::npos) {
+        throw std::runtime_error("DS4 persona must expose Sony's DS4 USB vendor ID");
+    }
+
+    if (source.find("#define DS4_PRODUCT_ID 0x09CC") == std::string::npos) {
+        throw std::runtime_error("DS4 persona must expose the DS4 v2 USB product ID");
+    }
+
+    if (source.find("#define DS4_STRING_PRODUCT \"Wireless Controller\"") == std::string::npos) {
+        throw std::runtime_error("DS4 persona must expose the DS4-facing Wireless Controller product string");
+    }
+
+    if (source.find("#define DS4_HID_EP_INTERVAL 0x04") == std::string::npos) {
+        throw std::runtime_error("DS4 persona must preserve the DS4-like HID endpoint interval");
+    }
+
+    if (source.find("TU_VERIFY_STATIC(sizeof(desc_hid_report_ds4) == DS4_HID_REPORT_DESC_LEN") == std::string::npos) {
+        throw std::runtime_error("DS4 HID report descriptor length must be guarded");
+    }
+
+    const std::string device_callback = extract_between(
+        source,
+        "uint8_t const *tud_descriptor_device_cb(void) {",
+        "\n}\n\n//--------------------------------------------------------------------+\n// Configuration Descriptor"
+    );
+    if (
+        device_callback.find("host_persona_active() == HostPersonaModeDs4") == std::string::npos
+        || device_callback.find("desc_device_runtime.idVendor = DS4_VENDOR_ID") == std::string::npos
+        || device_callback.find("desc_device_runtime.idProduct = DS4_PRODUCT_ID") == std::string::npos
+    ) {
+        throw std::runtime_error("DS4 persona must override the runtime USB VID/PID");
+    }
+
+    const std::string report_callback = extract_between(
+        source,
+        "uint8_t const *tud_hid_descriptor_report_cb(uint8_t itf) {",
+        "\n}\n\n//--------------------------------------------------------------------+\n// String Descriptors"
+    );
+    if (
+        report_callback.find("host_persona_active() == HostPersonaModeDs4") == std::string::npos
+        || report_callback.find("return desc_hid_report_ds4") == std::string::npos
+    ) {
+        throw std::runtime_error("DS4 persona must select the DS4 HID report descriptor");
+    }
+}
+
 void assert_persona_switch_quiets_input_only(std::filesystem::path const &root) {
     const auto host_input_h = read_text(root / "src" / "host_input.h");
     const auto main_cpp = read_text(root / "src" / "main.cpp");
@@ -261,6 +308,14 @@ void assert_persona_switch_quiets_input_only(std::filesystem::path const &root) 
     ) {
         throw std::runtime_error("Persona transition quieting must not block HID control callbacks");
     }
+
+    if (
+        get_report_callback.find("HostPersonaModeDs4") == std::string::npos
+        || get_report_callback.find("HID_REPORT_TYPE_INPUT") == std::string::npos
+        || get_report_callback.find("ds4_copy_input_report_payload") == std::string::npos
+    ) {
+        throw std::runtime_error("DS4 native probes must be able to GET_REPORT the current input report");
+    }
 }
 
 } // namespace
@@ -273,6 +328,7 @@ int main() {
         const uint64_t descriptor_hash = companion_descriptor_hash(source);
         assert_xusb_descriptor_uses_endpoint_constants(source);
         assert_xusb_persona_strings_are_xbox_facing(source);
+        assert_ds4_persona_identity_is_ds4_facing(source);
         assert_persona_switch_quiets_input_only(source_root);
 
         if (bcd_device != kExpectedUsbDeviceRevision) {

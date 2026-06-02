@@ -164,7 +164,13 @@ function normalizePollingRateMode(value: unknown): CompanionSettings['pollingRat
 }
 
 function normalizeHostPersonaMode(value: unknown): HostPersonaMode {
-  return value === 'xbox' ? 'xbox' : 'dualsense';
+  switch (value) {
+    case 'xbox':
+    case 'ds4':
+      return value;
+    default:
+      return 'dualsense';
+  }
 }
 
 export function normalizeUiScalePercent(value: unknown): UiScalePercent {

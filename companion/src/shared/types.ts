@@ -75,6 +75,7 @@ export interface HidDeviceSummary {
 export type BridgeStateKind =
   | 'no-bridge'
   | 'normal-firmware'
+  | 'transitioning'
   | 'connected'
   | 'incompatible'
   | 'error';
@@ -119,6 +120,14 @@ export interface BridgeSnapshot {
   status: BridgeStatusPayload | null;
   settings: CompanionSettings;
   diagnostics: BridgeDiagnostics;
+  personaTransition?: HostPersonaTransition | null;
+}
+
+export interface HostPersonaTransition {
+  from: HostPersonaMode;
+  to: HostPersonaMode;
+  startedAt: number;
+  deadlineAt: number;
 }
 
 export interface WindowsDeviceCleanupResult {

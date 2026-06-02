@@ -16,6 +16,7 @@
 #include "haptics_test_signal.h"
 #include "host_audio_runtime.h"
 #include "output_scheduler.h"
+#include "persona/ds4_persona.h"
 #include "persona/host_persona.h"
 #include "persona/xusb360_persona.h"
 
@@ -662,6 +663,86 @@ void xusb360_rumble_decodes_to_ds5_classic_rumble_payload() {
     EXPECT_EQ(payload[kMotorRightOffset], 0x30);
 }
 
+void ds4_persona_maps_standard_gamepad_fields() {
+    const auto report = sample_dualsense_input_report();
+    BridgeControllerState state{};
+    HostPersonaInputReport encoded{};
+
+    EXPECT_TRUE(dualsense_decode_usb_input_report(report.data(), report.size(), state));
+    EXPECT_TRUE(host_persona_encode_input(HostPersonaModeDs4, state, encoded));
+    EXPECT_EQ(encoded.report_id, kDs4InputReportId);
+    EXPECT_EQ(encoded.len, kDs4InputReportSize - 1);
+    EXPECT_EQ(encoded.bytes[0], 0x00);
+    EXPECT_EQ(encoded.bytes[1], 0xff);
+    EXPECT_EQ(encoded.bytes[2], 0x80);
+    EXPECT_EQ(encoded.bytes[3], 0x40);
+    EXPECT_EQ(encoded.bytes[4], 0x22); // D-pad right + Cross.
+    EXPECT_EQ(encoded.bytes[5], 0x9d); // L1 + L2 + R2 + Share + R3.
+    EXPECT_EQ(encoded.bytes[6] & 0x03, 0x03); // PS + touchpad click.
+    EXPECT_EQ(encoded.bytes[7], 0x22);
+    EXPECT_EQ(encoded.bytes[8], 0xcc);
+    EXPECT_EQ(encoded.bytes[11], 0x09);
+    EXPECT_EQ(encoded.bytes[29], 0x1a);
+    EXPECT_EQ(encoded.bytes[34], 0x80);
+    EXPECT_EQ(encoded.bytes[38], 0x80);
+}
+
+void ds4_output_decodes_to_ds5_rumble_and_lightbar_payload() {
+    uint8_t output[] = {0x05, 0x03, 0x00, 0x00, 0x12, 0xfe, 0x11, 0x22, 0x33, 0x04, 0x05};
+    Payload payload{};
+    uint16_t payload_len = 0;
+
+    EXPECT_TRUE(host_persona_decode_output_to_ds5_payload(
+        HostPersonaModeDs4,
+        output,
+        sizeof(output),
+        payload.data(),
+        payload.size(),
+        payload_len
+    ));
+    EXPECT_EQ(payload_len, kCommonPayloadSize);
+    EXPECT_TRUE((payload[kValidFlag0Offset] & kFlag0CompatibleVibration) != 0);
+    EXPECT_TRUE((payload[kValidFlag0Offset] & kFlag0HapticsSelect) != 0);
+    EXPECT_TRUE((payload[kValidFlag1Offset] & kFlag1LightbarControlEnable) != 0);
+    EXPECT_EQ(payload[kMotorRightOffset], 0x12);
+    EXPECT_EQ(payload[kMotorLeftOffset], 0xfe);
+    EXPECT_EQ(payload[kLightbarRedOffset], 0x11);
+    EXPECT_EQ(payload[kLightbarGreenOffset], 0x22);
+    EXPECT_EQ(payload[kLightbarBlueOffset], 0x33);
+}
+
+void ds4_feature_reports_cover_native_probe_surface() {
+    std::array<uint8_t, 64> feature{};
+
+    EXPECT_EQ(ds4_persona_get_feature_report(0x03, feature.data(), 47), 47);
+    EXPECT_EQ(feature[1], 0x27);
+    EXPECT_EQ(feature[3], 0x4e);
+
+    feature.fill(0);
+    EXPECT_EQ(ds4_persona_get_feature_report(0x05, feature.data(), 36), 36);
+    EXPECT_EQ(feature[7], 0x04);
+    EXPECT_EQ(feature[9], 0xfc);
+
+    feature.fill(0);
+    EXPECT_EQ(ds4_persona_get_feature_report(0x81, feature.data(), 63), 63);
+    EXPECT_EQ(feature[0], 0x11);
+    EXPECT_EQ(feature[17], static_cast<uint8_t>('1'));
+    EXPECT_EQ(feature[33], static_cast<uint8_t>('J'));
+
+    feature.fill(0);
+    EXPECT_EQ(ds4_persona_get_feature_report(0xa3, feature.data(), 48), 48);
+    EXPECT_EQ(feature[0], static_cast<uint8_t>('S'));
+    EXPECT_EQ(feature[32], 0x01);
+    EXPECT_EQ(feature[46], 0x01);
+
+    feature.fill(0);
+    const uint8_t serial_subcommand = 0x02;
+    ds4_persona_set_feature_report(0xa0, &serial_subcommand, 1);
+    EXPECT_EQ(ds4_persona_get_feature_report(0xa4, feature.data(), 13), 13);
+    EXPECT_EQ(feature[0], 0x0b);
+    EXPECT_EQ(feature[4], 0x00);
+}
+
 struct TestCase {
     char const *name;
     void (*run)();
@@ -693,6 +774,9 @@ std::vector<TestCase> tests{
     {"dualsense persona preserves native report bytes", dualsense_persona_preserves_native_report_bytes},
     {"xusb360 persona maps standard gamepad fields", xusb360_persona_maps_standard_gamepad_fields},
     {"xusb360 rumble decodes to ds5 classic rumble payload", xusb360_rumble_decodes_to_ds5_classic_rumble_payload},
+    {"ds4 persona maps standard gamepad fields", ds4_persona_maps_standard_gamepad_fields},
+    {"ds4 output decodes to ds5 rumble and lightbar payload", ds4_output_decodes_to_ds5_rumble_and_lightbar_payload},
+    {"ds4 feature reports cover native probe surface", ds4_feature_reports_cover_native_probe_surface},
 };
 
 } // namespace

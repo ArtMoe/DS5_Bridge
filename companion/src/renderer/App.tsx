@@ -19,6 +19,7 @@ import {
   IconDeviceGamepad3,
   IconFlame,
   IconFlask2,
+  IconBrandXbox,
   IconBrandGithub,
   IconDeviceMobileVibration as Vibrate,
   IconHeadphones as Headphones,
@@ -282,6 +283,7 @@ const POLLING_RATE_OPTIONS: Array<[string, PollingRateMode]> = [
 ];
 const HOST_PERSONA_OPTIONS: Array<[string, HostPersonaMode]> = [
   ['DualSense', 'dualsense'],
+  ['DualShock 4', 'ds4'],
   ['Xbox', 'xbox']
 ];
 const TRIGGER_TARGET_OPTIONS: Array<[string, TriggerTestTarget]> = [
@@ -475,6 +477,7 @@ type CustomSelectProps<T extends SelectValue> = {
   className?: string;
   showSelectedCheck?: boolean;
   closeOnSelect?: boolean;
+  getOptionClassName?: (label: string, value: T) => string | undefined;
   renderValue?: (label: string, value: T) => ReactNode;
   renderOption?: (label: string, value: T) => ReactNode;
   renderMenuFooter?: (closeMenu: () => void) => ReactNode;
@@ -1597,6 +1600,7 @@ function CustomSelect<T extends SelectValue>({
   className = '',
   showSelectedCheck = true,
   closeOnSelect = true,
+  getOptionClassName,
   renderValue,
   renderOption,
   renderMenuFooter,
@@ -1722,6 +1726,7 @@ function CustomSelect<T extends SelectValue>({
         <div ref={menuRef} className="custom-select-menu" role="listbox" aria-label={ariaLabel}>
           {options.map(([label, optionValue]) => {
             const selectedOption = optionValue === value;
+            const optionClassName = getOptionClassName?.(label, optionValue);
             return (
               <button
                 key={String(optionValue)}
@@ -1729,7 +1734,7 @@ function CustomSelect<T extends SelectValue>({
                 role="option"
                 aria-selected={selectedOption}
                 data-selected={selectedOption ? 'true' : undefined}
-                className={selectedOption ? 'selected' : ''}
+                className={[selectedOption ? 'selected' : '', optionClassName].filter(Boolean).join(' ')}
                 onClick={() => choose(optionValue)}
               >
                 <span>{renderOption?.(label, optionValue) ?? label}</span>
@@ -1798,6 +1803,20 @@ function RemapSourceGlyph({ button }: { button: RemapButtonDefinition }) {
   ) : (
     <span className="remap-text-glyph remap-text-glyph-source" title={button.label}>
       {button.textGlyph ?? button.label}
+    </span>
+  );
+}
+
+function HostPersonaOption({ label, value }: { label: string; value: HostPersonaMode }) {
+  const sonyPersona = value === 'dualsense' || value === 'ds4';
+  return (
+    <span className="host-persona-option">
+      {sonyPersona ? (
+        <img src={psHomeGlyphUrl} alt="" aria-hidden="true" />
+      ) : (
+        <IconBrandXbox size={18} aria-hidden="true" />
+      )}
+      <span className="host-persona-label">{label}</span>
     </span>
   );
 }
@@ -1918,6 +1937,8 @@ export function App() {
     });
   }, [triggerLabActive, triggerLabDrafts, triggerLabLinked, triggerLabSplitState]);
 
+  const personaTransition = snapshot?.personaTransition ?? null;
+  const personaTransitionActive = Boolean(personaTransition);
   const connected = snapshot?.state === 'connected';
   const liveControllerType = snapshot?.status?.controllerType;
   const remapControllerType = snapshot?.status?.controllerConnected && liveControllerType && liveControllerType !== 'unknown'
@@ -2255,7 +2276,13 @@ export function App() {
     ? Math.min(2, batterySegmentCount)
     : -1;
   const batteryCritical = connected && !batteryCharging && batteryPercent > 0 && batteryPercent <= 20;
-  const statusTone = connected ? 'good' : snapshot?.state === 'error' || snapshot?.state === 'incompatible' ? 'bad' : 'idle';
+  const statusTone = personaTransitionActive
+    ? 'warn'
+    : connected
+      ? 'good'
+      : snapshot?.state === 'error' || snapshot?.state === 'incompatible'
+        ? 'bad'
+        : 'idle';
   const lastAck = snapshot?.diagnostics.lastAck;
   const speakerVolumeSupported = Boolean(snapshot?.status?.firmwareFlags.speakerVolumeControl);
   const lightbarSupported = Boolean(snapshot?.status?.firmwareFlags.lightbarControl);
@@ -2267,6 +2294,9 @@ export function App() {
   const pollingRateControlSupported = Boolean(snapshot?.status?.firmwareFlags.pollingRateControl);
   const hostPersonaControlSupported = Boolean(snapshot?.status?.firmwareFlags.hostPersonaControl);
   const supportedHostPersonaModes: HostPersonaMode[] = snapshot?.status?.supportedHostPersonaModes ?? ['dualsense'];
+  const hostPersonaOptions = HOST_PERSONA_OPTIONS.filter(([, mode]) => (
+    supportedHostPersonaModes.includes(mode) || snapshot?.settings.hostPersonaMode === mode
+  ));
   const hapticsEnabled = Boolean(snapshot?.settings.hapticsEnabled);
   const classicRumbleEnabled = Boolean(snapshot?.settings.classicRumbleEnabled);
   const activeHapticsFeatureEnabled = showClassicRumbleControl ? classicRumbleEnabled : hapticsEnabled;
@@ -2338,8 +2368,8 @@ export function App() {
   const duplexMicEnabled = Boolean(snapshot?.settings.duplexMicEnabled);
   const audioEnabled = speakerEnabled || duplexMicEnabled;
   const hostAudioActive = hostAudioStatus?.mode === 'host-encoded-active';
-  const hostAudioCaptureIssue = snapshot?.diagnostics.hostAudioCaptureIssue ?? null;
-  const hostAudioCaptureRetry = snapshot?.diagnostics.hostAudioCaptureRetry ?? null;
+  const hostAudioCaptureIssue = personaTransitionActive ? null : snapshot?.diagnostics.hostAudioCaptureIssue ?? null;
+  const hostAudioCaptureRetry = personaTransitionActive ? null : snapshot?.diagnostics.hostAudioCaptureRetry ?? null;
   const hostAudioCaptureStatus = hostAudioCaptureIssue ?? hostAudioCaptureRetry;
   const hostAudioCaptureWarning = hostAudioEnabled && Boolean(hostAudioCaptureIssue);
   const hostAudioCaptureRetrying = hostAudioEnabled && !hostAudioCaptureWarning && Boolean(hostAudioCaptureRetry);
@@ -2353,7 +2383,9 @@ export function App() {
       || hostAudioStatus.fallbackReason === 'host-disabled'
       || (initialHostAudioStartGrace && hostAudioStatus.fallbackReason === 'heartbeat-timeout')
     );
-  const hostAudioLabel = !connected
+  const hostAudioLabel = personaTransitionActive
+    ? 'Switching Mode'
+    : !connected
     ? 'Unavailable'
     : hostAudioActive
       ? 'Host Encoding Active'
@@ -2364,7 +2396,9 @@ export function App() {
       : hostAudioEnabled
         ? `Fallback: ${hostAudioStatus?.fallbackReason?.replaceAll('-', ' ') ?? 'pending'}`
         : 'Pico Local';
-  const hostAudioTooltip = hostAudioCaptureStatus
+  const hostAudioTooltip = personaTransitionActive
+    ? 'Waiting for the controller to re-enumerate.'
+    : hostAudioCaptureStatus
     ? hostAudioCaptureStatus.message || hostAudioCaptureIssueTooltip(hostAudioCaptureStatus.reason)
     : hostAudioLabel;
   const hostAudioTone = hostAudioActive
@@ -2490,27 +2524,37 @@ export function App() {
   const activeAudioTestLocked = showMicrophoneControl ? micTestLocked : speakerTestLocked;
   const activeAudioTestStatusLabel = showMicrophoneControl ? micTestStatusLabel : speakerStatusLabel;
   const activeAudioTestStatusTone = showMicrophoneControl ? micTestStatusTone : speakerStatusTone;
-  const sidebarDeviceTitle = connected && controllerConnected
+  const sidebarDeviceTitle = personaTransitionActive
+    ? 'Switching Mode'
+    : connected && controllerConnected
     ? controllerName(snapshot.status?.controllerType)
     : 'Controller';
-  const sidebarDeviceStatus = connected && controllerConnected
+  const sidebarDeviceStatus = personaTransitionActive
+    ? 'Please wait'
+    : connected && controllerConnected
     ? 'Connected'
     : 'Bridge not detected';
-  const sidebarBatteryLabel = connected && controllerConnected
+  const sidebarBatteryLabel = personaTransitionActive
+    ? 'Reconnecting'
+    : connected && controllerConnected
     ? `Battery ${batteryPercentLabel}`
     : 'Battery unavailable';
   const pollingRateLabel = POLLING_RATE_OPTIONS.find(([, mode]) => mode === snapshot?.settings.pollingRateMode)?.[0]
     .replace(' / Real-time', '')
     ?? '--';
   const overviewHealthLabel = healthLabel(snapshot);
-  const overviewHealthTone = snapshot?.diagnostics.lastError
+  const overviewHealthTone = personaTransitionActive
+    ? 'warn'
+    : snapshot?.diagnostics.lastError
     ? 'bad'
     : connected && controllerConnected
       ? 'good'
       : connected
         ? 'warn'
         : 'idle';
-  const overviewConnectionStatus = connected && controllerConnected
+  const overviewConnectionStatus = personaTransitionActive
+    ? 'Switching'
+    : connected && controllerConnected
     ? 'Stable'
     : connected
       ? 'Waiting'
@@ -2520,7 +2564,9 @@ export function App() {
     : hostAudioEnabled
       ? 'On'
       : 'Off';
-  const overviewEncoderDetail = !connected
+  const overviewEncoderDetail = personaTransitionActive
+    ? 'Switching Mode'
+    : !connected
     ? '--'
     : hostAudioActive
       ? 'Active'
@@ -4218,7 +4264,7 @@ export function App() {
                 <strong>{sidebarDeviceTitle}</strong>
               </div>
               <div className="bridge-state compact-device-status">
-                <span className={`dot ${connected && controllerConnected ? 'good' : connected ? 'warn' : ''}`} />
+                <span className={`dot ${personaTransitionActive ? 'warn' : connected && controllerConnected ? 'good' : connected ? 'warn' : ''}`} />
                 <span>{sidebarDeviceStatus}</span>
               </div>
               <div className="battery-row compact-battery-row">
@@ -6090,30 +6136,22 @@ export function App() {
                       </div>
                       <div className="device-row device-control-row">
                         <span>Host Controller</span>
-                        <div className="dual-selector host-persona-selector" role="tablist" aria-label="Host controller persona">
-                          {HOST_PERSONA_OPTIONS.map(([label, mode]) => {
-                            const active = snapshot.settings.hostPersonaMode === mode;
-                            const supported = supportedHostPersonaModes.includes(mode);
-                            return (
-                              <button
-                                key={mode}
-                                type="button"
-                                role="tab"
-                                aria-selected={active}
-                                className={active ? 'active' : undefined}
-                                disabled={!connected || !hostPersonaControlSupported || !supported || pendingAction !== null}
-                                onClick={() => setHostPersonaMode(mode)}
-                              >
-                                {label}
-                              </button>
-                            );
-                          })}
-                        </div>
+                        <CustomSelect
+                          value={snapshot.settings.hostPersonaMode}
+                          disabled={!connected || !hostPersonaControlSupported || pendingAction !== null || personaTransitionActive}
+                          options={hostPersonaOptions.length > 0 ? hostPersonaOptions : HOST_PERSONA_OPTIONS.slice(0, 1)}
+                          className="host-persona-selector"
+                          ariaLabel="Host controller persona"
+                          getOptionClassName={(_, mode) => (mode === 'xbox' ? 'host-persona-platform-break' : undefined)}
+                          renderValue={(label, mode) => <HostPersonaOption label={label} value={mode} />}
+                          renderOption={(label, mode) => <HostPersonaOption label={label} value={mode} />}
+                          onChange={setHostPersonaMode}
+                        />
                       </div>
                       <div className="device-row">
                         <span>Status</span>
-                        <strong className={`health-label ${snapshot.diagnostics.lastError ? 'bad' : 'good'}`}>
-                          <span className={`dot ${snapshot.diagnostics.lastError ? 'bad' : statusTone}`} />
+                        <strong className={`health-label ${personaTransitionActive ? 'warn' : snapshot.diagnostics.lastError ? 'bad' : 'good'}`}>
+                          <span className={`dot ${personaTransitionActive ? 'warn' : snapshot.diagnostics.lastError ? 'bad' : statusTone}`} />
                           {healthLabel(snapshot)}
                         </strong>
                       </div>

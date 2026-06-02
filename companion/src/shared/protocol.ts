@@ -133,7 +133,7 @@ export interface AdaptiveTriggerPreviewEffect {
   forcePercent: number;
 }
 export type PollingRateMode = '250' | '500' | '1000';
-export type HostPersonaMode = 'dualsense' | 'xbox';
+export type HostPersonaMode = 'dualsense' | 'xbox' | 'ds4';
 export type HostAudioMode = 'fallback-pico-local' | 'host-encoded-active';
 export type HostAudioFallbackReason =
   | 'none'
@@ -533,10 +533,13 @@ export function pollingRateModeValue(mode: PollingRateMode): number {
 }
 
 export function hostPersonaModeValue(mode: HostPersonaMode): number {
-  return mode === 'xbox' ? 1 : 0;
+  if (mode === 'xbox') return 1;
+  if (mode === 'ds4') return 2;
+  return 0;
 }
 
 function hostPersonaMode(value: number): HostPersonaMode {
+  if (value === 2) return 'ds4';
   return value === 1 ? 'xbox' : 'dualsense';
 }
 
@@ -547,6 +550,9 @@ function supportedHostPersonaModes(mask: number): HostPersonaMode[] {
   }
   if ((mask & 0x02) !== 0) {
     modes.push('xbox');
+  }
+  if ((mask & 0x04) !== 0) {
+    modes.push('ds4');
   }
   return modes.length === 0 ? ['dualsense'] : modes;
 }

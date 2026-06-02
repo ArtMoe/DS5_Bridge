@@ -41,6 +41,7 @@ add_executable(ds5-bridge
         src/dualsense_input_decoder.cpp
         src/persona/host_persona.cpp
         src/persona/dualsense_persona.cpp
+        src/persona/ds4_persona.cpp
         src/persona/xusb360_persona.cpp
         src/persona/xusb360_usb.cpp
         src/usb.cpp

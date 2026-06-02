@@ -84,6 +84,8 @@ type StatusOverrides = {
   firmwarePatch?: number;
   firmwareFlags?: number;
   statusFlags?: number;
+  hostPersonaMode?: 'dualsense' | 'xbox' | 'ds4';
+  supportedHostPersonaModesMask?: number;
 };
 
 const FULL_REAPPLY_COMMANDS = [
@@ -124,6 +126,7 @@ class MockHidDevice extends EventEmitter {
   ackResults: number[] = [];
   ackReports: number[][] = [];
   writeError: Error | null = null;
+  statusReadError: Error | null = null;
   settingsRevision = 0;
   fixedAckRevision: number | null = null;
 
@@ -135,6 +138,9 @@ class MockHidDevice extends EventEmitter {
     expect(length).toBe(REPORT_LENGTH);
     this.featureReportIds.push(reportId);
     if (reportId === REPORT_ID.STATUS) {
+      if (this.statusReadError) {
+        throw this.statusReadError;
+      }
       return [...this.status];
     }
     if (reportId === REPORT_ID.ACK) {
@@ -269,6 +275,8 @@ function statusReport(overrides: StatusOverrides = {}): number[] {
   report[28] = overrides.firmwareFlags ?? 1;
   writeU16(report, 29, overrides.speakerVolumePercent ?? 30);
   writeU16(report, 43, overrides.idleDisconnectTimeoutMinutes ?? 15);
+  report[48] = overrides.hostPersonaMode === 'xbox' ? 1 : overrides.hostPersonaMode === 'ds4' ? 2 : 0;
+  report[49] = overrides.supportedHostPersonaModesMask ?? 0;
   return report;
 }
 
@@ -1093,7 +1101,7 @@ describe('BridgeService', () => {
   it('sends and stores host persona settings', async () => {
     const service = serviceFixture();
     const device = new MockHidDevice();
-    device.status = statusReport({ controllerConnected: false });
+    device.status = statusReport({ controllerConnected: false, supportedHostPersonaModesMask: 0x07 });
     hidMock.state.devicesList = [companionDeviceInfo()];
     hidMock.state.openDevices.set('companion-path', device);
 
@@ -1104,6 +1112,57 @@ describe('BridgeService', () => {
     expect(command?.[7]).toBe(COMMAND_ID.SET_HOST_PERSONA);
     expect(command?.[9]).toBe(1);
     expect(snapshot.settings.hostPersonaMode).toBe('xbox');
+  });
+
+  it('sends and stores DS4 host persona settings', async () => {
+    const service = serviceFixture();
+    const device = new MockHidDevice();
+    device.status = statusReport({ controllerConnected: false, supportedHostPersonaModesMask: 0x07 });
+    hidMock.state.devicesList = [companionDeviceInfo()];
+    hidMock.state.openDevices.set('companion-path', device);
+
+    await poll(service);
+    const snapshot = await service.setHostPersonaMode('ds4');
+
+    const command = device.sentReports.at(-1);
+    expect(command?.[7]).toBe(COMMAND_ID.SET_HOST_PERSONA);
+    expect(command?.[9]).toBe(2);
+    expect(snapshot.settings.hostPersonaMode).toBe('ds4');
+    expect(snapshot.message).toBe('Switching to DualShock 4 mode');
+    expect(snapshot.personaTransition?.to).toBe('ds4');
+  });
+
+  it('masks transient bridge loss during host persona re-enumeration', async () => {
+    const service = serviceFixture();
+    const device = new MockHidDevice();
+    device.status = statusReport({
+      controllerConnected: false,
+      hostPersonaMode: 'dualsense',
+      supportedHostPersonaModesMask: 0x07
+    });
+    hidMock.state.devicesList = [companionDeviceInfo()];
+    hidMock.state.openDevices.set('companion-path', device);
+
+    await poll(service);
+    const switchingSnapshot = await service.setHostPersonaMode('xbox');
+
+    expect(switchingSnapshot.state).toBe('transitioning');
+    expect(switchingSnapshot.message).toBe('Switching to Xbox Controller mode');
+    expect(switchingSnapshot.personaTransition).toMatchObject({
+      from: 'dualsense',
+      to: 'xbox'
+    });
+    expect(switchingSnapshot.diagnostics.lastError).toBeNull();
+
+    device.statusReadError = new Error('No WinUSB bridge transport');
+    await poll(service);
+
+    const maskedSnapshot = service.getSnapshot();
+    expect(maskedSnapshot.state).toBe('transitioning');
+    expect(maskedSnapshot.message).toBe('Switching to Xbox Controller mode');
+    expect(maskedSnapshot.diagnostics.lastError).toBeNull();
+    expect(maskedSnapshot.diagnostics.hostAudioCaptureIssue).toBeNull();
+    expect(maskedSnapshot.personaTransition?.to).toBe('xbox');
   });
 
   it('sends manual sleep command without requiring a settings revision change', async () => {

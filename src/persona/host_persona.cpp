@@ -1,5 +1,6 @@
 #include "persona/host_persona.h"
 
+#include "persona/ds4_persona.h"
 #include "persona/dualsense_persona.h"
 #include "persona/xusb360_persona.h"
 
@@ -25,6 +26,7 @@ extern "C" bool host_persona_is_supported(HostPersonaMode mode) {
     switch (mode) {
         case HostPersonaModeDualSense:
         case HostPersonaModeXusb360:
+        case HostPersonaModeDs4:
             return true;
         default:
             return false;
@@ -32,12 +34,12 @@ extern "C" bool host_persona_is_supported(HostPersonaMode mode) {
 }
 
 extern "C" bool host_persona_is_native_hid(void) {
-    return active_persona == HostPersonaModeDualSense;
+    return active_persona != HostPersonaModeXusb360;
 }
 
 extern "C" uint8_t host_persona_keyboard_hid_instance(void) {
 #ifdef ENABLE_COMPANION
-    return active_persona == HostPersonaModeDualSense ? 1 : 0;
+    return host_persona_is_native_hid() ? 1 : 0;
 #else
     return 0;
 #endif
@@ -53,6 +55,8 @@ bool host_persona_encode_input(
             return dualsense_persona_encode_input(state, report);
         case HostPersonaModeXusb360:
             return xusb360_persona_encode_input(state, report);
+        case HostPersonaModeDs4:
+            return ds4_persona_encode_input(state, report);
         default:
             return false;
     }
@@ -69,6 +73,14 @@ bool host_persona_decode_output_to_ds5_payload(
     switch (mode) {
         case HostPersonaModeXusb360:
             return xusb360_persona_decode_output_to_ds5_payload(
+                data,
+                len,
+                payload,
+                payload_capacity,
+                payload_len
+            );
+        case HostPersonaModeDs4:
+            return ds4_persona_decode_output_to_ds5_payload(
                 data,
                 len,
                 payload,

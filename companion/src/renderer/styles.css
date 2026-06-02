@@ -4238,7 +4238,7 @@ button.trigger-lab-chip {
 }
 
 .device-control-row .host-persona-selector {
-  grid-auto-columns: 96px;
+  width: min(100%, 270px);
   justify-self: end;
 }
 
@@ -4437,7 +4437,7 @@ button.trigger-lab-chip {
   white-space: nowrap;
 }
 
-.custom-select-button svg {
+.custom-select-button > svg {
   color: #aeb8c8;
   transition: transform 140ms ease;
 }
@@ -4447,7 +4447,7 @@ button.trigger-lab-chip {
   box-shadow: 0 0 0 3px rgba(40, 124, 255, 0.14);
 }
 
-.custom-select.open .custom-select-button svg {
+.custom-select.open .custom-select-button > svg {
   transform: rotate(180deg);
 }
 
@@ -4518,8 +4518,54 @@ button.trigger-lab-chip {
   background: rgba(40, 124, 255, 0.82);
 }
 
-.custom-select-menu button.selected svg {
+.custom-select-menu button.selected > svg {
   justify-self: end;
+}
+
+.host-persona-option {
+  min-width: 0;
+  display: inline-flex;
+  align-items: center;
+  gap: 9px;
+  color: #eef4ff;
+  line-height: 1;
+}
+
+.host-persona-option img,
+.host-persona-option svg {
+  width: 18px;
+  height: 18px;
+  flex: 0 0 18px;
+  object-fit: contain;
+  display: block;
+}
+
+.host-persona-option svg {
+  color: currentColor;
+}
+
+.host-persona-label {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  line-height: 1;
+}
+
+.host-persona-selector .custom-select-button > span,
+.host-persona-selector .custom-select-menu button > span {
+  min-height: 100%;
+  display: flex;
+  align-items: center;
+}
+
+.host-persona-selector .custom-select-menu button {
+  min-height: 38px;
+}
+
+.host-persona-selector .custom-select-menu button.host-persona-platform-break {
+  margin-top: 5px;
+  box-shadow: inset 0 1px 0 rgba(142, 164, 194, 0.18);
 }
 
 .system-page .custom-select-button,

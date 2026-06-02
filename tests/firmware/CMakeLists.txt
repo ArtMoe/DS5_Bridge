@@ -11,6 +11,7 @@ add_executable(firmware_logic_tests
     ../../src/dualsense_input_decoder.cpp
     ../../src/persona/host_persona.cpp
     ../../src/persona/dualsense_persona.cpp
+    ../../src/persona/ds4_persona.cpp
     ../../src/persona/xusb360_persona.cpp
     ../../src/controller_output_policy.cpp
     ../../src/controller_output_state.cpp
