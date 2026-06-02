@@ -8,6 +8,7 @@
 #include "bt.h"
 #include "controller_output_submit.h"
 #include "dualsense_output.h"
+#include "host_input.h"
 #include "persona/host_persona.h"
 #include "pico/critical_section.h"
 #include "pico/cyw43_arch.h"
@@ -708,6 +709,7 @@ void restore_defaults() {
     usb_set_suspend_disconnect_enabled(true);
     usb_set_hid_polling_rate_mode(2);
     if (host_persona_active() != HostPersonaModeDualSense) {
+        host_input_prepare_persona_switch();
         host_persona_set_active(HostPersonaModeDualSense);
         usb_request_reconnect();
     }
@@ -1977,6 +1979,9 @@ void handle_command(uint8_t const *buffer, uint16_t bufsize) {
             {
                 const HostPersonaMode next_persona = static_cast<HostPersonaMode>(value);
                 const bool changed = host_persona_active() != next_persona;
+                if (changed) {
+                    host_input_prepare_persona_switch();
+                }
                 if (!host_persona_set_active(next_persona)) {
                     set_ack(command_id, sequence, AckInvalidValue);
                     return;

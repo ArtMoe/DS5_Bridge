@@ -11,6 +11,7 @@
 
 #include "audio.h"
 #include "bt.h"
+#include "host_input.h"
 #include "usb.h"
 
 uint8_t mute[2]; // 0: speaker/LED fallback, 1: mic/idle-disconnect fallback
@@ -222,6 +223,7 @@ extern "C" void tud_mount_cb(void) {
     usb_mounted = true;
     usb_suspended = false;
     usb_suspend_disconnect_requested = false;
+    host_input_note_usb_mounted();
 }
 
 extern "C" void tud_umount_cb(void) {

@@ -190,15 +190,90 @@ void assert_xusb_persona_strings_are_xbox_facing(std::string const &source) {
     }
 }
 
+void assert_persona_switch_quiets_input_only(std::filesystem::path const &root) {
+    const auto host_input_h = read_text(root / "src" / "host_input.h");
+    const auto main_cpp = read_text(root / "src" / "main.cpp");
+    const auto companion_cpp = read_text(root / "src" / "companion.cpp");
+    const auto usb_cpp = read_text(root / "src" / "usb.cpp");
+
+    if (
+        host_input_h.find("void host_input_prepare_persona_switch();") == std::string::npos
+        || host_input_h.find("void host_input_note_usb_mounted();") == std::string::npos
+    ) {
+        throw std::runtime_error("Persona switches must expose an input-only transition guard");
+    }
+    if (
+        main_cpp.find("HOST_PERSONA_SWITCH_INPUT_FALLBACK_US") == std::string::npos
+        || main_cpp.find("host_input_waiting_for_mount = true;") == std::string::npos
+        || main_cpp.find("host_input_prepare_persona_switch()") == std::string::npos
+        || main_cpp.find("host_input_note_usb_mounted()") == std::string::npos
+        || main_cpp.find("host_input_send_report_for_persona(current_persona, neutral_state)") == std::string::npos
+    ) {
+        throw std::runtime_error("Persona switches must send a neutral report and quiet input until USB remount");
+    }
+    if (
+        usb_cpp.find("#include \"host_input.h\"") == std::string::npos
+        || usb_cpp.find("host_input_note_usb_mounted();") == std::string::npos
+    ) {
+        throw std::runtime_error("USB mount must release persona-switch input quieting");
+    }
+
+    const std::string command_block = extract_between(
+        companion_cpp,
+        "case CommandSetHostPersona:",
+        "\n\n        case CommandSleepController:"
+    );
+    const auto guard_pos = command_block.find("host_input_prepare_persona_switch();");
+    const auto set_pos = command_block.find("host_persona_set_active(next_persona)");
+    const auto reconnect_pos = command_block.find("usb_request_reconnect();");
+    if (
+        guard_pos == std::string::npos
+        || set_pos == std::string::npos
+        || reconnect_pos == std::string::npos
+        || guard_pos > set_pos
+        || set_pos > reconnect_pos
+    ) {
+        throw std::runtime_error("Persona command order must be neutral-release, set persona, then reconnect");
+    }
+
+    const std::string interrupt_loop = extract_between(
+        main_cpp,
+        "void interrupt_loop() {",
+        "\n}\n\nvoid on_bt_data"
+    );
+    if (interrupt_loop.find("host_input_quiet_active(now)") == std::string::npos) {
+        throw std::runtime_error("Persona transition quieting must only silence input reports");
+    }
+
+    const std::string get_report_callback = extract_between(
+        main_cpp,
+        "uint16_t tud_hid_get_report_cb",
+        "\n}\n\n// Invoked when received SET_REPORT"
+    );
+    const std::string set_report_callback = extract_between(
+        main_cpp,
+        "void tud_hid_set_report_cb",
+        "\n}\n\nint main()"
+    );
+    if (
+        get_report_callback.find("host_input_quiet") != std::string::npos
+        || set_report_callback.find("host_input_quiet") != std::string::npos
+    ) {
+        throw std::runtime_error("Persona transition quieting must not block HID control callbacks");
+    }
+}
+
 } // namespace
 
 int main() {
     try {
-        const auto source = read_text(std::filesystem::path(DS5_SOURCE_ROOT) / "src" / "usb_descriptors.c");
+        const auto source_root = std::filesystem::path(DS5_SOURCE_ROOT);
+        const auto source = read_text(source_root / "src" / "usb_descriptors.c");
         const uint16_t bcd_device = parse_bcd_device(source);
         const uint64_t descriptor_hash = companion_descriptor_hash(source);
         assert_xusb_descriptor_uses_endpoint_constants(source);
         assert_xusb_persona_strings_are_xbox_facing(source);
+        assert_persona_switch_quiets_input_only(source_root);
 
         if (bcd_device != kExpectedUsbDeviceRevision) {
             std::cerr << "USB bcdDevice changed unexpectedly. Expected 0x" << std::hex

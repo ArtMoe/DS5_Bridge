@@ -13,6 +13,7 @@
 #include "resample.h"
 #include "audio.h"
 #include "usb.h"
+#include "host_input.h"
 #include "controller_report.h"
 #include "dualsense_input_decoder.h"
 #include "persona/host_persona.h"
@@ -31,6 +32,7 @@
 
 int reportSeqCounter = 0;
 static constexpr uint32_t HOST_LIGHTBAR_RESTORE_DELAY_MS = 3000;
+static constexpr uint32_t HOST_PERSONA_SWITCH_INPUT_FALLBACK_US = 3'000'000;
 
 enum HidDebugKind : uint8_t {
     HidDebugGetReport = 1,
@@ -169,30 +171,108 @@ uint8_t interrupt_in_data[63] = {
 critical_section_t report_cs;
 volatile bool report_dirty = false;
 BridgeControllerState interrupt_in_state{};
+static volatile bool host_input_waiting_for_mount = false;
+static volatile uint32_t host_input_fallback_until_us = 0;
 
-void reset_controller_input_report_cache() {
-    static constexpr uint8_t default_interrupt_in_data[63] = {
-        0x7f, 0x7d, 0x7f, 0x7e, 0x00, 0x00, 0xa7,
-        0x08, 0x00, 0x00, 0x00, 0x52, 0x43, 0x30, 0x41,
-        0x01, 0x00, 0x0e, 0x00, 0xef, 0xff, 0x03, 0x03,
-        0x7b, 0x1b, 0x18, 0xf0, 0xcc, 0x9c, 0x60, 0x00,
-        0xfc, 0x80, 0x00, 0x00, 0x00, 0x80, 0x00, 0x00,
-        0x00, 0x00, 0x09, 0x09, 0x00, 0x00, 0x00, 0x00,
-        0x00, 0xa7, 0xad, 0x60, 0x00, 0x29, 0x18, 0x00,
-        0x53, 0x9f, 0x28, 0x35, 0xa5, 0xa8, 0x0c, 0x8b
-    };
+static constexpr uint8_t kNeutralDualSenseUsbInputReport[63] = {
+    0x7f, 0x7d, 0x7f, 0x7e, 0x00, 0x00, 0xa7,
+    0x08, 0x00, 0x00, 0x00, 0x52, 0x43, 0x30, 0x41,
+    0x01, 0x00, 0x0e, 0x00, 0xef, 0xff, 0x03, 0x03,
+    0x7b, 0x1b, 0x18, 0xf0, 0xcc, 0x9c, 0x60, 0x00,
+    0xfc, 0x80, 0x00, 0x00, 0x00, 0x80, 0x00, 0x00,
+    0x00, 0x00, 0x09, 0x09, 0x00, 0x00, 0x00, 0x00,
+    0x00, 0xa7, 0xad, 0x60, 0x00, 0x29, 0x18, 0x00,
+    0x53, 0x9f, 0x28, 0x35, 0xa5, 0xa8, 0x0c, 0x8b
+};
 
-    BridgeControllerState default_state{};
-    (void)dualsense_decode_usb_input_report(default_interrupt_in_data, sizeof(default_interrupt_in_data), default_state);
+static bool time_reached_u32(uint32_t now, uint32_t target) {
+    return static_cast<int32_t>(now - target) >= 0;
+}
+
+static bool host_input_quiet_active(uint32_t now) {
+    if (!host_input_waiting_for_mount) {
+        return false;
+    }
+    if (host_input_fallback_until_us != 0 && time_reached_u32(now, host_input_fallback_until_us)) {
+        host_input_waiting_for_mount = false;
+        host_input_fallback_until_us = 0;
+        return false;
+    }
+    return true;
+}
+
+static BridgeControllerState neutral_controller_state() {
+    BridgeControllerState state{};
+    (void)dualsense_decode_usb_input_report(
+        kNeutralDualSenseUsbInputReport,
+        sizeof(kNeutralDualSenseUsbInputReport),
+        state
+    );
+    return state;
+}
+
+static bool host_input_ready_for_persona(HostPersonaMode persona) {
+    return persona == HostPersonaModeDualSense ? tud_hid_ready() : xusb360_usb_ready();
+}
+
+static bool host_input_send_report_for_persona(HostPersonaMode persona, BridgeControllerState const &state) {
+    if (!host_input_ready_for_persona(persona)) {
+        return false;
+    }
+
+    HostPersonaInputReport report{};
+    if (!host_persona_encode_input(persona, state, report)) {
+        return false;
+    }
+
+    note_usb_input_report(report.bytes, report.len);
+    return persona == HostPersonaModeDualSense
+        ? tud_hid_report(report.report_id, report.bytes, report.len)
+        : xusb360_usb_send_report(report.bytes, report.len);
+}
+
+void host_input_prepare_persona_switch() {
+    const HostPersonaMode current_persona = host_persona_active();
+    const BridgeControllerState neutral_state = neutral_controller_state();
+    const uint32_t now = time_us_32();
 
     critical_section_enter_blocking(&report_cs);
-    memcpy(interrupt_in_data, default_interrupt_in_data, sizeof(interrupt_in_data));
+    memcpy(interrupt_in_data, kNeutralDualSenseUsbInputReport, sizeof(interrupt_in_data));
+    interrupt_in_state = neutral_state;
+    report_dirty = false;
+    host_input_waiting_for_mount = true;
+    host_input_fallback_until_us = now + HOST_PERSONA_SWITCH_INPUT_FALLBACK_US;
+    critical_section_exit(&report_cs);
+
+    (void)host_input_send_report_for_persona(current_persona, neutral_state);
+}
+
+void host_input_note_usb_mounted() {
+    host_input_waiting_for_mount = false;
+    host_input_fallback_until_us = 0;
+}
+
+void reset_controller_input_report_cache() {
+    BridgeControllerState default_state{};
+    (void)dualsense_decode_usb_input_report(
+        kNeutralDualSenseUsbInputReport,
+        sizeof(kNeutralDualSenseUsbInputReport),
+        default_state
+    );
+
+    critical_section_enter_blocking(&report_cs);
+    memcpy(interrupt_in_data, kNeutralDualSenseUsbInputReport, sizeof(interrupt_in_data));
     interrupt_in_state = default_state;
     report_dirty = false;
     critical_section_exit(&report_cs);
 }
 
 void interrupt_loop() {
+    const uint32_t now = time_us_32();
+    if (host_input_quiet_active(now)) {
+        return;
+    }
+
     const HostPersonaMode persona = host_persona_active();
     const bool native_hid = persona == HostPersonaModeDualSense;
     if (native_hid) {
