@@ -7,6 +7,7 @@ using namespace ds5::output;
 namespace {
 
 uint16_t classic_rumble_gain_percent = 100;
+bool audio_haptics_replace_active = false;
 
 } // namespace
 
@@ -18,7 +19,19 @@ uint16_t controller_output_policy_classic_rumble_gain() {
     return classic_rumble_gain_percent;
 }
 
+void controller_output_policy_set_audio_haptics_replace_active(bool active) {
+    audio_haptics_replace_active = active;
+}
+
+bool controller_output_policy_audio_haptics_replace_active() {
+    return audio_haptics_replace_active;
+}
+
 uint8_t controller_output_policy_scale_classic_rumble_byte(uint8_t value) {
+    if (audio_haptics_replace_active) {
+        return 0;
+    }
+
     const uint32_t scaled = static_cast<uint32_t>(value) * classic_rumble_gain_percent;
     return static_cast<uint8_t>(scaled >= 25500 ? 255 : (scaled + 50) / 100);
 }

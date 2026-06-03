@@ -6,6 +6,7 @@
 #include "audio.h"
 #include "bt.h"
 #include "controller_packet_compositor.h"
+#include "controller_output_policy.h"
 #include "controller_output_state.h"
 #include "dualsense_output.h"
 #include "haptics_test_signal.h"
@@ -1098,6 +1099,12 @@ bool audio_set_reactive_haptics_config(
     audio_reactive_haptics_response = response;
     audio_reactive_haptics_attack = attack;
     audio_reactive_haptics_release = release;
+    controller_output_policy_set_audio_haptics_replace_active(
+        audio_reactive_haptics_config_enabled && audio_reactive_haptics_mode == AudioReactiveHapticsReplace
+    );
+    if (controller_output_policy_audio_haptics_replace_active()) {
+        bt_set_classic_rumble_output(0, 0);
+    }
     if (changed) {
         audio_reactive_haptics_reset();
     }

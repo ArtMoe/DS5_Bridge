@@ -31,6 +31,7 @@ export type HostAudioStartFailureReason =
   | 'unsupported-format'
   | 'bulk-pcm-unavailable'
   | 'start-timeout'
+  | 'start-cancelled'
   | 'helper-exit';
 
 export class HostAudioStartError extends Error {
@@ -72,6 +73,7 @@ const DEV_HELPER_RELATIVE_PATH = path.join(
 export class HostAudioEngine extends EventEmitter {
   private process: ChildProcessWithoutNullStreams | null = null;
   private starting: Promise<void> | null = null;
+  private readonly stoppingHelpers = new WeakSet<ChildProcessWithoutNullStreams>();
   private stdoutBuffer = Buffer.alloc(0);
   private sequence = 0;
   private activeHidPath: string | null = null;
@@ -140,6 +142,7 @@ export class HostAudioEngine extends EventEmitter {
       return;
     }
 
+    this.stoppingHelpers.add(helper);
     await new Promise<void>((resolve) => {
       const timeout = setTimeout(() => {
         if (!helper.killed) {
@@ -150,6 +153,7 @@ export class HostAudioEngine extends EventEmitter {
 
       helper.once('exit', () => {
         clearTimeout(timeout);
+        this.stoppingHelpers.delete(helper);
         resolve();
       });
 
@@ -251,9 +255,13 @@ export class HostAudioEngine extends EventEmitter {
         }
       });
       helper.once('exit', (code, signal) => {
+        const wasStoppedByCompanion = this.stoppingHelpers.has(helper);
+        this.stoppingHelpers.delete(helper);
         finish(new HostAudioStartError(
-          `Host audio helper exited before recording started: helper exited (${signal ?? code ?? 'unknown'}).`,
-          'helper-exit'
+          wasStoppedByCompanion
+            ? 'Host audio helper startup was cancelled.'
+            : `Host audio helper exited before recording started: helper exited (${signal ?? code ?? 'unknown'}).`,
+          wasStoppedByCompanion ? 'start-cancelled' : 'helper-exit'
         ));
       });
     });
@@ -480,6 +488,8 @@ function hostAudioStartFailureMessage(reason: HostAudioStartFailureReason): stri
       return 'DS5 Bridge WinUSB PCM pipe is unavailable. Re-enumerate or clean stale DS5 Bridge devices, then Host Encoding will retry.';
     case 'start-timeout':
       return `Host audio helper did not start recording within ${HELPER_START_TIMEOUT_MS}ms.`;
+    case 'start-cancelled':
+      return 'Host audio helper startup was cancelled.';
     case 'helper-exit':
       return 'Host audio helper exited before recording started.';
   }

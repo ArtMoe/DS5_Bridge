@@ -2153,12 +2153,34 @@ button.overview-shortcut-chip {
   max-width: none;
 }
 
+.audio-heading-controls .audio-haptics-mode-state {
+  max-width: none;
+}
+
 .trigger-lab-switch-control:hover .trigger-lab-override-tooltip {
   opacity: 1;
   transform: translate(-50%, 0);
 }
 
+.audio-haptics-switch-control:hover .audio-haptics-mode-tooltip {
+  opacity: 1;
+  transform: translate(-50%, 0);
+}
+
 .shortcut-glyph-tooltip.trigger-lab-override-tooltip {
+  left: 50%;
+  right: auto;
+  z-index: 40;
+  width: max-content;
+  max-width: min(360px, calc(100vw - 64px));
+  display: block;
+  text-align: left;
+  white-space: normal;
+  overflow-wrap: anywhere;
+  transform: translate(-50%, -4px);
+}
+
+.shortcut-glyph-tooltip.audio-haptics-mode-tooltip {
   left: 50%;
   right: auto;
   z-index: 40;
@@ -2925,6 +2947,7 @@ button.feature-icon {
 }
 
 .audio-enable-button svg,
+.audio-haptics-enable-button svg,
 .haptics-enable-button svg,
 .triggers-enable-button svg,
 .lighting-enable-button svg {
@@ -2933,6 +2956,7 @@ button.feature-icon {
 }
 
 .audio-enable-button.active,
+.audio-haptics-enable-button.active,
 .haptics-enable-button.active,
 .triggers-enable-button.active,
 .lighting-enable-button.active {
@@ -3152,16 +3176,28 @@ button.feature-icon {
 }
 
 .audio-haptics-card {
-  display: flex;
-  flex-direction: column;
-  gap: 12px;
   align-content: stretch;
   min-height: 0;
 }
 
-.audio-haptics-card .framed-slider {
-  margin: 6px 0 0;
-  padding: 14px 18px 10px;
+.audio-haptics-card:not(.audio-haptics-response-card) {
+  display: grid;
+  grid-template-rows: auto auto auto auto minmax(0, 1fr) auto;
+}
+
+.audio-haptics-card:not(.audio-haptics-response-card) .feature-card-title {
+  margin-bottom: 0;
+}
+
+.audio-haptics-response-card {
+  display: flex;
+  flex-direction: column;
+  padding-bottom: 5px;
+}
+
+.audio-haptics-slider-spacer {
+  display: block;
+  min-height: 17px;
 }
 
 .audio-haptics-status-badge {
@@ -3183,28 +3219,30 @@ button.feature-icon {
 }
 
 .audio-haptics-card > .segmented-row {
-  margin-top: 0;
+  margin-top: 16px;
 }
 
 .audio-haptics-routing-stack {
   display: grid;
   gap: 8px;
+  grid-row: 6;
   margin-top: 0;
 }
 
 .audio-haptics-routing-stack .dual-selector {
-  min-height: 34px;
+  min-height: 38px;
 }
 
 .audio-haptics-routing-stack .dual-selector button {
-  min-height: 32px;
-  font-size: 12px;
+  min-height: 36px;
+  font-size: 13px;
+  font-weight: 650;
 }
 
 .audio-haptics-config-stack {
   display: grid;
   gap: 10px;
-  margin: 10px 0 12px;
+  margin: 16px 0 12px;
 }
 
 .audio-haptics-config-row {
@@ -3260,10 +3298,12 @@ button.feature-icon {
 }
 
 .audio-haptics-status {
-  align-self: end;
+  align-self: stretch;
+  justify-content: flex-start;
   flex-wrap: wrap;
   gap: 10px;
   margin-top: auto;
+  padding-top: 10px;
 }
 
 .dual-selector {

@@ -97,6 +97,7 @@ const MIC_KEEPALIVE_ENABLED = CompanionDebugConfig.micKeepaliveEnabled;
 const HOST_AUDIO_MAX_QUEUED_FRAMES = 2;
 const HOST_AUDIO_STOP_FADE_MS = 40;
 const SYSTEM_AUDIO_HAPTICS_RETRY_MS = 5000;
+const SYSTEM_AUDIO_HAPTICS_BYPASS_RETRY_MS = 2000;
 const LOW_BATTERY_PERCENT = 20;
 const MIN_SUPPORTED_FIRMWARE_VERSION = '1.5.3';
 const FIRMWARE_UPDATE_REQUIRED_MESSAGE = `Firmware ${MIN_SUPPORTED_FIRMWARE_VERSION} update required`;
@@ -234,6 +235,7 @@ function hostAudioCaptureIssueMessage(
     case 'bulk-pcm-unavailable':
       return `DS5 Bridge WinUSB PCM pipe is unavailable. Re-enumerate or clean stale DS5 Bridge devices, then Host Encoding will retry in ${retrySeconds}s.`;
     case 'start-timeout':
+    case 'start-cancelled':
     case 'helper-exit':
       return `${fallbackMessage} Host Encoding will retry in ${retrySeconds}s.`;
   }
@@ -444,7 +446,7 @@ function normalizeAudioReactiveHapticsConfig(
 ): AudioReactiveHapticsConfig {
   return {
     enabled: typeof config.enabled === 'boolean' ? config.enabled : settings.audioReactiveHapticsEnabled,
-    source: normalizeAudioReactiveHapticsSource(config.source ?? settings.audioReactiveHapticsSource),
+    source: normalizeAudioReactiveHapticsSource(config.source),
     mode: normalizeAudioReactiveHapticsMode(config.mode ?? settings.audioReactiveHapticsMode),
     gainPercent: Number.isFinite(config.gainPercent)
       ? Math.max(0, Math.min(200, Math.round(config.gainPercent!)))
@@ -1546,6 +1548,7 @@ export class BridgeService extends EventEmitter {
   private async readHostAudioStatus(): Promise<void> {
     if (!this.device) {
       this.hostAudioStatus = null;
+      this.publishAudioDiagnosticsSnapshot();
       return;
     }
 
@@ -1558,6 +1561,7 @@ export class BridgeService extends EventEmitter {
     } catch {
       this.hostAudioStatus = null;
     }
+    this.publishAudioDiagnosticsSnapshot();
   }
 
   private async readHostAudioStatusThrottled(force = false, intervalMs = HOST_AUDIO_STATUS_READ_INTERVAL_MS): Promise<void> {
@@ -1565,6 +1569,22 @@ export class BridgeService extends EventEmitter {
       return;
     }
     await this.readHostAudioStatus();
+  }
+
+  private hostAudioStatusConfirmedActive(): boolean {
+    return this.hostAudioStatus?.mode === 'host-encoded-active'
+      && this.hostAudioStatus.streamActive
+      && this.hostAudioStatus.fallbackReason === 'none';
+  }
+
+  private publishAudioDiagnosticsSnapshot(): void {
+    this.snapshot = {
+      ...this.snapshot,
+      diagnostics: this.withAudioDebugDiagnostics(this.snapshot.diagnostics)
+    };
+    if (this.snapshot.status) {
+      this.emitSnapshot();
+    }
   }
 
   private isControllerPowerSavingActive(settings: CompanionSettings): boolean {
@@ -1606,13 +1626,7 @@ export class BridgeService extends EventEmitter {
   private audioReactiveHapticsCommandEnabled(settings: CompanionSettings): boolean {
     return settings.hapticsEnabled
       && settings.audioReactiveHapticsEnabled
-      && (
-        settings.audioReactiveHapticsSource === 'controller-audio'
-        || (
-          settings.audioReactiveHapticsSource === 'system-audio'
-          && this.systemAudioHapticsPassthroughActive
-        )
-      );
+      && this.systemAudioHapticsPassthroughActive;
   }
 
   private audioReactiveHapticsSupported(): boolean {
@@ -1625,8 +1639,7 @@ export class BridgeService extends EventEmitter {
 
   private systemAudioHapticsDesired(settings: CompanionSettings): boolean {
     return settings.hapticsEnabled
-      && settings.audioReactiveHapticsEnabled
-      && settings.audioReactiveHapticsSource === 'system-audio';
+      && settings.audioReactiveHapticsEnabled;
   }
 
   private systemAudioHapticsConfig(settings: CompanionSettings): SystemAudioHapticsConfig {
@@ -2564,6 +2577,15 @@ export class BridgeService extends EventEmitter {
   }
 
   private async handleHostAudioCaptureStartFailure(error: HostAudioStartError): Promise<void> {
+    const reason = error.reason;
+    if (reason === 'start-cancelled') {
+      this.clearHostAudioCaptureBackoff();
+      this.appendAudioDebugLines([
+        '[HostBridge] host audio capture start cancelled'
+      ]);
+      return;
+    }
+
     const retryAt = Date.now() + HOST_AUDIO_CAPTURE_RETRY_MS;
     this.hostAudioCaptureRetryAt = retryAt;
     if (this.isHostPersonaTransitionActive()) {
@@ -2581,16 +2603,16 @@ export class BridgeService extends EventEmitter {
     await this.deactivateHostAudioFirmwareAfterCaptureFailure();
 
     const retrySeconds = Math.round(HOST_AUDIO_CAPTURE_RETRY_MS / 1000);
-    const message = hostAudioCaptureIssueMessage(error.reason, retrySeconds, error.message);
-    const surfaceIssue = shouldSurfaceHostAudioCaptureIssue(error.reason);
+    const message = hostAudioCaptureIssueMessage(reason, retrySeconds, error.message);
+    const surfaceIssue = shouldSurfaceHostAudioCaptureIssue(reason);
     this.hostAudioCaptureRetry = {
-      reason: error.reason,
+      reason,
       message,
       retryAt
     };
     this.hostAudioCaptureIssue = surfaceIssue
       ? {
-          reason: error.reason,
+          reason,
           message,
           retryAt
         }
@@ -2637,10 +2659,17 @@ export class BridgeService extends EventEmitter {
 
   private async updateSystemAudioHapticsEngine(): Promise<void> {
     const settings = this.settingsStore.get();
+    const hostAudioStartingOrRetrying = settings.hostEncodedAudioEnabled
+      && (
+        !this.hostAudioCommandActive
+        || this.isHostAudioCaptureRetryPending()
+        || !this.hostAudioEngine.isActive()
+      );
     if (
       !this.systemAudioHapticsDesired(settings)
       || !this.device
       || !this.systemAudioHapticsSupported()
+      || hostAudioStartingOrRetrying
     ) {
       const wasPassthroughActive = this.systemAudioHapticsPassthroughActive;
       this.systemAudioHapticsPassthroughActive = false;
@@ -2665,16 +2694,16 @@ export class BridgeService extends EventEmitter {
       }
       this.systemAudioHapticsRetryAt = 0;
     } catch (error) {
-      const retryAt = Date.now() + SYSTEM_AUDIO_HAPTICS_RETRY_MS;
-      this.systemAudioHapticsRetryAt = retryAt;
       await this.systemAudioHapticsEngine.stop();
       if (this.systemAudioHapticsPassthroughActive) {
+        this.systemAudioHapticsRetryAt = Date.now() + SYSTEM_AUDIO_HAPTICS_BYPASS_RETRY_MS;
         await this.applyAudioReactiveHapticsSettings(settings, false);
         this.appendAudioDebugLines([
-          `[SystemHaptics] mirror bypassed because Windows output is already DS5 Bridge; firmware passthrough active retryInMs=${SYSTEM_AUDIO_HAPTICS_RETRY_MS}`
+          `[SystemHaptics] mirror bypassed because Windows output is already DS5 Bridge; firmware passthrough active retryInMs=${SYSTEM_AUDIO_HAPTICS_BYPASS_RETRY_MS}`
         ]);
         return;
       }
+      this.systemAudioHapticsRetryAt = Date.now() + SYSTEM_AUDIO_HAPTICS_RETRY_MS;
       const message = error instanceof Error ? error.message : String(error);
       this.appendAudioDebugLines([
         `[SystemHaptics] capture unavailable retryInMs=${SYSTEM_AUDIO_HAPTICS_RETRY_MS} error=${message}`
@@ -2689,6 +2718,14 @@ export class BridgeService extends EventEmitter {
 
     try {
       const settings = this.settingsStore.get();
+      if (
+        line.includes('route-changed')
+        && this.systemAudioHapticsDesired(settings)
+      ) {
+        this.systemAudioHapticsRetryAt = 0;
+        return;
+      }
+
       if (
         line.includes('system-haptics-bypassed')
         && line.includes('reason=source-is-bridge')
@@ -2851,9 +2888,12 @@ export class BridgeService extends EventEmitter {
       if (this.hostAudioCommandActive) {
         await this.sendCommand(COMMAND_ID.HOST_AUDIO_HEARTBEAT, 0, { throwOnCommandError: false });
       }
+      const statusReadInterval = helperIsActive && this.hostAudioStatusConfirmedActive()
+        ? HOST_AUDIO_HELPER_STATUS_READ_INTERVAL_MS
+        : HOST_AUDIO_STATUS_READ_INTERVAL_MS;
       await this.readHostAudioStatusThrottled(
         false,
-        helperIsActive ? HOST_AUDIO_HELPER_STATUS_READ_INTERVAL_MS : HOST_AUDIO_STATUS_READ_INTERVAL_MS
+        statusReadInterval
       );
       await this.pollShortcutEvent();
     } finally {
@@ -2883,6 +2923,7 @@ export class BridgeService extends EventEmitter {
     const hostAudioActive = currentSettings.hostEncodedAudioEnabled && this.hostAudioCommandActive;
     if (
       hostAudioActive
+      && this.hostAudioStatusConfirmedActive()
       && now - this.lastHostAudioActivePollAt < HOST_AUDIO_ACTIVE_POLL_INTERVAL_MS
     ) {
       return;
@@ -3169,7 +3210,9 @@ export class BridgeService extends EventEmitter {
       expectSettingsRevisionChange
     });
     await this.applyAudioReactiveHapticsSettings(settings, expectSettingsRevisionChange);
-    await this.updateSystemAudioHapticsEngine();
+    if (!this.reapplyActive) {
+      await this.updateSystemAudioHapticsEngine();
+    }
     await this.sendCommand(
       COMMAND_ID.SET_CLASSIC_RUMBLE_GAIN,
       this.effectiveClassicRumbleGain(settings),

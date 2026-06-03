@@ -131,6 +131,7 @@ uint8_t haptic_frame_left_sign_flips(HapticFrame const &frame) {
 
 void reset_policy_state() {
     controller_output_policy_set_classic_rumble_gain(100);
+    controller_output_policy_set_audio_haptics_replace_active(false);
 }
 
 void reset_output_state() {
@@ -303,6 +304,29 @@ void classic_rumble_gain_clamps_rounds_and_only_touches_flagged_payloads() {
     controller_output_policy_set_classic_rumble_gain(999);
     EXPECT_EQ(controller_output_policy_classic_rumble_gain(), 500);
     EXPECT_EQ(controller_output_policy_scale_classic_rumble_byte(60), 255);
+    reset_policy_state();
+}
+
+void audio_haptics_replace_suppresses_classic_rumble_without_changing_saved_gain() {
+    reset_policy_state();
+    controller_output_policy_set_classic_rumble_gain(175);
+    controller_output_policy_set_audio_haptics_replace_active(true);
+
+    EXPECT_TRUE(controller_output_policy_audio_haptics_replace_active());
+    EXPECT_EQ(controller_output_policy_classic_rumble_gain(), 175);
+    EXPECT_EQ(controller_output_policy_scale_classic_rumble_byte(200), 0);
+
+    auto payload = empty_payload();
+    payload[kValidFlag0Offset] = kFlag0CompatibleVibration;
+    payload[kMotorRightOffset] = 40;
+    payload[kMotorLeftOffset] = 80;
+    EXPECT_TRUE(controller_output_policy_apply_classic_rumble_gain_payload(payload.data(), payload.size()));
+    EXPECT_EQ(payload[kMotorRightOffset], 0);
+    EXPECT_EQ(payload[kMotorLeftOffset], 0);
+
+    controller_output_policy_set_audio_haptics_replace_active(false);
+    EXPECT_EQ(controller_output_policy_classic_rumble_gain(), 175);
+    EXPECT_EQ(controller_output_policy_scale_classic_rumble_byte(40), 70);
     reset_policy_state();
 }
 
@@ -814,6 +838,7 @@ std::vector<TestCase> tests{
     {"scheduler starvation requires audio urgent depth and age thresholds", scheduler_starvation_requires_audio_urgent_depth_and_age_thresholds},
     {"packet compositor initializes bluetooth report and wraps sequence", packet_compositor_initializes_bluetooth_report_and_wraps_sequence},
     {"classic rumble gain clamps rounds and only touches flagged payloads", classic_rumble_gain_clamps_rounds_and_only_touches_flagged_payloads},
+    {"audio haptics replace suppresses classic rumble without changing saved gain", audio_haptics_replace_suppresses_classic_rumble_without_changing_saved_gain},
     {"speaker sanitizer strips host amp flags and zeroes only controlled fields", speaker_sanitizer_strips_host_amp_flags_and_zeroes_only_controlled_fields},
     {"mic sanitizer removes mute led and only mic power save bit", mic_sanitizer_removes_mute_led_and_only_mic_power_save_bit},
     {"lightbar override removes host led claims without mutating color bytes", lightbar_override_removes_host_led_claims_without_mutating_color_bytes},

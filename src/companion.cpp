@@ -6,6 +6,7 @@
 
 #include "audio.h"
 #include "bt.h"
+#include "controller_output_policy.h"
 #include "controller_output_submit.h"
 #include "dualsense_output.h"
 #include "host_input.h"
@@ -1239,6 +1240,7 @@ void submit_classic_rumble_test_output(uint8_t right, uint8_t left) {
 bool schedule_classic_rumble_test() {
     if (
         !bt_is_controller_connected()
+        || controller_output_policy_audio_haptics_replace_active()
         || classic_rumble_test_active
     ) {
         return false;
@@ -2012,11 +2014,14 @@ void handle_command(uint8_t const *buffer, uint16_t bufsize) {
             }
 
         case CommandSetAudioReactiveHaptics:
+            {
+            const bool enabled = value == 1;
+            const uint8_t mode = buffer[10];
             if (
                 value > 1
                 || !audio_set_reactive_haptics_config(
-                    value == 1,
-                    buffer[10],
+                    enabled,
+                    mode,
                     read_u16(buffer + 11),
                     buffer[13],
                     buffer[14],
@@ -2027,9 +2032,13 @@ void handle_command(uint8_t const *buffer, uint16_t bufsize) {
                 set_ack(command_id, sequence, AckInvalidValue);
                 return;
             }
+            if (enabled && mode == AudioReactiveHapticsReplace) {
+                stop_classic_rumble_test();
+            }
             settings_revision++;
             set_ack(command_id, sequence, AckOk);
             return;
+            }
 
         case CommandSleepController:
             if (value != 0) {

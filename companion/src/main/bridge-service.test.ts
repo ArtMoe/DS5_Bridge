@@ -67,6 +67,7 @@ vi.mock('./winusb-companion-transport', () => ({
 }));
 
 import { BridgeService } from './bridge-service';
+import { HostAudioStartError } from './host-audio-engine';
 import { SettingsStore } from './settings-store';
 
 type StatusOverrides = {
@@ -929,7 +930,7 @@ describe('BridgeService', () => {
     expect(snapshot.status?.speakerVolumePercent).toBe(25);
   });
 
-  it('sends and stores audio reactive haptics settings', async () => {
+  it('stores audio reactive haptics settings and enables firmware DSP only for bridge output passthrough', async () => {
     const service = serviceFixture();
     const device = new MockHidDevice();
     device.status = statusReport({ controllerConnected: false });
@@ -949,7 +950,7 @@ describe('BridgeService', () => {
 
     const command = device.sentReports.at(-1);
     expect(command?.[7]).toBe(COMMAND_ID.SET_AUDIO_REACTIVE_HAPTICS);
-    expect(command?.[9]).toBe(1);
+    expect(command?.[9]).toBe(0);
     expect(command?.slice(11, 18)).toEqual([1, 150, 0, 2, 2, 3, 2]);
     expect(snapshot.settings).toMatchObject({
       audioReactiveHapticsEnabled: true,
@@ -960,6 +961,16 @@ describe('BridgeService', () => {
       audioReactiveHapticsAttack: 'sharp',
       audioReactiveHapticsRelease: 'smooth'
     });
+
+    await (service as unknown as {
+      handleSystemAudioHapticsStatus(line: string): Promise<void>;
+    }).handleSystemAudioHapticsStatus(
+      "status: system-haptics-bypassed reason=source-is-bridge device='DS5 Bridge'"
+    );
+    const passthroughCommand = device.sentReports.at(-1);
+    expect(passthroughCommand?.[7]).toBe(COMMAND_ID.SET_AUDIO_REACTIVE_HAPTICS);
+    expect(passthroughCommand?.[9]).toBe(1);
+    expect(passthroughCommand?.slice(11, 18)).toEqual([1, 150, 0, 2, 2, 3, 2]);
   });
 
   it('sends and stores USB suspend disconnect settings', async () => {
@@ -1825,6 +1836,40 @@ describe('BridgeService', () => {
     expect(device.sentReports.at(-1)?.[13]).toBe(75);
   });
 
+  it('publishes host-audio status reads into the snapshot immediately', async () => {
+    const service = serviceFixture();
+    const device = new MockHidDevice();
+    hidMock.state.devicesList = [companionDeviceInfo()];
+    hidMock.state.openDevices.set('companion-path', device);
+
+    await poll(service);
+    expect(service.getSnapshot().diagnostics.hostAudioStatus).toMatchObject({
+      mode: 'fallback-pico-local',
+      fallbackReason: 'host-disabled'
+    });
+
+    device.hostAudioStatusReports = [
+      hostAudioStatusReport({
+        mode: 1,
+        fallbackReason: 0,
+        hostRequested: true,
+        heartbeatHealthy: true,
+        streamActive: true,
+        streamHealthy: true,
+        controllerStateReady: true
+      })
+    ];
+
+    await (service as unknown as { readHostAudioStatus(): Promise<void> }).readHostAudioStatus();
+
+    expect(service.getSnapshot().diagnostics.hostAudioStatus).toMatchObject({
+      mode: 'host-encoded-active',
+      fallbackReason: 'none',
+      streamActive: true,
+      streamHealthy: true
+    });
+  });
+
   it('drops the oldest host-audio frame when the companion write queue backs up', async () => {
     const service = serviceFixture();
     const device = new MockHidDevice();
@@ -1877,6 +1922,37 @@ describe('BridgeService', () => {
     expect(internals.hostAudioCommandActive).toBe(false);
     expect(internals.hostAudioReportQueue).toEqual([]);
     expect(service.getSnapshot().diagnostics.audioDebugLogLines.at(-1)).toContain('stage=write-failed');
+  });
+
+  it('does not publish a host-audio retry when helper startup is intentionally cancelled', async () => {
+    const service = serviceFixture();
+    const start = vi.fn(async () => {
+      throw new HostAudioStartError('Host audio helper startup was cancelled.', 'start-cancelled');
+    });
+    const internals = service as unknown as {
+      hostAudioEngine: {
+        start: typeof start;
+        stop(): Promise<void>;
+        isActive(): boolean;
+        setSpeakerVolumePercent(percent: number): void;
+      };
+      ensureHostAudioCapture(speakerVolumePercent: number): Promise<boolean>;
+    };
+    internals.hostAudioEngine = {
+      start,
+      stop: vi.fn(async () => undefined),
+      isActive: () => false,
+      setSpeakerVolumePercent: vi.fn()
+    };
+
+    await expect(internals.ensureHostAudioCapture(75)).resolves.toBe(false);
+
+    const diagnostics = service.getSnapshot().diagnostics;
+    expect(start).toHaveBeenCalledWith(null, 75);
+    expect(diagnostics.hostAudioCaptureRetry).toBeNull();
+    expect(diagnostics.hostAudioCaptureIssue).toBeNull();
+    expect(diagnostics.lastError).toBeNull();
+    expect(diagnostics.audioDebugLogLines.at(-1)).toBe('[HostBridge] host audio capture start cancelled');
   });
 
   it('rejects accepted setting commands that do not advance settings_revision', async () => {

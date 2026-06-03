@@ -7,6 +7,7 @@ using Concentus.Enums;
 using Concentus.Structs;
 using HidSharp;
 using NAudio.CoreAudioApi;
+using NAudio.CoreAudioApi.Interfaces;
 using NAudio.Wave;
 
 var options = HelperOptions.Parse(args);
@@ -133,6 +134,7 @@ sealed class HostAudioHelper : IDisposable
     private long rawCaptureDumpFramesWritten;
     private bool rawCaptureDumpLimitLogged;
     private MMDeviceEnumerator? enumerator;
+    private IMMNotificationClient? endpointNotificationClient;
     private WasapiCapture? capture;
     private WasapiOut? hapticsMirrorOutput;
     private BufferedWaveProvider? hapticsMirrorBuffer;
@@ -398,6 +400,7 @@ sealed class HostAudioHelper : IDisposable
 
     private void Stop()
     {
+        UnregisterEndpointNotifications();
         stopped.Set();
         try
         {
@@ -530,6 +533,7 @@ sealed class HostAudioHelper : IDisposable
         hapticsMirrorOutput = new WasapiOut(targetDevice, AudioClientShareMode.Shared, false, 20);
         hapticsMirrorOutput.Init(hapticsMirrorBuffer);
         hapticsMirrorOutput.Play();
+        RegisterDefaultRenderNotification(enumerator);
 
         capture = new WasapiLoopbackCapture(sourceDevice);
         SetWasapiBufferMilliseconds(capture, AudioConstants.WasapiBufferMilliseconds);
@@ -545,6 +549,38 @@ sealed class HostAudioHelper : IDisposable
         StartRawCaptureDump(capture.WaveFormat);
         capture.StartRecording();
         Console.Error.WriteLine("status: recording-started");
+    }
+
+    private void RegisterDefaultRenderNotification(MMDeviceEnumerator enumerator)
+    {
+        UnregisterEndpointNotifications();
+        endpointNotificationClient = new DefaultRenderNotificationClient(() =>
+        {
+            ThreadPool.QueueUserWorkItem(_ =>
+            {
+                Console.Error.WriteLine("status: route-changed reason=default-render-changed");
+                Stop();
+            });
+        });
+        enumerator.RegisterEndpointNotificationCallback(endpointNotificationClient);
+    }
+
+    private void UnregisterEndpointNotifications()
+    {
+        var client = endpointNotificationClient;
+        endpointNotificationClient = null;
+        if (client is null || enumerator is null)
+        {
+            return;
+        }
+
+        try
+        {
+            enumerator.UnregisterEndpointNotificationCallback(client);
+        }
+        catch
+        {
+        }
     }
 
     private static void SetWasapiBufferMilliseconds(WasapiCapture capture, int milliseconds)
@@ -1952,6 +1988,40 @@ sealed record PcmCaptureChunk(
     WaveFormat Format,
     int Frames,
     AudioClientBufferFlags Flags);
+
+sealed class DefaultRenderNotificationClient : IMMNotificationClient
+{
+    private readonly Action onDefaultRenderChanged;
+
+    public DefaultRenderNotificationClient(Action onDefaultRenderChanged)
+    {
+        this.onDefaultRenderChanged = onDefaultRenderChanged;
+    }
+
+    public void OnDeviceStateChanged(string deviceId, DeviceState newState)
+    {
+    }
+
+    public void OnDeviceAdded(string pwstrDeviceId)
+    {
+    }
+
+    public void OnDeviceRemoved(string deviceId)
+    {
+    }
+
+    public void OnDefaultDeviceChanged(DataFlow flow, Role role, string defaultDeviceId)
+    {
+        if (flow == DataFlow.Render && role == Role.Multimedia)
+        {
+            onDefaultRenderChanged();
+        }
+    }
+
+    public void OnPropertyValueChanged(string pwstrDeviceId, PropertyKey key)
+    {
+    }
+}
 
 sealed class MmcssRegistration : IDisposable
 {

@@ -39,7 +39,7 @@ const DEFAULT_CONTROLLER_PROFILE_SETTINGS: ControllerProfileSettings = {
   micVolumePercent: 100,
   micMuted: true,
   audioReactiveHapticsEnabled: false,
-  audioReactiveHapticsSource: 'controller-audio',
+  audioReactiveHapticsSource: 'system-audio',
   audioReactiveHapticsMode: 'mix',
   audioReactiveHapticsGainPercent: 100,
   audioReactiveHapticsBassFocus: 'balanced',
@@ -208,7 +208,7 @@ function normalizeAudioReactiveHapticsMode(value: unknown): AudioReactiveHaptics
 }
 
 function normalizeAudioReactiveHapticsSource(value: unknown): AudioReactiveHapticsSource {
-  return value === 'system-audio' ? value : DEFAULT_CONTROLLER_PROFILE_SETTINGS.audioReactiveHapticsSource;
+  return value === 'controller-audio' ? value : DEFAULT_CONTROLLER_PROFILE_SETTINGS.audioReactiveHapticsSource;
 }
 
 function normalizeAudioReactiveHapticsBassFocus(value: unknown): AudioReactiveHapticsBassFocus {

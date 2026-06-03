@@ -103,4 +103,15 @@ describe('renderer behavior guards', () => {
     expect(classicButtonSource).toContain('testLocked');
     expect(classicButtonSource).toContain('Test Rumble');
   });
+
+  it('does not let initial status overwrite a newer live snapshot', () => {
+    const start = appSource.indexOf('let cancelled = false;');
+    expect(start).toBeGreaterThanOrEqual(0);
+    const end = appSource.indexOf('return () => {', start);
+    const startupSubscriptionSource = appSource.slice(start, end);
+
+    expect(startupSubscriptionSource).toContain('let receivedLiveSnapshot = false;');
+    expect(startupSubscriptionSource).toContain('if (!cancelled && !receivedLiveSnapshot)');
+    expect(startupSubscriptionSource).toContain('receivedLiveSnapshot = true;');
+  });
 });

@@ -1,8 +1,71 @@
 import { Buffer } from 'node:buffer';
-import { describe, expect, it } from 'vitest';
-import { HostAudioEngine, type HostAudioFramePayload } from './host-audio-engine';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
+
+const childProcessMock = vi.hoisted(() => {
+  const { EventEmitter } = require('node:events') as typeof import('node:events');
+
+  class MockWritable extends EventEmitter {
+    destroyed = false;
+    writable = true;
+    end = vi.fn(() => {
+      this.writable = false;
+    });
+    write = vi.fn((_line: string, callback?: (error?: Error | null) => void) => {
+      callback?.();
+      return true;
+    });
+  }
+
+  class MockChildProcess extends EventEmitter {
+    stdout = new EventEmitter();
+    stderr = new EventEmitter();
+    stdin = new MockWritable();
+    killed = false;
+    kill = vi.fn((signal?: string) => {
+      this.killed = true;
+      this.emit('exit', null, signal ?? 'SIGTERM');
+      return true;
+    });
+  }
+
+  const processes: MockChildProcess[] = [];
+
+  return {
+    processes,
+    spawn: vi.fn(() => {
+      const process = new MockChildProcess();
+      processes.push(process);
+      return process;
+    })
+  };
+});
+
+const fsMock = vi.hoisted(() => ({
+  existsSync: vi.fn(() => true)
+}));
+
+vi.mock('node:child_process', () => ({
+  spawn: childProcessMock.spawn
+}));
+
+vi.mock('node:fs', () => ({
+  existsSync: fsMock.existsSync
+}));
+
+import {
+  HostAudioEngine,
+  HostAudioStartError,
+  type HostAudioFramePayload
+} from './host-audio-engine';
 
 const FRAME_LENGTH = 264;
+
+beforeEach(() => {
+  childProcessMock.processes.length = 0;
+  childProcessMock.spawn.mockClear();
+  fsMock.existsSync.mockClear();
+  fsMock.existsSync.mockReturnValue(true);
+});
 
 function frameRecord(seed: number): Buffer {
   const record = Buffer.alloc(2 + FRAME_LENGTH);
@@ -16,6 +79,26 @@ function frameRecord(seed: number): Buffer {
 function pushStdout(engine: HostAudioEngine, chunk: Buffer): void {
   (engine as unknown as { processStdout(chunk: Buffer): void }).processStdout(chunk);
 }
+
+describe('HostAudioEngine startup lifecycle', () => {
+  it('reports an intentional stop during startup as cancellation instead of helper exit', async () => {
+    const engine = new HostAudioEngine();
+    const statuses: string[] = [];
+    engine.on('status', (line) => statuses.push(line));
+
+    const startPromise = engine.start('hid-path', 80);
+    const startResult = expect(startPromise).rejects.toMatchObject({
+      reason: 'start-cancelled'
+    } satisfies Partial<HostAudioStartError>);
+
+    await engine.stop();
+    await startResult;
+
+    expect(childProcessMock.spawn).toHaveBeenCalledTimes(1);
+    expect(statuses).not.toContain('host audio helper exited (SIGTERM)');
+    expect(engine.isActive()).toBe(false);
+  });
+});
 
 describe('HostAudioEngine stdout frame parser', () => {
   it('buffers partial records and emits complete frames in sequence order', () => {

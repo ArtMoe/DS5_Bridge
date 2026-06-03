@@ -81,7 +81,6 @@ import type {
   AudioReactiveHapticsAttack,
   AudioReactiveHapticsRelease,
   AudioReactiveHapticsResponse,
-  AudioReactiveHapticsSource,
   ControllerProfileSettings,
   HostPersonaMode,
   MuteButtonMode,
@@ -306,10 +305,6 @@ const HOST_PERSONA_OPTIONS: Array<[string, HostPersonaMode]> = [
 const AUDIO_REACTIVE_HAPTICS_MODE_OPTIONS: Array<[string, AudioReactiveHapticsMode]> = [
   ['Mix', 'mix'],
   ['Replace', 'replace']
-];
-const AUDIO_REACTIVE_HAPTICS_SOURCE_OPTIONS: Array<[string, AudioReactiveHapticsSource]> = [
-  ['Controller', 'controller-audio'],
-  ['System', 'system-audio']
 ];
 const AUDIO_REACTIVE_HAPTICS_BASS_FOCUS_OPTIONS: Array<[string, AudioReactiveHapticsBassFocus]> = [
   ['Deep', 'deep'],
@@ -918,7 +913,7 @@ function FeatureTipsPanel({
       key: 'audio-haptics',
       icon: <IconRipple size={16} />,
       title: 'Audio Haptics',
-      text: 'Controller source uses bridge audio; System source listens to the current Windows output without playing through the controller.'
+      text: 'Auto Route follows the active Windows output and avoids duplicating controller audio.'
     });
   } else if (tab === 'audio') {
     tips.push({
@@ -2129,12 +2124,14 @@ export function App() {
 
   useEffect(() => {
     let cancelled = false;
+    let receivedLiveSnapshot = false;
     window.bridge.getStatus().then((next) => {
-      if (!cancelled) {
+      if (!cancelled && !receivedLiveSnapshot) {
         applySnapshot(next);
       }
     });
     const unsubscribe = window.bridge.onSnapshot((next) => {
+      receivedLiveSnapshot = true;
       if (windowDraggingRef.current) {
         deferredSnapshotRef.current = next;
         return;
@@ -2394,7 +2391,6 @@ export function App() {
   const overviewHostPersonaMode = personaTransition?.to ?? snapshot?.settings.hostPersonaMode ?? 'dualsense';
   const hapticsEnabled = Boolean(snapshot?.settings.hapticsEnabled);
   const audioReactiveHapticsEnabled = Boolean(snapshot?.settings.audioReactiveHapticsEnabled);
-  const audioReactiveHapticsSource = snapshot?.settings.audioReactiveHapticsSource ?? 'controller-audio';
   const classicRumbleEnabled = Boolean(snapshot?.settings.classicRumbleEnabled);
   const activeHapticsFeatureEnabled = showClassicRumbleControl ? classicRumbleEnabled : hapticsEnabled;
   const speakerEnabled = Boolean(snapshot?.settings.speakerEnabled);
@@ -2503,19 +2499,15 @@ export function App() {
     : connected && hostAudioEnabled && !hostAudioCaptureRetrying && (Boolean(hostAudioCaptureIssue) || !hostAudioStarting)
       ? 'warn'
       : 'idle';
-  const audioReactiveHapticsSelectedSourceSupported = audioReactiveHapticsSupported;
+  const audioReactiveHapticsRouteSupported = audioReactiveHapticsSupported;
   const audioReactiveHapticsBlocked = !connected
     || !audioReactiveHapticsSupported
-    || !audioReactiveHapticsSelectedSourceSupported
+    || !audioReactiveHapticsRouteSupported
     || !hapticsEnabled;
   const audioReactiveHapticsControlDisabled = audioReactiveHapticsBlocked
     || pendingAction !== null
     || audioReactiveHapticsCommitPending;
   const audioReactiveHapticsConfigDisabled = audioReactiveHapticsControlDisabled || !audioReactiveHapticsEnabled;
-  const audioReactiveHapticsSourceDisabled = !connected
-    || !audioReactiveHapticsSupported
-    || pendingAction !== null
-    || audioReactiveHapticsCommitPending;
   const audioReactiveHapticsStatusLabel = !connected
     ? 'Unavailable'
     : !audioReactiveHapticsSupported
@@ -2525,22 +2517,29 @@ export function App() {
         : audioReactiveHapticsCommitPending || pendingAction !== null
           ? 'Command Pending'
           : audioReactiveHapticsEnabled
-            ? audioReactiveHapticsSource === 'system-audio' ? 'System Ready' : 'Ready'
+            ? 'Ready'
             : 'Off';
   const audioReactiveHapticsStatusTone = audioReactiveHapticsEnabled
     && hapticsEnabled
-    && audioReactiveHapticsSelectedSourceSupported
+    && audioReactiveHapticsRouteSupported
     && !audioReactiveHapticsCommitPending
     && pendingAction === null
     ? 'good'
     : connected && (
         audioReactiveHapticsCommitPending
         || pendingAction !== null
-        || !audioReactiveHapticsSelectedSourceSupported
+        || !audioReactiveHapticsRouteSupported
         || !hapticsEnabled
       )
       ? 'warn'
       : 'idle';
+  const audioReactiveHapticsOverrideMode = snapshot?.settings.audioReactiveHapticsMode === 'replace';
+  const audioReactiveHapticsModeBadgeLabel = audioReactiveHapticsEnabled
+    ? audioReactiveHapticsOverrideMode ? 'Override' : 'Mixed'
+    : null;
+  const audioReactiveHapticsModeTooltip = audioReactiveHapticsOverrideMode
+    ? 'Audio haptics are replacing native haptic output.'
+    : 'Audio haptics are mixed with native haptic output.';
   const duplexMicLabel = hostAudioStatus?.duplexActive
     ? 'Duplex Active'
     : duplexMicEnabled && hostAudioActive
@@ -3271,11 +3270,6 @@ export function App() {
   function setAudioReactiveHapticsMode(mode: AudioReactiveHapticsMode) {
     if (!snapshot || mode === snapshot.settings.audioReactiveHapticsMode) return;
     void commitAudioReactiveHapticsConfig({ mode });
-  }
-
-  function setAudioReactiveHapticsSource(source: AudioReactiveHapticsSource) {
-    if (!snapshot || source === snapshot.settings.audioReactiveHapticsSource) return;
-    void commitAudioReactiveHapticsConfig({ source });
   }
 
   function setAudioReactiveHapticsBassFocus(bassFocus: AudioReactiveHapticsBassFocus) {
@@ -5027,10 +5021,15 @@ export function App() {
               <div className="feature-heading">
                 <div>
                   <h2>{audioHapticsOpen ? 'Audio Haptics' : 'Haptics'}</h2>
-                  <p>{audioHapticsOpen ? 'Turn controller or system audio into optional haptic feedback.' : 'Adjust controller haptic feedback and run a quick test.'}</p>
+                  <p>{audioHapticsOpen ? 'Turn routed audio into optional haptic feedback.' : 'Adjust controller haptic feedback and run a quick test.'}</p>
                 </div>
                 <div className="audio-heading-controls">
                   <div className="inline-switch audio-haptics-switch-control">
+                    {audioReactiveHapticsModeBadgeLabel ? (
+                      <span className={`host-encoding-state audio-haptics-mode-state ${audioReactiveHapticsOverrideMode ? 'warn' : 'retry'}`}>
+                        {audioReactiveHapticsModeBadgeLabel}
+                      </span>
+                    ) : null}
                     <span>Audio Haptics</span>
                     <button
                       type="button"
@@ -5042,6 +5041,11 @@ export function App() {
                     >
                       <span />
                     </button>
+                    {audioReactiveHapticsModeBadgeLabel ? (
+                      <span className="settings-shortcut-tooltip shortcut-glyph-tooltip audio-haptics-mode-tooltip">
+                        {audioReactiveHapticsModeTooltip}
+                      </span>
+                    ) : null}
                   </div>
                   <div className="inline-switch">
                     <span>Enabled</span>
@@ -5075,12 +5079,8 @@ export function App() {
                       </button>
                       <div className="title-copy">
                         <h3>Audio Haptics</h3>
-                        <p>{audioReactiveHapticsSource === 'system-audio' ? 'System audio feedback' : 'Controller audio feedback'}</p>
+                        <p>System audio feedback</p>
                       </div>
-                      <span className={`status-badge ${audioReactiveHapticsStatusTone} audio-haptics-status-badge`} title={audioReactiveHapticsStatusLabel}>
-                        <span className={`dot ${audioReactiveHapticsStatusTone}`} />
-                        <strong>{audioReactiveHapticsStatusLabel}</strong>
-                      </span>
                     </div>
                     <div className="framed-slider">
                       <label className="slider-row">
@@ -5121,6 +5121,7 @@ export function App() {
                         <strong>{audioReactiveHapticsGainValue}%</strong>
                       </label>
                     </div>
+                    <span className="audio-haptics-slider-spacer" aria-hidden="true" />
                     <div className="segmented-row">
                       {AUDIO_REACTIVE_HAPTICS_PRESETS.map(([label, value]) => (
                         <button
@@ -5135,21 +5136,6 @@ export function App() {
                       ))}
                     </div>
                     <div className="audio-haptics-routing-stack">
-                      <div className="dual-selector audio-haptics-source-selector" role="tablist" aria-label="Audio haptics source">
-                        {AUDIO_REACTIVE_HAPTICS_SOURCE_OPTIONS.map(([label, source]) => (
-                          <button
-                            key={source}
-                            type="button"
-                            role="tab"
-                            aria-selected={audioReactiveHapticsSource === source}
-                            className={audioReactiveHapticsSource === source ? 'active' : ''}
-                            disabled={audioReactiveHapticsSourceDisabled}
-                            onClick={() => setAudioReactiveHapticsSource(source)}
-                          >
-                            {label}
-                          </button>
-                        ))}
-                      </div>
                       <div className="dual-selector audio-haptics-mode-selector" role="tablist" aria-label="Audio haptics mode">
                         {AUDIO_REACTIVE_HAPTICS_MODE_OPTIONS.map(([label, mode]) => (
                           <button
@@ -5176,28 +5162,30 @@ export function App() {
                       </div>
                     </div>
                     <div className="audio-haptics-config-stack">
-                      <label className="audio-haptics-config-row">
-                        <span>Bass Focus</span>
-                        <CustomSelect
-                          value={snapshot.settings.audioReactiveHapticsBassFocus}
-                          options={AUDIO_REACTIVE_HAPTICS_BASS_FOCUS_OPTIONS}
-                          disabled={audioReactiveHapticsConfigDisabled}
-                          className="audio-haptics-select"
-                          ariaLabel="Audio haptics bass focus"
-                          onChange={setAudioReactiveHapticsBassFocus}
-                        />
-                      </label>
-                      <label className="audio-haptics-config-row">
-                        <span>Response</span>
-                        <CustomSelect
-                          value={snapshot.settings.audioReactiveHapticsResponse}
-                          options={AUDIO_REACTIVE_HAPTICS_RESPONSE_OPTIONS}
-                          disabled={audioReactiveHapticsConfigDisabled}
-                          className="audio-haptics-select"
-                          ariaLabel="Audio haptics response"
-                          onChange={setAudioReactiveHapticsResponse}
-                        />
-                      </label>
+                      <div className="audio-haptics-config-pair-row">
+                        <label>
+                          <span>Bass Focus</span>
+                          <CustomSelect
+                            value={snapshot.settings.audioReactiveHapticsBassFocus}
+                            options={AUDIO_REACTIVE_HAPTICS_BASS_FOCUS_OPTIONS}
+                            disabled={audioReactiveHapticsConfigDisabled}
+                            className="audio-haptics-select"
+                            ariaLabel="Audio haptics bass focus"
+                            onChange={setAudioReactiveHapticsBassFocus}
+                          />
+                        </label>
+                        <label>
+                          <span>Response</span>
+                          <CustomSelect
+                            value={snapshot.settings.audioReactiveHapticsResponse}
+                            options={AUDIO_REACTIVE_HAPTICS_RESPONSE_OPTIONS}
+                            disabled={audioReactiveHapticsConfigDisabled}
+                            className="audio-haptics-select"
+                            ariaLabel="Audio haptics response"
+                            onChange={setAudioReactiveHapticsResponse}
+                          />
+                        </label>
+                      </div>
                       <div className="audio-haptics-config-pair-row">
                         <label>
                           <span>Attack</span>
@@ -5228,9 +5216,9 @@ export function App() {
                         <span className={`dot ${audioReactiveHapticsStatusTone}`} />
                         <strong>{audioReactiveHapticsStatusLabel}</strong>
                       </span>
-                      <span className={`status-badge ${audioReactiveHapticsSource === 'system-audio' ? audioReactiveHapticsStatusTone : hostAudioTone}`} title={audioReactiveHapticsSource === 'system-audio' ? 'Mirrors the active Windows output into DS5 Bridge haptic channels.' : hostAudioTooltip}>
-                        <span className={`dot ${audioReactiveHapticsSource === 'system-audio' && audioReactiveHapticsEnabled ? audioReactiveHapticsStatusTone : hostAudioTone}`} />
-                        <strong>{audioReactiveHapticsSource === 'system-audio' ? 'Haptic Channels' : hostAudioLabel}</strong>
+                      <span className={`status-badge ${audioReactiveHapticsStatusTone}`} title="Automatically follows the active Windows output without duplicating controller audio.">
+                        <span className={`dot ${audioReactiveHapticsEnabled ? audioReactiveHapticsStatusTone : 'idle'}`} />
+                        <strong>Auto Route</strong>
                       </span>
                     </div>
                   </section>
