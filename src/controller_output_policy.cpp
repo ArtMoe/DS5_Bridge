@@ -53,6 +53,35 @@ bool controller_output_policy_apply_classic_rumble_gain_payload(uint8_t *payload
 
     const uint8_t right = payload[kMotorRightOffset];
     const uint8_t left = payload[kMotorLeftOffset];
+    if (audio_haptics_replace_active) {
+        bool changed = false;
+
+        const uint8_t next_flag0 = static_cast<uint8_t>(flag0 & ~(
+            kFlag0CompatibleVibration
+            | kFlag0HapticsSelect
+        ));
+        if (payload[kValidFlag0Offset] != next_flag0) {
+            payload[kValidFlag0Offset] = next_flag0;
+            changed = true;
+        }
+        if (len > kValidFlag2Offset) {
+            const uint8_t next_flag2 = static_cast<uint8_t>(flag2 & ~kFlag2CompatibleVibration2);
+            if (payload[kValidFlag2Offset] != next_flag2) {
+                payload[kValidFlag2Offset] = next_flag2;
+                changed = true;
+            }
+        }
+        if (right != 0) {
+            payload[kMotorRightOffset] = 0;
+            changed = true;
+        }
+        if (left != 0) {
+            payload[kMotorLeftOffset] = 0;
+            changed = true;
+        }
+        return changed;
+    }
+
     payload[kMotorRightOffset] = controller_output_policy_scale_classic_rumble_byte(right);
     payload[kMotorLeftOffset] = controller_output_policy_scale_classic_rumble_byte(left);
     return payload[kMotorRightOffset] != right || payload[kMotorLeftOffset] != left;

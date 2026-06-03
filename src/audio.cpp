@@ -247,6 +247,7 @@ static uint8_t audio_reactive_haptics_bass_focus = AudioReactiveHapticsBassBalan
 static uint8_t audio_reactive_haptics_response = AudioReactiveHapticsResponseBalanced;
 static uint8_t audio_reactive_haptics_attack = AudioReactiveHapticsAttackBalanced;
 static uint8_t audio_reactive_haptics_release = AudioReactiveHapticsReleaseBalanced;
+static bool audio_reactive_haptics_suppress_classic_rumble = false;
 static float audio_reactive_haptics_filter_l = 0.0f;
 static float audio_reactive_haptics_filter_r = 0.0f;
 static float audio_reactive_haptics_env_l = 0.0f;
@@ -1072,7 +1073,8 @@ bool audio_set_reactive_haptics_config(
     uint8_t bass_focus,
     uint8_t response,
     uint8_t attack,
-    uint8_t release
+    uint8_t release,
+    bool suppress_classic_rumble
 ) {
     if (
         !valid_audio_reactive_haptics_mode(mode)
@@ -1091,7 +1093,8 @@ bool audio_set_reactive_haptics_config(
         || audio_reactive_haptics_bass_focus != bass_focus
         || audio_reactive_haptics_response != response
         || audio_reactive_haptics_attack != attack
-        || audio_reactive_haptics_release != release;
+        || audio_reactive_haptics_release != release
+        || audio_reactive_haptics_suppress_classic_rumble != suppress_classic_rumble;
     audio_reactive_haptics_config_enabled = enabled;
     audio_reactive_haptics_mode = mode;
     audio_reactive_haptics_gain_percent = gain_percent;
@@ -1099,9 +1102,8 @@ bool audio_set_reactive_haptics_config(
     audio_reactive_haptics_response = response;
     audio_reactive_haptics_attack = attack;
     audio_reactive_haptics_release = release;
-    controller_output_policy_set_audio_haptics_replace_active(
-        audio_reactive_haptics_config_enabled && audio_reactive_haptics_mode == AudioReactiveHapticsReplace
-    );
+    audio_reactive_haptics_suppress_classic_rumble = suppress_classic_rumble;
+    controller_output_policy_set_audio_haptics_replace_active(audio_reactive_haptics_suppress_classic_rumble);
     if (controller_output_policy_audio_haptics_replace_active()) {
         bt_set_classic_rumble_output(0, 0);
     }

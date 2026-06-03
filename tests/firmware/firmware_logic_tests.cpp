@@ -317,10 +317,13 @@ void audio_haptics_replace_suppresses_classic_rumble_without_changing_saved_gain
     EXPECT_EQ(controller_output_policy_scale_classic_rumble_byte(200), 0);
 
     auto payload = empty_payload();
-    payload[kValidFlag0Offset] = kFlag0CompatibleVibration;
+    payload[kValidFlag0Offset] = kFlag0CompatibleVibration | kFlag0HapticsSelect | kFlag0RightTriggerEffect;
+    payload[kValidFlag2Offset] = kFlag2CompatibleVibration2 | kFlag2LightbarSetupControlEnable;
     payload[kMotorRightOffset] = 40;
     payload[kMotorLeftOffset] = 80;
     EXPECT_TRUE(controller_output_policy_apply_classic_rumble_gain_payload(payload.data(), payload.size()));
+    EXPECT_EQ(payload[kValidFlag0Offset], kFlag0RightTriggerEffect);
+    EXPECT_EQ(payload[kValidFlag2Offset], kFlag2LightbarSetupControlEnable);
     EXPECT_EQ(payload[kMotorRightOffset], 0);
     EXPECT_EQ(payload[kMotorLeftOffset], 0);
 

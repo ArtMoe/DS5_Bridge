@@ -3285,6 +3285,54 @@ button.feature-icon {
   white-space: nowrap;
 }
 
+.audio-haptics-config-pair-row .audio-haptics-config-label {
+  position: relative;
+  width: max-content;
+  max-width: 100%;
+  display: inline-flex;
+  align-items: center;
+  outline: none;
+  cursor: help;
+  text-decoration-line: underline;
+  text-decoration-style: dotted;
+  text-decoration-color: rgba(142, 164, 194, 0.62);
+  text-underline-offset: 3px;
+}
+
+.audio-haptics-config-pair-row .audio-haptics-config-label:hover,
+.audio-haptics-config-pair-row .audio-haptics-config-label:focus-visible {
+  color: #f3f8ff;
+  text-decoration-color: rgba(125, 188, 255, 0.86);
+}
+
+.audio-haptics-config-pair-row .audio-haptics-config-label:focus-visible {
+  border-radius: 4px;
+  box-shadow: 0 0 0 3px rgba(77, 157, 255, 0.18);
+}
+
+.audio-haptics-config-pair-row .audio-haptics-config-label:hover .audio-haptics-config-tooltip,
+.audio-haptics-config-pair-row .audio-haptics-config-label:focus-visible .audio-haptics-config-tooltip {
+  opacity: 1;
+  transform: translate(-50%, 0);
+}
+
+.audio-haptics-config-pair-row .audio-haptics-config-tooltip {
+  left: 50%;
+  right: auto;
+  z-index: 60;
+  width: max-content;
+  max-width: min(420px, calc(100vw - 72px));
+  display: block;
+  color: #dce7f7;
+  font-size: 12px;
+  font-weight: 700;
+  line-height: 1.25;
+  text-align: left;
+  white-space: normal;
+  overflow-wrap: anywhere;
+  transform: translate(-50%, -4px);
+}
+
 .audio-haptics-select .custom-select-button {
   height: 36px;
 }

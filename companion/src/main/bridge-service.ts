@@ -99,7 +99,7 @@ const HOST_AUDIO_STOP_FADE_MS = 40;
 const SYSTEM_AUDIO_HAPTICS_RETRY_MS = 5000;
 const SYSTEM_AUDIO_HAPTICS_BYPASS_RETRY_MS = 2000;
 const LOW_BATTERY_PERCENT = 20;
-const MIN_SUPPORTED_FIRMWARE_VERSION = '1.5.3';
+const MIN_SUPPORTED_FIRMWARE_VERSION = '1.5.4';
 const FIRMWARE_UPDATE_REQUIRED_MESSAGE = `Firmware ${MIN_SUPPORTED_FIRMWARE_VERSION} update required`;
 const AUDIO_DEBUG_LOG_LINE_LIMIT = 300;
 const TRIGGER_TRACE_LOG_LINE_LIMIT = 300;
@@ -118,6 +118,7 @@ const MAX_IDLE_DISCONNECT_TIMEOUT_MINUTES = 120;
 const CONTROLLER_POWER_SAVING_CAP_PERCENT = 60;
 const STANDARD_FEEDBACK_GAIN_PERCENT = 200;
 const BOOSTED_FEEDBACK_GAIN_PERCENT = 500;
+const AUDIO_REACTIVE_HAPTICS_SUPPRESS_CLASSIC_RUMBLE_MODE_FLAG = 0x80;
 const SONY_VENDOR_ID = 0x054c;
 const DUALSENSE_PRODUCT_IDS = new Set([0x0ce6, 0x0df2]);
 const WINDOWS_DEVICE_CLEANUP_RELATIVE_PATH = path.join('tools', 'windows', 'clean-ds5bridge-devices.ps1');
@@ -1629,6 +1630,12 @@ export class BridgeService extends EventEmitter {
       && this.systemAudioHapticsPassthroughActive;
   }
 
+  private audioReactiveHapticsSuppressesClassicRumble(settings: CompanionSettings): boolean {
+    return settings.hapticsEnabled
+      && settings.audioReactiveHapticsEnabled
+      && settings.audioReactiveHapticsMode === 'replace';
+  }
+
   private audioReactiveHapticsSupported(): boolean {
     return Boolean(this.snapshot.status?.firmwareFlags.audioReactiveHapticsControl);
   }
@@ -1654,8 +1661,12 @@ export class BridgeService extends EventEmitter {
 
   private audioReactiveHapticsCommandPayload(settings: CompanionSettings): number[] {
     const gain = Math.max(0, Math.min(200, Math.round(settings.audioReactiveHapticsGainPercent)));
+    const mode = audioReactiveHapticsModeValue(settings.audioReactiveHapticsMode)
+      | (this.audioReactiveHapticsSuppressesClassicRumble(settings)
+        ? AUDIO_REACTIVE_HAPTICS_SUPPRESS_CLASSIC_RUMBLE_MODE_FLAG
+        : 0);
     return [
-      audioReactiveHapticsModeValue(settings.audioReactiveHapticsMode),
+      mode,
       gain & 0xff,
       (gain >> 8) & 0xff,
       audioReactiveHapticsBassFocusValue(settings.audioReactiveHapticsBassFocus),

@@ -329,6 +329,12 @@ const AUDIO_REACTIVE_HAPTICS_RELEASE_OPTIONS: Array<[string, AudioReactiveHaptic
   ['Smooth', 'smooth'],
   ['Long', 'long']
 ];
+const AUDIO_REACTIVE_HAPTICS_FIELD_TOOLTIPS = {
+  bassFocus: 'Applies a low-pass filter that chooses which part of the low-end audio becomes vibration.',
+  response: 'Controls how strongly haptics react to audio, especially louder peaks.',
+  attack: 'Controls how quickly the haptics ramp when a sound rises or spikes.',
+  release: 'Controls how quickly the haptics fade when a sound drops.'
+} as const;
 const TRIGGER_TARGET_OPTIONS: Array<[string, TriggerTestTarget]> = [
   ['L2', 'l2'],
   ['R2', 'r2'],
@@ -1826,6 +1832,25 @@ function CustomSelect<T extends SelectValue>({
         </div>
       )}
     </div>
+  );
+}
+
+function AudioHapticsConfigLabel({
+  id,
+  label,
+  tooltip
+}: {
+  id: string;
+  label: string;
+  tooltip: string;
+}) {
+  return (
+    <span className="audio-haptics-config-label" tabIndex={0} aria-describedby={id}>
+      {label}
+      <span id={id} className="settings-shortcut-tooltip shortcut-glyph-tooltip audio-haptics-config-tooltip" role="tooltip">
+        {tooltip}
+      </span>
+    </span>
   );
 }
 
@@ -5164,7 +5189,11 @@ export function App() {
                     <div className="audio-haptics-config-stack">
                       <div className="audio-haptics-config-pair-row">
                         <label>
-                          <span>Bass Focus</span>
+                          <AudioHapticsConfigLabel
+                            id="audio-haptics-bass-focus-tooltip"
+                            label="Bass Focus"
+                            tooltip={AUDIO_REACTIVE_HAPTICS_FIELD_TOOLTIPS.bassFocus}
+                          />
                           <CustomSelect
                             value={snapshot.settings.audioReactiveHapticsBassFocus}
                             options={AUDIO_REACTIVE_HAPTICS_BASS_FOCUS_OPTIONS}
@@ -5175,7 +5204,11 @@ export function App() {
                           />
                         </label>
                         <label>
-                          <span>Response</span>
+                          <AudioHapticsConfigLabel
+                            id="audio-haptics-response-tooltip"
+                            label="Response"
+                            tooltip={AUDIO_REACTIVE_HAPTICS_FIELD_TOOLTIPS.response}
+                          />
                           <CustomSelect
                             value={snapshot.settings.audioReactiveHapticsResponse}
                             options={AUDIO_REACTIVE_HAPTICS_RESPONSE_OPTIONS}
@@ -5188,7 +5221,11 @@ export function App() {
                       </div>
                       <div className="audio-haptics-config-pair-row">
                         <label>
-                          <span>Attack</span>
+                          <AudioHapticsConfigLabel
+                            id="audio-haptics-attack-tooltip"
+                            label="Attack"
+                            tooltip={AUDIO_REACTIVE_HAPTICS_FIELD_TOOLTIPS.attack}
+                          />
                           <CustomSelect
                             value={snapshot.settings.audioReactiveHapticsAttack}
                             options={AUDIO_REACTIVE_HAPTICS_ATTACK_OPTIONS}
@@ -5199,7 +5236,11 @@ export function App() {
                           />
                         </label>
                         <label>
-                          <span>Release</span>
+                          <AudioHapticsConfigLabel
+                            id="audio-haptics-release-tooltip"
+                            label="Release"
+                            tooltip={AUDIO_REACTIVE_HAPTICS_FIELD_TOOLTIPS.release}
+                          />
                           <CustomSelect
                             value={snapshot.settings.audioReactiveHapticsRelease}
                             options={AUDIO_REACTIVE_HAPTICS_RELEASE_OPTIONS}

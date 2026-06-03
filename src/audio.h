@@ -160,7 +160,8 @@ bool audio_set_reactive_haptics_config(
     uint8_t bass_focus,
     uint8_t response,
     uint8_t attack,
-    uint8_t release
+    uint8_t release,
+    bool suppress_classic_rumble
 );
 bool audio_reactive_haptics_enabled();
 void audio_reactive_haptics_reset();

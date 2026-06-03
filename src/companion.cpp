@@ -20,11 +20,13 @@ namespace {
 
 constexpr uint8_t kMagic[] = {'D', 'S', '5', 'B'};
 constexpr uint8_t kProtocolMajor = 1;
-constexpr uint8_t kProtocolMinor = 8;
+constexpr uint8_t kProtocolMinor = 9;
 constexpr uint8_t kProtocolMinSupportedMinor = 7;
 constexpr uint8_t kFirmwareMajor = 1;
 constexpr uint8_t kFirmwareMinor = 5;
-constexpr uint8_t kFirmwarePatch = 3;
+constexpr uint8_t kFirmwarePatch = 4;
+constexpr uint8_t kAudioReactiveHapticsModeMask = 0x7f;
+constexpr uint8_t kAudioReactiveHapticsSuppressClassicRumbleFlag = 0x80;
 constexpr uint8_t kTriangleButtonBit = 0x80;
 constexpr uint8_t kSquareButtonBit = 0x10;
 constexpr uint8_t kCrossButtonBit = 0x20;
@@ -708,7 +710,8 @@ void restore_defaults() {
         AudioReactiveHapticsBassBalanced,
         AudioReactiveHapticsResponseBalanced,
         AudioReactiveHapticsAttackBalanced,
-        AudioReactiveHapticsReleaseBalanced
+        AudioReactiveHapticsReleaseBalanced,
+        false
     );
     companion_mic_volume_percent = 100;
     companion_mic_muted = false;
@@ -2016,7 +2019,11 @@ void handle_command(uint8_t const *buffer, uint16_t bufsize) {
         case CommandSetAudioReactiveHaptics:
             {
             const bool enabled = value == 1;
-            const uint8_t mode = buffer[10];
+            const uint8_t mode_control = buffer[10];
+            const uint8_t mode = mode_control & kAudioReactiveHapticsModeMask;
+            const bool suppress_classic_rumble = protocol_minor >= 9
+                ? (mode_control & kAudioReactiveHapticsSuppressClassicRumbleFlag) != 0
+                : enabled && mode == AudioReactiveHapticsReplace;
             if (
                 value > 1
                 || !audio_set_reactive_haptics_config(
@@ -2026,13 +2033,14 @@ void handle_command(uint8_t const *buffer, uint16_t bufsize) {
                     buffer[13],
                     buffer[14],
                     protocol_minor >= 8 ? buffer[15] : AudioReactiveHapticsAttackBalanced,
-                    protocol_minor >= 8 ? buffer[16] : AudioReactiveHapticsReleaseBalanced
+                    protocol_minor >= 8 ? buffer[16] : AudioReactiveHapticsReleaseBalanced,
+                    suppress_classic_rumble
                 )
             ) {
                 set_ack(command_id, sequence, AckInvalidValue);
                 return;
             }
-            if (enabled && mode == AudioReactiveHapticsReplace) {
+            if (suppress_classic_rumble) {
                 stop_classic_rumble_test();
             }
             settings_revision++;

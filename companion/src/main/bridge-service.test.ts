@@ -600,7 +600,7 @@ describe('BridgeService', () => {
     await pollAndPublishErrors(badVersionService);
 
     expect(badVersionService.getSnapshot().state).toBe('incompatible');
-    expect(badVersionService.getSnapshot().message).toBe('Firmware 1.5.3 update required');
+    expect(badVersionService.getSnapshot().message).toBe('Firmware 1.5.4 update required');
     expect(badVersionService.getSnapshot().diagnostics.lastError).toContain('Firmware update required');
   });
 
@@ -615,9 +615,9 @@ describe('BridgeService', () => {
 
     const snapshot = service.getSnapshot();
     expect(snapshot.state).toBe('incompatible');
-    expect(snapshot.message).toBe('Firmware 1.5.3 update required');
+    expect(snapshot.message).toBe('Firmware 1.5.4 update required');
     expect(snapshot.status?.firmwareVersion).toBe('0.5.15');
-    expect(snapshot.diagnostics.lastError).toContain('Update the bridge firmware to 1.5.3 or newer');
+    expect(snapshot.diagnostics.lastError).toContain('Update the bridge firmware to 1.5.4 or newer');
     expect(device.sentReports).toEqual([]);
   });
 
@@ -951,7 +951,7 @@ describe('BridgeService', () => {
     const command = device.sentReports.at(-1);
     expect(command?.[7]).toBe(COMMAND_ID.SET_AUDIO_REACTIVE_HAPTICS);
     expect(command?.[9]).toBe(0);
-    expect(command?.slice(11, 18)).toEqual([1, 150, 0, 2, 2, 3, 2]);
+    expect(command?.slice(11, 18)).toEqual([0x81, 150, 0, 2, 2, 3, 2]);
     expect(snapshot.settings).toMatchObject({
       audioReactiveHapticsEnabled: true,
       audioReactiveHapticsMode: 'replace',
@@ -970,7 +970,26 @@ describe('BridgeService', () => {
     const passthroughCommand = device.sentReports.at(-1);
     expect(passthroughCommand?.[7]).toBe(COMMAND_ID.SET_AUDIO_REACTIVE_HAPTICS);
     expect(passthroughCommand?.[9]).toBe(1);
-    expect(passthroughCommand?.slice(11, 18)).toEqual([1, 150, 0, 2, 2, 3, 2]);
+    expect(passthroughCommand?.slice(11, 18)).toEqual([0x81, 150, 0, 2, 2, 3, 2]);
+  });
+
+  it('does not request classic rumble suppression when audio reactive haptics is disabled', async () => {
+    const service = serviceFixture();
+    const device = new MockHidDevice();
+    device.status = statusReport({ controllerConnected: false });
+    hidMock.state.devicesList = [companionDeviceInfo()];
+    hidMock.state.openDevices.set('companion-path', device);
+
+    await poll(service);
+    await service.setAudioReactiveHapticsConfig({
+      enabled: false,
+      mode: 'replace'
+    });
+
+    const command = device.sentReports.at(-1);
+    expect(command?.[7]).toBe(COMMAND_ID.SET_AUDIO_REACTIVE_HAPTICS);
+    expect(command?.[9]).toBe(0);
+    expect(command?.slice(11, 18)).toEqual([1, 100, 0, 1, 1, 1, 1]);
   });
 
   it('sends and stores USB suspend disconnect settings', async () => {
