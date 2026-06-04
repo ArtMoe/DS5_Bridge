@@ -771,7 +771,7 @@ sealed class HostAudioHelper : IDisposable
         try
         {
             TrySetThreadPriority(ThreadPriority.Highest);
-            using var mmcss = MmcssRegistration.TryRegister("Pro Audio", "capture");
+            using var mmcss = MmcssRegistration.TryRegister("Pro Audio", "capture", MmcssThreadPriority.High);
             var transport = bulkPcmTransport ?? throw new InvalidOperationException("Bulk PCM transport was not initialized.");
             var parser = new BulkPcmFrameParser();
             var readBuffer = new byte[WinUsbPcmTransport.ReadBufferBytes];
@@ -882,7 +882,7 @@ sealed class HostAudioHelper : IDisposable
         try
         {
             TrySetThreadPriority(ThreadPriority.Highest);
-            using var mmcss = MmcssRegistration.TryRegister("Pro Audio", "capture");
+            using var mmcss = MmcssRegistration.TryRegister("Pro Audio", "capture", MmcssThreadPriority.High);
             var captureClient = directCaptureClient;
             var wakeEvent = directCaptureEvent;
             if (captureClient is null || wakeEvent is null)
@@ -994,7 +994,7 @@ sealed class HostAudioHelper : IDisposable
         try
         {
             TrySetThreadPriority(ThreadPriority.AboveNormal);
-            using var mmcss = MmcssRegistration.TryRegister("Audio", "encoder");
+            using var mmcss = MmcssRegistration.TryRegister("Audio", "encoder", MmcssThreadPriority.High);
             foreach (var chunk in pcmQueue.GetConsumingEnumerable())
             {
                 var dumpComplete = WriteRawCaptureDump(chunk.Buffer, chunk.ByteCount, chunk.Format);
@@ -1751,7 +1751,7 @@ sealed class HostAudioHelper : IDisposable
         try
         {
             TrySetThreadPriority(ThreadPriority.Highest);
-            using var mmcss = MmcssRegistration.TryRegister("Pro Audio", "writer");
+            using var mmcss = MmcssRegistration.TryRegister("Pro Audio", "writer", MmcssThreadPriority.High);
             var stdout = Console.OpenStandardOutput();
             var stopwatch = Stopwatch.StartNew();
             var nextWriteTicks = 0L;
@@ -2158,6 +2158,14 @@ sealed class DefaultRenderNotificationClient : IMMNotificationClient
     }
 }
 
+enum MmcssThreadPriority
+{
+    Low = -1,
+    Normal = 0,
+    High = 1,
+    Critical = 2
+}
+
 sealed class MmcssRegistration : IDisposable
 {
     private readonly IntPtr handle;
@@ -2167,7 +2175,10 @@ sealed class MmcssRegistration : IDisposable
         this.handle = handle;
     }
 
-    public static MmcssRegistration? TryRegister(string taskName, string role)
+    public static MmcssRegistration? TryRegister(
+        string taskName,
+        string role,
+        MmcssThreadPriority priority = MmcssThreadPriority.Normal)
     {
         try
         {
@@ -2177,9 +2188,19 @@ sealed class MmcssRegistration : IDisposable
                 return null;
             }
 
+            var priorityApplied = false;
+            try
+            {
+                priorityApplied = NativeMethods.AvSetMmThreadPriority(handle, priority);
+            }
+            catch
+            {
+            }
+
             if (AudioConstants.DiagnosticsEnabled)
             {
-                Console.Error.WriteLine($"status: mmcss role={role} task='{taskName}'");
+                Console.Error.WriteLine(
+                    $"status: mmcss role={role} task='{taskName}' priority={priority} priorityApplied={priorityApplied}");
             }
             return new MmcssRegistration(handle);
         }
@@ -2202,6 +2223,10 @@ static partial class NativeMethods
 {
     [DllImport("avrt.dll", CharSet = CharSet.Unicode, SetLastError = true)]
     public static extern IntPtr AvSetMmThreadCharacteristics(string taskName, out int taskIndex);
+
+    [DllImport("avrt.dll", SetLastError = true)]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    public static extern bool AvSetMmThreadPriority(IntPtr handle, MmcssThreadPriority priority);
 
     [DllImport("avrt.dll", SetLastError = true)]
     [return: MarshalAs(UnmanagedType.Bool)]

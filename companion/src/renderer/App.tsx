@@ -309,10 +309,10 @@ const AUDIO_REACTIVE_HAPTICS_MODE_OPTIONS: Array<[string, AudioReactiveHapticsMo
   ['Replace', 'replace']
 ];
 const AUDIO_REACTIVE_HAPTICS_BASS_FOCUS_OPTIONS: Array<[string, AudioReactiveHapticsBassFocus]> = [
-  ['Deep', 'deep'],
-  ['Balanced', 'balanced'],
-  ['Punchy', 'punchy'],
-  ['Wide', 'wide']
+  ['80 Hz', 'deep'],
+  ['160 Hz', 'balanced'],
+  ['240 Hz', 'punchy'],
+  ['400 Hz', 'wide']
 ];
 const AUDIO_REACTIVE_HAPTICS_RESPONSE_OPTIONS: Array<[string, AudioReactiveHapticsResponse]> = [
   ['Subtle', 'subtle'],
