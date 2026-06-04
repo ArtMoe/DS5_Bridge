@@ -316,20 +316,20 @@ const AUDIO_REACTIVE_HAPTICS_BASS_FOCUS_OPTIONS: Array<[string, AudioReactiveHap
 ];
 const AUDIO_REACTIVE_HAPTICS_RESPONSE_OPTIONS: Array<[string, AudioReactiveHapticsResponse]> = [
   ['Subtle', 'subtle'],
-  ['Balanced', 'balanced'],
-  ['Strong', 'strong']
+  ['Dynamic', 'balanced'],
+  ['Aggressive', 'strong']
 ];
 const AUDIO_REACTIVE_HAPTICS_ATTACK_OPTIONS: Array<[string, AudioReactiveHapticsAttack]> = [
-  ['Soft', 'soft'],
-  ['Balanced', 'balanced'],
-  ['Fast', 'fast'],
-  ['Sharp', 'sharp']
+  ['Slow Ramp', 'soft'],
+  ['Medium Ramp', 'balanced'],
+  ['Fast Ramp', 'fast'],
+  ['Instant Ramp', 'sharp']
 ];
 const AUDIO_REACTIVE_HAPTICS_RELEASE_OPTIONS: Array<[string, AudioReactiveHapticsRelease]> = [
-  ['Tight', 'tight'],
-  ['Balanced', 'balanced'],
-  ['Smooth', 'smooth'],
-  ['Long', 'long']
+  ['Fast Fade', 'tight'],
+  ['Medium Fade', 'balanced'],
+  ['Slow Fade', 'smooth'],
+  ['Long Fade', 'long']
 ];
 const AUDIO_REACTIVE_HAPTICS_FIELD_TOOLTIPS = {
   bassFocus: 'Applies a low-pass filter that chooses which part of the low-end audio becomes vibration.',
@@ -5453,7 +5453,7 @@ export function App() {
                         <label>
                           <AudioHapticsConfigLabel
                             id="audio-haptics-attack-tooltip"
-                            label="Attack"
+                            label="Ramp"
                             tooltip={AUDIO_REACTIVE_HAPTICS_FIELD_TOOLTIPS.attack}
                           />
                           <CustomSelect
@@ -5468,7 +5468,7 @@ export function App() {
                         <label>
                           <AudioHapticsConfigLabel
                             id="audio-haptics-release-tooltip"
-                            label="Release"
+                            label="Fade"
                             tooltip={AUDIO_REACTIVE_HAPTICS_FIELD_TOOLTIPS.release}
                           />
                           <CustomSelect
