@@ -1,7 +1,11 @@
+using System.Runtime.InteropServices;
+using System.Text.Json;
 using NAudio.CoreAudioApi;
 
 sealed class EndpointManager
 {
+    private static readonly Guid PolicyConfigClientId = new("870af99c-171d-4f9e-af0d-e63df40c2bc9");
+
     private static readonly string[] RawPcmEndpointNames =
     [
         "DS5 Bridge Raw PCM"
@@ -13,6 +17,12 @@ sealed class EndpointManager
         "DualSense Wireless Controller",
         "Wireless Controller",
         "Xbox 360 Controller for Windows"
+    ];
+
+    private static readonly Role[] DefaultRenderRoles =
+    [
+        Role.Console,
+        Role.Multimedia
     ];
 
     public static MMDevice SelectRenderEndpoint(MMDeviceEnumerator enumerator, string? deviceName)
@@ -38,6 +48,36 @@ sealed class EndpointManager
     public static MMDevice SelectDefaultRenderEndpoint(MMDeviceEnumerator enumerator)
     {
         return enumerator.GetDefaultAudioEndpoint(DataFlow.Render, Role.Multimedia);
+    }
+
+    public static DefaultRenderEndpointStatus GetDefaultRenderEndpointStatus()
+    {
+        using var enumerator = new MMDeviceEnumerator();
+        var device = SelectDefaultRenderEndpoint(enumerator);
+        return new DefaultRenderEndpointStatus(device.FriendlyName, IsKnownBridgeEndpoint(device));
+    }
+
+    public static void PrintDefaultRenderEndpointStatus()
+    {
+        var status = GetDefaultRenderEndpointStatus();
+        Console.WriteLine(JsonSerializer.Serialize(new
+        {
+            deviceName = status.DeviceName,
+            isBridgeEndpoint = status.IsKnownBridgeEndpoint
+        }));
+    }
+
+    public static void SetDefaultRenderBridgeEndpoint(string? hostPersonaMode)
+    {
+        using var enumerator = new MMDeviceEnumerator();
+        var devices = enumerator
+            .EnumerateAudioEndPoints(DataFlow.Render, DeviceState.Active)
+            .ToArray();
+        var device = FindKnownBridgeEndpointForPersona(devices, hostPersonaMode)
+            ?? throw new InvalidOperationException("No active DS5 Bridge render endpoint was found.");
+
+        SetDefaultRenderEndpoint(device);
+        Console.Error.WriteLine($"status: default-render-set device='{device.FriendlyName}' persona='{hostPersonaMode ?? "auto"}'");
     }
 
     public static MMDevice SelectCaptureEndpoint(MMDeviceEnumerator enumerator, string? deviceName)
@@ -125,7 +165,7 @@ sealed class EndpointManager
         foreach (var name in BridgeEndpointAliases)
         {
             var match = devices.FirstOrDefault(device =>
-                device.FriendlyName.Contains(name, StringComparison.OrdinalIgnoreCase));
+                EndpointNameMatchesAlias(device.FriendlyName, name));
             if (match is not null)
             {
                 return match;
@@ -257,7 +297,66 @@ sealed class EndpointManager
     internal static bool IsKnownBridgeEndpointName(string friendlyName)
     {
         return BridgeEndpointAliases.Any(alias =>
-            friendlyName.Contains(alias, StringComparison.OrdinalIgnoreCase));
+            EndpointNameMatchesAlias(friendlyName, alias));
+    }
+
+    internal static bool IsKnownBridgeEndpointNameForPersona(string friendlyName, string? hostPersonaMode)
+    {
+        return BridgeEndpointAliasesForPersona(hostPersonaMode).Any(alias =>
+            EndpointNameMatchesAlias(friendlyName, alias));
+    }
+
+    private static MMDevice? FindKnownBridgeEndpointForPersona(MMDevice[] devices, string? hostPersonaMode)
+    {
+        foreach (var name in BridgeEndpointAliasesForPersona(hostPersonaMode))
+        {
+            var match = devices.FirstOrDefault(device =>
+                EndpointNameMatchesAlias(device.FriendlyName, name));
+            if (match is not null)
+            {
+                return match;
+            }
+        }
+
+        return string.IsNullOrWhiteSpace(hostPersonaMode) ? FindKnownBridgeEndpoint(devices) : null;
+    }
+
+    private static string[] BridgeEndpointAliasesForPersona(string? hostPersonaMode)
+    {
+        return hostPersonaMode?.ToLowerInvariant() switch
+        {
+            "ds4" => ["Wireless Controller"],
+            "xbox" => ["Xbox 360 Controller for Windows"],
+            _ => ["DS5 Bridge", "DualSense Wireless Controller"]
+        };
+    }
+
+    private static bool EndpointNameMatchesAlias(string friendlyName, string alias)
+    {
+        if (!friendlyName.Contains(alias, StringComparison.OrdinalIgnoreCase))
+        {
+            return false;
+        }
+        return !alias.Equals("Wireless Controller", StringComparison.OrdinalIgnoreCase)
+            || !friendlyName.Contains("DualSense Wireless Controller", StringComparison.OrdinalIgnoreCase);
+    }
+
+    private static void SetDefaultRenderEndpoint(MMDevice device)
+    {
+#pragma warning disable CA1416
+        var policyConfigType = Type.GetTypeFromCLSID(PolicyConfigClientId)
+            ?? throw new InvalidOperationException("Windows audio policy configuration is unavailable.");
+#pragma warning restore CA1416
+        var policyConfig = (IPolicyConfig)(Activator.CreateInstance(policyConfigType)
+            ?? throw new InvalidOperationException("Windows audio policy configuration could not be created."));
+        foreach (var role in DefaultRenderRoles)
+        {
+            var result = policyConfig.SetDefaultEndpoint(device.ID, role);
+            if (result != 0)
+            {
+                Marshal.ThrowExceptionForHR(result);
+            }
+        }
     }
 
     private static bool IsRawPcmEndpoint(MMDevice device)
@@ -271,4 +370,54 @@ sealed class EndpointManager
         return device.FriendlyName.Contains("Microphone", StringComparison.OrdinalIgnoreCase)
             || device.FriendlyName.Contains("Headset", StringComparison.OrdinalIgnoreCase);
     }
+}
+
+internal sealed record DefaultRenderEndpointStatus(
+    string DeviceName,
+    bool IsKnownBridgeEndpoint);
+
+[ComImport]
+[Guid("f8679f50-850a-41cf-9c72-430f290290c8")]
+[InterfaceType(ComInterfaceType.InterfaceIsIUnknown)]
+interface IPolicyConfig
+{
+    [PreserveSig]
+    int GetMixFormat([MarshalAs(UnmanagedType.LPWStr)] string deviceId, out IntPtr format);
+
+    [PreserveSig]
+    int GetDeviceFormat([MarshalAs(UnmanagedType.LPWStr)] string deviceId, bool defaultFormat, out IntPtr format);
+
+    [PreserveSig]
+    int ResetDeviceFormat([MarshalAs(UnmanagedType.LPWStr)] string deviceId);
+
+    [PreserveSig]
+    int SetDeviceFormat([MarshalAs(UnmanagedType.LPWStr)] string deviceId, IntPtr endpointFormat, IntPtr mixFormat);
+
+    [PreserveSig]
+    int GetProcessingPeriod(
+        [MarshalAs(UnmanagedType.LPWStr)] string deviceId,
+        bool defaultPeriod,
+        out long defaultProcessingPeriod,
+        out long minimumProcessingPeriod);
+
+    [PreserveSig]
+    int SetProcessingPeriod([MarshalAs(UnmanagedType.LPWStr)] string deviceId, ref long processingPeriod);
+
+    [PreserveSig]
+    int GetShareMode([MarshalAs(UnmanagedType.LPWStr)] string deviceId, IntPtr mode);
+
+    [PreserveSig]
+    int SetShareMode([MarshalAs(UnmanagedType.LPWStr)] string deviceId, IntPtr mode);
+
+    [PreserveSig]
+    int GetPropertyValue([MarshalAs(UnmanagedType.LPWStr)] string deviceId, IntPtr key, IntPtr value);
+
+    [PreserveSig]
+    int SetPropertyValue([MarshalAs(UnmanagedType.LPWStr)] string deviceId, IntPtr key, IntPtr value);
+
+    [PreserveSig]
+    int SetDefaultEndpoint([MarshalAs(UnmanagedType.LPWStr)] string deviceId, Role role);
+
+    [PreserveSig]
+    int SetEndpointVisibility([MarshalAs(UnmanagedType.LPWStr)] string deviceId, bool visible);
 }

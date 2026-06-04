@@ -74,6 +74,9 @@ import {
   MicKeepaliveEngine,
   SystemAudioHapticsEngine,
   playHostAudioTestTone,
+  getDefaultRenderEndpointStatus,
+  setDefaultRenderBridgeEndpoint,
+  type DefaultRenderEndpointStatus,
   type HostAudioStartFailureReason,
   type HostAudioFramePayload,
   type SystemAudioHapticsConfig
@@ -118,6 +121,8 @@ const HOST_PERSONA_TRANSITION_SETTLE_MS = 1200;
 const HOST_PERSONA_TRANSITION_REDISCOVERY_POLL_MS = 100;
 const HOST_PERSONA_TRANSITION_OPEN_RETRY_MS = 1000;
 const HOST_PERSONA_RECONNECT_GRACE_MS = 5000;
+const HOST_PERSONA_DEFAULT_RENDER_RESTORE_RETRY_MS = 500;
+const HOST_PERSONA_DEFAULT_RENDER_RESTORE_GRACE_MS = 4000;
 const MIN_IDLE_DISCONNECT_TIMEOUT_MINUTES = 1;
 const MAX_IDLE_DISCONNECT_TIMEOUT_MINUTES = 120;
 const CONTROLLER_POWER_SAVING_CAP_PERCENT = 60;
@@ -154,6 +159,14 @@ type HostPersonaTransitionState = HostPersonaTransition & {
   settlingUntil: number | null;
   reconnectingUntil: number;
   completedAt: number | null;
+};
+
+type HostPersonaDefaultRenderRestore = {
+  to: HostPersonaMode;
+  deadlineAt: number;
+  nextAttemptAt: number;
+  attempts: number;
+  inFlight: boolean;
 };
 
 export type BridgeToast = {
@@ -1118,6 +1131,7 @@ export class BridgeService extends EventEmitter {
   private lastFeedbackTraceReadAt = 0;
   private lastHostAudioActivePollAt = 0;
   private hostPersonaTransition: HostPersonaTransitionState | null = null;
+  private hostPersonaDefaultRenderRestore: HostPersonaDefaultRenderRestore | null = null;
   private controllerPowerSavingActive: boolean | null = null;
   private previousControllerConnected: boolean | null = null;
   private lowBatteryToastActive = false;
@@ -1495,6 +1509,87 @@ export class BridgeService extends EventEmitter {
       reconnectingUntil: now + HOST_PERSONA_TRANSITION_TIMEOUT_MS + HOST_PERSONA_RECONNECT_GRACE_MS,
       completedAt: null
     };
+  }
+
+  private async getDefaultRenderEndpointStatus(): Promise<DefaultRenderEndpointStatus> {
+    return getDefaultRenderEndpointStatus();
+  }
+
+  private async setDefaultRenderBridgeEndpoint(mode: HostPersonaMode): Promise<void> {
+    await setDefaultRenderBridgeEndpoint(mode);
+  }
+
+  private async defaultRenderIsBridgeEndpoint(): Promise<boolean> {
+    try {
+      const status = await this.getDefaultRenderEndpointStatus();
+      this.appendAudioDebugLines([
+        `[HostBridge] default render before persona switch device='${status.deviceName}' bridge=${status.isBridgeEndpoint}`
+      ]);
+      return status.isBridgeEndpoint;
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      this.appendAudioDebugLines([`[HostBridge] default render check skipped: ${message}`]);
+      return false;
+    }
+  }
+
+  private queueHostPersonaDefaultRenderRestore(to: HostPersonaMode): void {
+    const now = Date.now();
+    this.hostPersonaDefaultRenderRestore = {
+      to,
+      deadlineAt: now
+        + HOST_PERSONA_TRANSITION_TIMEOUT_MS
+        + HOST_PERSONA_RECONNECT_GRACE_MS
+        + HOST_PERSONA_DEFAULT_RENDER_RESTORE_GRACE_MS,
+      nextAttemptAt: 0,
+      attempts: 0,
+      inFlight: false
+    };
+  }
+
+  private async restoreHostPersonaDefaultRenderIfReady(status: BridgeStatusPayload): Promise<void> {
+    const restore = this.hostPersonaDefaultRenderRestore;
+    if (!restore || restore.inFlight || status.hostPersonaMode !== restore.to) {
+      return;
+    }
+
+    const now = Date.now();
+    if (now < restore.nextAttemptAt) {
+      return;
+    }
+    const transition = this.hostPersonaTransition;
+    if (transition && transition.to === restore.to && transition.completedAt === null) {
+      return;
+    }
+    if (now >= restore.deadlineAt) {
+      this.hostPersonaDefaultRenderRestore = null;
+      this.appendAudioDebugLines([
+        `[HostBridge] default render restore expired persona=${restore.to} attempts=${restore.attempts}`
+      ]);
+      return;
+    }
+
+    restore.inFlight = true;
+    restore.attempts += 1;
+    try {
+      await this.setDefaultRenderBridgeEndpoint(restore.to);
+      this.hostPersonaDefaultRenderRestore = null;
+      this.appendAudioDebugLines([
+        `[HostBridge] default render restored for persona=${restore.to}`
+      ]);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      restore.nextAttemptAt = Date.now() + HOST_PERSONA_DEFAULT_RENDER_RESTORE_RETRY_MS;
+      if (restore.attempts <= 3) {
+        this.appendAudioDebugLines([
+          `[HostBridge] default render restore retry persona=${restore.to} attempts=${restore.attempts} error=${message}`
+        ]);
+      }
+    } finally {
+      if (this.hostPersonaDefaultRenderRestore === restore) {
+        restore.inFlight = false;
+      }
+    }
   }
 
   private advanceHostPersonaTransition(status: BridgeStatusPayload, now = Date.now()): HostPersonaTransition | null {
@@ -2430,12 +2525,20 @@ export class BridgeService extends EventEmitter {
   async setHostPersonaMode(mode: HostPersonaMode): Promise<BridgeSnapshot> {
     const normalizedMode = normalizeHostPersonaMode(mode);
     const previousMode = this.snapshot.status?.hostPersonaMode ?? this.snapshot.settings.hostPersonaMode;
+    const shouldRestoreDefaultRender = previousMode !== normalizedMode
+      ? await this.defaultRenderIsBridgeEndpoint()
+      : false;
     const ack = await this.sendCommand(COMMAND_ID.SET_HOST_PERSONA, hostPersonaModeValue(normalizedMode), {
       expectSettingsRevisionChange: true
     });
     if (ack.resultCode === ACK_RESULT.OK) {
       this.snapshot.settings = this.settingsStore.update({ hostPersonaMode: normalizedMode });
       if (previousMode !== normalizedMode) {
+        if (shouldRestoreDefaultRender) {
+          this.queueHostPersonaDefaultRenderRestore(normalizedMode);
+        } else {
+          this.hostPersonaDefaultRenderRestore = null;
+        }
         this.beginHostPersonaTransition(normalizedMode, previousMode);
         this.applyHostPersonaTransitionSnapshot(this.snapshot.diagnostics.rawDevices);
       }
@@ -3270,6 +3373,7 @@ export class BridgeService extends EventEmitter {
       personaTransition: transition
     };
     this.emitSnapshot();
+    await this.restoreHostPersonaDefaultRenderIfReady(status);
     await this.updateMicKeepaliveEngine(status.controllerConnected);
     await this.syncControllerPowerSavingState(settings);
 

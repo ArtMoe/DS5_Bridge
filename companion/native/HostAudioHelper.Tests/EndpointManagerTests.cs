@@ -18,4 +18,15 @@ public sealed class EndpointManagerTests
     {
         Assert.False(EndpointManager.IsKnownBridgeEndpointName("Speakers (Realtek USB Audio)"));
     }
+
+    [Fact]
+    public void IsKnownBridgeEndpointNameForPersonaDoesNotMatchDualSenseAsDs4()
+    {
+        Assert.False(EndpointManager.IsKnownBridgeEndpointNameForPersona(
+            "Speakers (DualSense Wireless Controller)",
+            "ds4"));
+        Assert.True(EndpointManager.IsKnownBridgeEndpointNameForPersona(
+            "Headset Earphone (Wireless Controller)",
+            "ds4"));
+    }
 }

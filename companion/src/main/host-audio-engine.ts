@@ -9,7 +9,8 @@ import type {
   AudioReactiveHapticsAttack,
   AudioReactiveHapticsBassFocus,
   AudioReactiveHapticsRelease,
-  AudioReactiveHapticsResponse
+  AudioReactiveHapticsResponse,
+  HostPersonaMode
 } from '../shared/protocol';
 import type { AudioHapticsSession } from '../shared/types';
 
@@ -26,6 +27,11 @@ export type SystemAudioHapticsConfig = {
   response: AudioReactiveHapticsResponse;
   attack: AudioReactiveHapticsAttack;
   release: AudioReactiveHapticsRelease;
+};
+
+export type DefaultRenderEndpointStatus = {
+  deviceName: string;
+  isBridgeEndpoint: boolean;
 };
 
 export type HostAudioStartFailureReason =
@@ -54,6 +60,7 @@ const HELPER_RECORDING_STARTED_MESSAGE = 'status: recording-started';
 const HELPER_CAPTURE_UNAVAILABLE_PREFIX = 'status: capture-unavailable';
 const HELPER_START_TIMEOUT_MS = 8000;
 const HELPER_TEST_TONE_TIMEOUT_MS = 10000;
+const HELPER_COMMAND_TIMEOUT_MS = 2500;
 const HELPER_SESSION_MONITOR_START_TIMEOUT_MS = 3000;
 const HELPER_SESSION_MONITOR_STOP_TIMEOUT_MS = 500;
 const HELPER_STDERR_MAX_CHARS = 8192;
@@ -842,6 +849,74 @@ function buildSystemAudioHapticsHelperEnv(): NodeJS.ProcessEnv {
   return env;
 }
 
+async function runHostAudioHelperCommand(args: string[]): Promise<{ stdout: string; stderr: string }> {
+  const helper = spawn(resolveHelperPath(), args, {
+    windowsHide: true,
+    stdio: ['ignore', 'pipe', 'pipe']
+  });
+
+  return new Promise((resolve, reject) => {
+    let settled = false;
+    let stdout = '';
+    let stderr = '';
+    const finish = (error?: Error) => {
+      if (settled) {
+        return;
+      }
+      settled = true;
+      clearTimeout(timeout);
+      if (error) {
+        if (!helper.killed) {
+          helper.kill();
+        }
+        reject(error);
+      } else {
+        resolve({ stdout, stderr });
+      }
+    };
+    const timeout = setTimeout(() => {
+      finish(new Error(`Host audio helper command timed out after ${HELPER_COMMAND_TIMEOUT_MS}ms.`));
+    }, HELPER_COMMAND_TIMEOUT_MS);
+
+    helper.stdout.on('data', (chunk: Buffer) => {
+      stdout = (stdout + chunk.toString('utf8')).slice(-HELPER_STDERR_MAX_CHARS);
+    });
+    helper.stderr.on('data', (chunk: Buffer) => {
+      stderr = (stderr + chunk.toString('utf8')).slice(-HELPER_STDERR_MAX_CHARS);
+    });
+    helper.on('error', (error) => finish(error));
+    helper.on('exit', (code, signal) => {
+      if (code === 0) {
+        finish();
+        return;
+      }
+      const detail = stderr.trim() || `helper exited (${signal ?? code ?? 'unknown'})`;
+      finish(new Error(detail));
+    });
+  });
+}
+
+function parseDefaultRenderEndpointStatus(stdout: string): DefaultRenderEndpointStatus {
+  const text = stdout.trim();
+  if (!text) {
+    throw new Error('Host audio helper did not report the default render endpoint.');
+  }
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(text);
+  } catch {
+    throw new Error('Host audio helper reported invalid default render endpoint status.');
+  }
+  if (!parsed || typeof parsed !== 'object') {
+    throw new Error('Host audio helper reported invalid default render endpoint status.');
+  }
+  const value = parsed as Partial<DefaultRenderEndpointStatus>;
+  return {
+    deviceName: typeof value.deviceName === 'string' ? value.deviceName : '',
+    isBridgeEndpoint: Boolean(value.isBridgeEndpoint)
+  };
+}
+
 async function waitForHelperRecordingStarted(
   helper: ChildProcessWithoutNullStreams,
   onStatus: (line: string) => void
@@ -957,6 +1032,19 @@ export async function playHostAudioTestTone(speakerVolumePercent = 100): Promise
       finish(new Error(detail));
     });
   });
+}
+
+export async function getDefaultRenderEndpointStatus(): Promise<DefaultRenderEndpointStatus> {
+  const result = await runHostAudioHelperCommand(['--default-render-status']);
+  return parseDefaultRenderEndpointStatus(result.stdout);
+}
+
+export async function setDefaultRenderBridgeEndpoint(mode: HostPersonaMode): Promise<void> {
+  await runHostAudioHelperCommand([
+    '--set-default-render-bridge',
+    '--bridge-persona',
+    mode
+  ]);
 }
 
 export class MicKeepaliveEngine extends EventEmitter {

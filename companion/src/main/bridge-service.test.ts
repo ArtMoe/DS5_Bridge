@@ -1452,6 +1452,54 @@ describe('BridgeService', () => {
     expect(snapshot.personaTransition?.to).toBe('ds4');
   });
 
+  it('restores controller default output after a host persona transition settles', async () => {
+    const service = serviceFixture();
+    const device = new MockHidDevice();
+    device.status = statusReport({
+      controllerConnected: false,
+      hostPersonaMode: 'dualsense',
+      supportedHostPersonaModesMask: 0x07
+    });
+    hidMock.state.devicesList = [companionDeviceInfo()];
+    hidMock.state.openDevices.set('companion-path', device);
+    await poll(service);
+
+    const getDefaultRenderEndpointStatus = vi.fn(async () => ({
+      deviceName: 'Speakers (DualSense Wireless Controller)',
+      isBridgeEndpoint: true
+    }));
+    const setDefaultRenderBridgeEndpoint = vi.fn(async () => undefined);
+    const internals = service as unknown as {
+      getDefaultRenderEndpointStatus: typeof getDefaultRenderEndpointStatus;
+      setDefaultRenderBridgeEndpoint(mode: 'dualsense' | 'xbox' | 'ds4'): Promise<void>;
+    };
+    internals.getDefaultRenderEndpointStatus = getDefaultRenderEndpointStatus;
+    internals.setDefaultRenderBridgeEndpoint = setDefaultRenderBridgeEndpoint;
+
+    const nowSpy = vi.spyOn(Date, 'now').mockReturnValue(1_000_000);
+    try {
+      await service.setHostPersonaMode('ds4');
+      expect(getDefaultRenderEndpointStatus).toHaveBeenCalledOnce();
+      expect(setDefaultRenderBridgeEndpoint).not.toHaveBeenCalled();
+
+      device.status = statusReport({
+        controllerConnected: false,
+        hostPersonaMode: 'ds4',
+        supportedHostPersonaModesMask: 0x07
+      });
+      nowSpy.mockReturnValue(1_000_050);
+      await poll(service);
+      expect(setDefaultRenderBridgeEndpoint).not.toHaveBeenCalled();
+
+      nowSpy.mockReturnValue(1_001_251);
+      await poll(service);
+      expect(setDefaultRenderBridgeEndpoint).toHaveBeenCalledOnce();
+      expect(setDefaultRenderBridgeEndpoint).toHaveBeenCalledWith('ds4');
+    } finally {
+      nowSpy.mockRestore();
+    }
+  });
+
   it('masks transient bridge loss during host persona re-enumeration', async () => {
     const service = serviceFixture();
     const device = new MockHidDevice();

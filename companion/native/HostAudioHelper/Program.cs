@@ -33,6 +33,16 @@ if (options.ListDevices)
     EndpointManager.ListDevices();
     return;
 }
+if (options.DefaultRenderStatus)
+{
+    EndpointManager.PrintDefaultRenderEndpointStatus();
+    return;
+}
+if (options.SetDefaultRenderBridge)
+{
+    EndpointManager.SetDefaultRenderBridgeEndpoint(options.BridgePersona);
+    return;
+}
 
 using var helper = new HostAudioHelper(options);
 await helper.RunAsync();
@@ -2350,6 +2360,9 @@ sealed record HelperOptions(
     int SpeakerVolumePercent,
     string? TestAudioPath,
     bool PlayTestTone,
+    bool DefaultRenderStatus,
+    bool SetDefaultRenderBridge,
+    string? BridgePersona,
     bool HapticsOnly,
     bool StdoutOnly,
     int HapticsGainPercent,
@@ -2395,6 +2408,9 @@ sealed record HelperOptions(
         string? appProcessPath = null;
         string? appExecutableName = null;
         var playTestTone = false;
+        var defaultRenderStatus = false;
+        var setDefaultRenderBridge = false;
+        string? bridgePersona = null;
         var captureDumpOnly = false;
         var hapticsOnly = false;
         var stdoutOnly = false;
@@ -2486,6 +2502,15 @@ sealed record HelperOptions(
                 case "--play-test-tone":
                     playTestTone = true;
                     break;
+                case "--default-render-status":
+                    defaultRenderStatus = true;
+                    break;
+                case "--set-default-render-bridge":
+                    setDefaultRenderBridge = true;
+                    break;
+                case "--bridge-persona" when index + 1 < args.Length:
+                    bridgePersona = args[++index];
+                    break;
                 case "--haptics-only":
                     hapticsOnly = true;
                     break;
@@ -2513,6 +2538,9 @@ sealed record HelperOptions(
             speakerVolumePercent,
             testAudioPath,
             playTestTone,
+            defaultRenderStatus,
+            setDefaultRenderBridge,
+            bridgePersona,
             hapticsOnly,
             stdoutOnly,
             hapticsGainPercent,
