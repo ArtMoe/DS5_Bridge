@@ -1060,6 +1060,43 @@ describe('BridgeService', () => {
     expect(passthroughCommand?.slice(11, 18)).toEqual([0x81, 150, 0, 2, 2, 3, 2]);
   });
 
+  it('restarts system audio haptics immediately after a route change', async () => {
+    const service = serviceFixture({
+      audioReactiveHapticsEnabled: true,
+      hostEncodedAudioEnabled: false
+    });
+    const device = new MockHidDevice();
+    hidMock.state.devicesList = [companionDeviceInfo()];
+    hidMock.state.openDevices.set('companion-path', device);
+
+    await poll(service);
+
+    const start = vi.fn(async () => undefined);
+    const stop = vi.fn(async () => undefined);
+    const internals = service as unknown as {
+      systemAudioHapticsEngine: {
+        start: typeof start;
+        stop: typeof stop;
+        isActive(): boolean;
+      };
+      handleSystemAudioHapticsStatus(line: string): Promise<void>;
+    };
+    internals.systemAudioHapticsEngine = {
+      start,
+      stop,
+      isActive: () => true
+    };
+
+    await internals.handleSystemAudioHapticsStatus('status: route-changed reason=default-render-changed');
+
+    expect(stop).toHaveBeenCalledOnce();
+    expect(start).toHaveBeenCalledOnce();
+    expect(start).toHaveBeenCalledWith(expect.objectContaining({
+      source: 'system-audio',
+      gainPercent: 100
+    }));
+  });
+
   it('preserves selected audio haptics app source on partial config updates', async () => {
     const appSource = {
       kind: 'app-session' as const,

@@ -11,6 +11,7 @@ sealed class EndpointManager
     [
         "DS5 Bridge",
         "DualSense Wireless Controller",
+        "Wireless Controller",
         "Xbox 360 Controller for Windows"
     ];
 
@@ -250,8 +251,13 @@ sealed class EndpointManager
 
     public static bool IsKnownBridgeEndpoint(MMDevice device)
     {
+        return IsKnownBridgeEndpointName(device.FriendlyName);
+    }
+
+    internal static bool IsKnownBridgeEndpointName(string friendlyName)
+    {
         return BridgeEndpointAliases.Any(alias =>
-            device.FriendlyName.Contains(alias, StringComparison.OrdinalIgnoreCase));
+            friendlyName.Contains(alias, StringComparison.OrdinalIgnoreCase));
     }
 
     private static bool IsRawPcmEndpoint(MMDevice device)

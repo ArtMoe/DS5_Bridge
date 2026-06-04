@@ -2921,6 +2921,8 @@ export class BridgeService extends EventEmitter {
         && this.systemAudioHapticsDesired(settings)
       ) {
         this.systemAudioHapticsRetryAt = 0;
+        await this.systemAudioHapticsEngine.stop();
+        await this.updateSystemAudioHapticsEngine();
         return;
       }
 
