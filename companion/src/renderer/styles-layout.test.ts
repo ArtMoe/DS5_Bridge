@@ -114,6 +114,16 @@ describe('companion layout CSS', () => {
     expect(featureCardTitle).not.toContain('radial-gradient');
   });
 
+  it('keeps overview containers on the darker card surface while retaining restrained radial accents', () => {
+    const overviewCard = cssBlock('.overview-card', 'background:');
+    expect(overviewCard).toContain('radial-gradient(circle at 92% 0%, rgba(40, 124, 255, 0.045), transparent 38%)');
+    expect(overviewCard).toContain('rgba(3, 10, 18, 0.52)');
+    const overviewControlPanel = cssBlock('.overview-control-panel', 'background: rgba(3, 10, 18, 0.52);');
+    expect(overviewControlPanel).toContain('background: rgba(3, 10, 18, 0.52);');
+    const overviewStatusPanel = cssBlock('.overview-status-panel', 'background: rgba(3, 10, 18, 0.52);');
+    expect(overviewStatusPanel).toContain('background: rgba(3, 10, 18, 0.52);');
+  });
+
   it('keeps the remapping profile strip aligned with shared feature headers', () => {
     expect(cssBlock('.remapping-page', 'height: 100%;')).toContain('height: 100%;');
     expect(cssBlock('.remapping-page', 'min-height: 0;')).toContain('min-height: 0;');
