@@ -102,6 +102,18 @@ describe('companion layout CSS', () => {
     expect(appSource).not.toContain('Protocol and debug data.');
   });
 
+  it('keeps feature cards visually aligned with the darker tips surface', () => {
+    expect(cssBlock('.feature-card', 'background: rgba(3, 10, 18, 0.52);')).toContain(
+      'background: rgba(3, 10, 18, 0.52);'
+    );
+    expect(cssBlock('.system-card', 'background: rgba(3, 10, 18, 0.52);')).toContain(
+      'background: rgba(3, 10, 18, 0.52);'
+    );
+    const featureCardTitle = cssBlock('.feature-card-title', 'background: rgba(3, 9, 16, 0.48);');
+    expect(featureCardTitle).toContain('background: rgba(3, 9, 16, 0.48);');
+    expect(featureCardTitle).not.toContain('radial-gradient');
+  });
+
   it('keeps the remapping profile strip aligned with shared feature headers', () => {
     expect(cssBlock('.remapping-page', 'height: 100%;')).toContain('height: 100%;');
     expect(cssBlock('.remapping-page', 'min-height: 0;')).toContain('min-height: 0;');
