@@ -35,8 +35,10 @@ import {
   IconPalette as Palette,
   IconPencil as Pencil,
   IconPlayerPlay as Play,
+  IconPlus as Plus,
   IconQuestionMark,
   IconRefresh as RefreshCcw,
+  IconReplace,
   IconSettings as SettingsIcon,
   IconBluetooth,
   IconSparkleHighlight,
@@ -78,7 +80,17 @@ import {
   UI_THEME_OPTIONS,
   UI_THEME_PREVIEW_SWATCHES
 } from './ui-themes';
-import { DEFAULT_BUTTON_REMAP_PROFILE_ID, DEFAULT_CONTROLLER_PROFILE_ID, REMAP_BUTTON_IDS, ackResultName } from '../shared/protocol';
+import {
+  CHORD_ASSIGNABLE_BUTTON_IDS,
+  DEFAULT_BUTTON_REMAP_PROFILE_ID,
+  DEFAULT_CONTROLLER_PROFILE_ID,
+  MAX_CHORD_ASSIGNMENTS,
+  MAX_CHORD_FUNCTION_NAME_LENGTH,
+  MAX_KEYBOARD_FUNCTION_KEYS,
+  REMAP_BUTTON_IDS,
+  ackResultName,
+  isChordBindingAllowed
+} from '../shared/protocol';
 import type {
   AudioReactiveHapticsBassFocus,
   AudioReactiveHapticsConfig,
@@ -87,6 +99,13 @@ import type {
   AudioReactiveHapticsAttack,
   AudioReactiveHapticsRelease,
   AudioReactiveHapticsResponse,
+  ChordAssignment,
+  ChordAssignableButtonId,
+  ChordControllerSettingAction,
+  ChordFunction,
+  ChordFunctionType,
+  ChordMediaAction,
+  ChordStarterId,
   ControllerProfileSettings,
   HostPersonaMode,
   MuteButtonMode,
@@ -99,7 +118,7 @@ import type {
 } from '../shared/protocol';
 import type { AudioHapticsSession, BridgeSnapshot, UiScalePercent, UiThemePreset } from '../shared/types';
 
-type ControlTab = 'overview' | 'haptics' | 'audio' | 'triggers' | 'lighting' | 'remapping' | 'system';
+type ControlTab = 'overview' | 'haptics' | 'audio' | 'triggers' | 'lighting' | 'remapping' | 'chords' | 'system';
 type ControllerType = BridgeStatusPayload['controllerType'];
 type KnownControllerType = Exclude<ControllerType, 'unknown'>;
 type RemapButtonDefinition = {
@@ -108,10 +127,41 @@ type RemapButtonDefinition = {
   glyphUrl?: string;
   textGlyph?: string;
 };
+type ChordStarterDefinition = {
+  id: ChordStarterId;
+  label: string;
+  glyphUrl?: string;
+  textGlyph?: string;
+};
 type DualSenseEdgeRemapButtonId = Extract<RemapButtonId, 'lb' | 'rb' | 'lfn' | 'rfn'>;
 type StandardRemapButtonId = Exclude<RemapButtonId, DualSenseEdgeRemapButtonId>;
 type RemapProfileDialogMode = 'save' | 'rename' | 'delete';
 type ControllerProfileDialogMode = 'save' | 'rename' | 'delete';
+type ChordFunctionDraft = {
+  id: string;
+  name: string;
+  type: ChordFunctionType;
+  keysText: string;
+  mediaAction: ChordMediaAction;
+  controllerAction: ChordControllerSettingAction;
+};
+type ChordNotchTargetId = 'speaker' | 'mic' | 'haptics' | 'rumble' | 'triggers' | 'lighting';
+type ChordNotchDirection = 'down' | 'up';
+type ChordNotchAction = Extract<ChordControllerSettingAction, `${ChordNotchTargetId}-${ChordNotchDirection}`>;
+type ChordControllerSettingSelectValue = Exclude<ChordControllerSettingAction, ChordNotchAction> | ChordNotchTargetId;
+type ChordFunctionDialogMode = 'rename' | 'delete';
+type ChordFunctionDialogState = {
+  mode: ChordFunctionDialogMode;
+  functionId: string;
+};
+const CHORD_UNASSIGNED_BUTTON = '__unassigned__';
+type ChordButtonSelectValue = ChordAssignableButtonId | typeof CHORD_UNASSIGNED_BUTTON;
+type ChordAssignmentDraftRow = {
+  id: string;
+  starter: ChordStarterId;
+  button: ChordAssignableButtonId | null;
+  functionId: string;
+};
 type TriggerLabProfileDialogMode = 'save' | 'rename' | 'delete';
 type TriggerLabBuiltinProfileId = 'default';
 type TriggerLabCustomProfileId = 'custom' | `custom-${string}`;
@@ -388,6 +438,58 @@ const REMAP_STICK_CLICK_IDS: StandardRemapButtonId[] = ['l3', 'r3'];
 const REMAP_TARGET_OPTIONS: Array<[string, StandardRemapButtonId]> = [
   ...REMAP_STANDARD_BUTTON_IDS
 ].map((id) => [REMAP_BUTTONS[id].label, id]);
+const CHORD_STARTERS: Record<ChordStarterId, ChordStarterDefinition> = {
+  ps: { id: 'ps', label: 'PS Button', glyphUrl: psHomeGlyphUrl },
+  lfn: { id: 'lfn', label: 'LFN', textGlyph: 'LFN' },
+  rfn: { id: 'rfn', label: 'RFN', textGlyph: 'RFN' }
+};
+const CHORD_STARTER_OPTIONS: Array<[string, ChordStarterId]> = [
+  [CHORD_STARTERS.ps.label, 'ps'],
+  [CHORD_STARTERS.lfn.label, 'lfn'],
+  [CHORD_STARTERS.rfn.label, 'rfn']
+];
+const CHORD_FUNCTION_TYPE_OPTIONS: Array<[string, ChordFunctionType]> = [
+  ['Keyboard Shortcut', 'keyboard'],
+  ['Media Action', 'media'],
+  ['Controller Setting', 'controller-setting']
+];
+const CHORD_MEDIA_ACTION_OPTIONS: Array<[string, ChordMediaAction]> = [
+  ['Play / Pause', 'play-pause'],
+  ['Next Track', 'next-track'],
+  ['Previous Track', 'previous-track'],
+  ['Mute Output', 'mute'],
+  ['Volume Up', 'volume-up'],
+  ['Volume Down', 'volume-down']
+];
+const CHORD_NOTCH_TARGETS: Array<{
+  id: ChordNotchTargetId;
+  label: string;
+  downAction: ChordNotchAction;
+  upAction: ChordNotchAction;
+}> = [
+  { id: 'speaker', label: 'Speaker', downAction: 'speaker-down', upAction: 'speaker-up' },
+  { id: 'mic', label: 'Mic', downAction: 'mic-down', upAction: 'mic-up' },
+  { id: 'haptics', label: 'Haptics', downAction: 'haptics-down', upAction: 'haptics-up' },
+  { id: 'rumble', label: 'Rumble', downAction: 'rumble-down', upAction: 'rumble-up' },
+  { id: 'triggers', label: 'Triggers', downAction: 'triggers-down', upAction: 'triggers-up' },
+  { id: 'lighting', label: 'Lighting', downAction: 'lighting-down', upAction: 'lighting-up' }
+];
+const CHORD_CONTROLLER_SETTING_ACTION_OPTIONS: Array<[string, ChordControllerSettingSelectValue]> = [
+  ['Audio Haptics', 'toggle-audio-haptics'],
+  ['Lightbar Override', 'toggle-lightbar-override'],
+  ['Mic Mute', 'toggle-mic-mute'],
+  ['Sleep Controller', 'sleep-controller'],
+  ...CHORD_NOTCH_TARGETS.map((target): [string, ChordNotchTargetId] => [target.label, target.id])
+];
+const DEFAULT_CHORD_KEYBOARD_KEYS = ['Ctrl', 'Shift', 'Esc'];
+const EMPTY_CHORD_FUNCTION_DRAFT: ChordFunctionDraft = {
+  id: '',
+  name: 'Task Manager',
+  type: 'keyboard',
+  keysText: DEFAULT_CHORD_KEYBOARD_KEYS.join(' + '),
+  mediaAction: 'play-pause',
+  controllerAction: 'sleep-controller'
+};
 const DEFAULT_REMAP_DRAFT = Object.fromEntries(
   REMAP_ALL_BUTTON_IDS.map((id) => [id, id])
 ) as Record<RemapButtonId, RemapButtonId>;
@@ -2031,6 +2133,38 @@ function RemapSourceGlyph({ button }: { button: RemapButtonDefinition }) {
   );
 }
 
+function ChordStarterGlyph({ starter, label = CHORD_STARTERS[starter].label }: { starter: ChordStarterId; label?: string }) {
+  const button = CHORD_STARTERS[starter];
+
+  return button.glyphUrl ? (
+    <img src={button.glyphUrl} alt={label} title={label} />
+  ) : (
+    <span className="remap-text-glyph remap-text-glyph-source" title={label}>
+      {button.textGlyph ?? button.label}
+    </span>
+  );
+}
+
+function ChordStarterGlyphOption({ label, value }: { label: string; value: ChordStarterId }) {
+  return (
+    <span className="chords-starter-glyph-option" title={label}>
+      <ChordStarterGlyph starter={value} label={label} />
+    </span>
+  );
+}
+
+function ChordButtonGlyphOption({ label, value }: { label: string; value: ChordButtonSelectValue }) {
+  if (value === CHORD_UNASSIGNED_BUTTON) {
+    return (
+      <span className="chords-unassigned-glyph" title={label} aria-label={label}>
+        <IconQuestionMark size={16} />
+      </span>
+    );
+  }
+
+  return <RemapGlyphOption label={label} value={value} />;
+}
+
 function HostPersonaOption({ label, value }: { label: string; value: HostPersonaMode }) {
   const sonyPersona = value === 'dualsense' || value === 'ds4';
   return (
@@ -2100,6 +2234,178 @@ function remapTargetOptionsFor(buttonId: RemapButtonId): Array<[string, RemapBut
     : REMAP_TARGET_OPTIONS;
 }
 
+function chordFunctionTypeLabel(type: ChordFunctionType): string {
+  return CHORD_FUNCTION_TYPE_OPTIONS.find(([, value]) => value === type)?.[0] ?? 'Function';
+}
+
+function chordMediaActionLabel(action: ChordMediaAction): string {
+  return CHORD_MEDIA_ACTION_OPTIONS.find(([, value]) => value === action)?.[0] ?? 'Media Action';
+}
+
+function chordNotchTargetForAction(action: ChordControllerSettingAction): {
+  target: (typeof CHORD_NOTCH_TARGETS)[number];
+  direction: ChordNotchDirection;
+} | null {
+  for (const target of CHORD_NOTCH_TARGETS) {
+    if (target.downAction === action) {
+      return { target, direction: 'down' };
+    }
+    if (target.upAction === action) {
+      return { target, direction: 'up' };
+    }
+  }
+  return null;
+}
+
+function chordControllerSettingSelectValue(action: ChordControllerSettingAction): ChordControllerSettingSelectValue {
+  const notchTarget = chordNotchTargetForAction(action);
+  if (notchTarget) {
+    return notchTarget.target.id;
+  }
+  return action as ChordControllerSettingSelectValue;
+}
+
+function chordControllerSettingActionFromSelectValue(
+  value: ChordControllerSettingSelectValue,
+  currentAction: ChordControllerSettingAction
+): ChordControllerSettingAction {
+  const target = CHORD_NOTCH_TARGETS.find((candidate) => candidate.id === value);
+  if (!target) {
+    return value as ChordControllerSettingAction;
+  }
+  const currentTarget = chordNotchTargetForAction(currentAction);
+  return currentTarget?.target.id === target.id && currentTarget.direction === 'down'
+    ? target.downAction
+    : target.upAction;
+}
+
+function chordControllerSettingActionLabel(action: ChordControllerSettingAction): string {
+  const notchTarget = chordNotchTargetForAction(action);
+  if (notchTarget) {
+    return notchTarget.target.label;
+  }
+  return CHORD_CONTROLLER_SETTING_ACTION_OPTIONS.find(([, value]) => value === action)?.[0] ?? 'Controller Setting';
+}
+
+function chordControllerSettingSummary(action: ChordControllerSettingAction): string {
+  const notchTarget = chordNotchTargetForAction(action);
+  if (notchTarget) {
+    return `${notchTarget.direction === 'up' ? 'Increase' : 'Decrease'} ${notchTarget.target.label}`;
+  }
+  switch (action) {
+    case 'toggle-audio-haptics':
+      return 'Toggle Audio Haptics';
+    case 'toggle-lightbar-override':
+      return 'Toggle Lightbar Override';
+    case 'toggle-mic-mute':
+      return 'Toggle Mic Mute';
+    case 'sleep-controller':
+      return 'Sleep Controller';
+  }
+  return 'Controller Setting';
+}
+
+function chordStarterLabel(starter: ChordStarterId): string {
+  return CHORD_STARTER_OPTIONS.find(([, value]) => value === starter)?.[0] ?? starter.toUpperCase();
+}
+
+function chordButtonLabel(button: ChordAssignableButtonId): string {
+  return REMAP_BUTTONS[button].label;
+}
+
+function chordFunctionSummary(func: ChordFunction): string {
+  switch (func.type) {
+    case 'keyboard':
+      return func.keys.join(' + ');
+    case 'media':
+      return chordMediaActionLabel(func.action);
+    case 'controller-setting':
+      return chordControllerSettingSummary(func.action);
+  }
+}
+
+function chordFunctionToDraft(func: ChordFunction | null): ChordFunctionDraft {
+  if (!func) {
+    return { ...EMPTY_CHORD_FUNCTION_DRAFT };
+  }
+  return {
+    id: func.id,
+    name: func.name,
+    type: func.type,
+    keysText: func.type === 'keyboard' ? func.keys.join(' + ') : DEFAULT_CHORD_KEYBOARD_KEYS.join(' + '),
+    mediaAction: func.type === 'media' ? func.action : 'play-pause',
+    controllerAction: func.type === 'controller-setting' ? func.action : 'sleep-controller'
+  };
+}
+
+function normalizeChordKeyLabel(key: string): string {
+  const trimmed = key.trim();
+  const normalized = trimmed.replace(/\s+/g, ' ').toLowerCase();
+  switch (normalized) {
+    case 'control':
+    case 'ctrl':
+      return 'Ctrl';
+    case 'escape':
+    case 'esc':
+      return 'Esc';
+    case 'windows':
+    case 'win':
+    case 'meta':
+      return 'Win';
+    case 'spacebar':
+    case 'space':
+      return 'Space';
+    default:
+      return trimmed.length === 1 ? trimmed.toUpperCase() : trimmed;
+  }
+}
+
+function parseChordKeys(text: string): string[] {
+  return text
+    .split(/[+,;]/)
+    .map(normalizeChordKeyLabel)
+    .filter(Boolean)
+    .slice(0, MAX_KEYBOARD_FUNCTION_KEYS);
+}
+
+function chordFunctionFromDraft(draft: ChordFunctionDraft): ChordFunction {
+  const name = (draft.name.trim() || chordFunctionTypeLabel(draft.type)).slice(0, MAX_CHORD_FUNCTION_NAME_LENGTH);
+  const id = draft.id || `function-${Date.now().toString(36)}`;
+  switch (draft.type) {
+    case 'keyboard': {
+      const keys = parseChordKeys(draft.keysText);
+      return {
+        id,
+        name,
+        type: 'keyboard',
+        keys: keys.length > 0 ? keys : DEFAULT_CHORD_KEYBOARD_KEYS
+      };
+    }
+    case 'media':
+      return {
+        id,
+        name,
+        type: 'media',
+        action: draft.mediaAction
+      };
+    case 'controller-setting':
+      return {
+        id,
+        name,
+        type: 'controller-setting',
+        action: draft.controllerAction
+      };
+  }
+}
+
+function chordAssignmentLabel(assignment: ChordAssignment): string {
+  return `${chordStarterLabel(assignment.starter)} + ${chordButtonLabel(assignment.button)}`;
+}
+
+function chordAssignmentKey(assignment: ChordAssignment): string {
+  return `chord:${assignment.starter}:${assignment.button}`;
+}
+
 export function App() {
   const [snapshot, setSnapshot] = useState<BridgeSnapshot | null>(null);
   const [startupVisible, setStartupVisible] = useState(true);
@@ -2141,6 +2447,11 @@ export function App() {
   const [remapDraft, setRemapDraft] = useState<Record<RemapButtonId, RemapButtonId>>(DEFAULT_REMAP_DRAFT);
   const [remapProfileDialogMode, setRemapProfileDialogMode] = useState<RemapProfileDialogMode | null>(null);
   const [remapProfileNameDraft, setRemapProfileNameDraft] = useState('');
+  const [selectedChordFunctionId, setSelectedChordFunctionId] = useState('');
+  const [chordFunctionDraft, setChordFunctionDraft] = useState<ChordFunctionDraft>(EMPTY_CHORD_FUNCTION_DRAFT);
+  const [chordFunctionDialog, setChordFunctionDialog] = useState<ChordFunctionDialogState | null>(null);
+  const [chordFunctionNameDraft, setChordFunctionNameDraft] = useState('');
+  const [chordAssignmentDraftRows, setChordAssignmentDraftRows] = useState<ChordAssignmentDraftRow[]>([]);
   const [controllerProfileDialogMode, setControllerProfileDialogMode] = useState<ControllerProfileDialogMode | null>(null);
   const [controllerProfileNameDraft, setControllerProfileNameDraft] = useState('');
   const [remapCalloutLayout, setRemapCalloutLayout] = useState<Record<StandardRemapButtonId, RemapCalloutLayout> | null>(null);
@@ -2275,6 +2586,48 @@ export function App() {
   ), [snapshot?.settings.buttonRemappingProfiles]);
   const selectedRemapProfileIsDefault = selectedRemapProfileId === DEFAULT_BUTTON_REMAP_PROFILE_ID;
   const remappingLayoutAsset = showDualSenseEdgeRemapButtons ? REMAP_EDGE_LAYOUT_ASSET : REMAP_STANDARD_LAYOUT_ASSET;
+  const chordFunctions = snapshot?.settings.chordFunctions ?? [];
+  const chordAssignments = snapshot?.settings.chordAssignments ?? [];
+  const selectedChordFunction = chordFunctions.find((func) => func.id === selectedChordFunctionId) ?? chordFunctions[0] ?? null;
+  const chordFunctionDialogFunction = chordFunctionDialog
+    ? chordFunctions.find((func) => func.id === chordFunctionDialog.functionId) ?? null
+    : null;
+  const chordFunctionsSignature = useMemo(() => (
+    chordFunctions.map((func) => `${func.id}:${func.name}:${chordFunctionSummary(func)}`).join('|')
+  ), [chordFunctions]);
+  const chordFunctionOptions = useMemo<Array<[string, string]>>(() => (
+    chordFunctions.length > 0
+      ? chordFunctions.map((func) => [func.name, func.id])
+      : [['No Functions', '']]
+  ), [chordFunctions]);
+  const defaultChordFunctionId = selectedChordFunction?.id ?? chordFunctions[0]?.id ?? '';
+  const chordStarterOptions = useMemo<Array<[string, ChordStarterId]>>(() => (
+    showDualSenseEdgeRemapButtons
+      ? CHORD_STARTER_OPTIONS
+      : CHORD_STARTER_OPTIONS.filter(([, starter]) => starter === 'ps')
+  ), [showDualSenseEdgeRemapButtons]);
+  const chordAssignableButtonIds = useMemo<readonly ChordAssignableButtonId[]>(() => (
+    (showDualSenseEdgeRemapButtons
+      ? CHORD_ASSIGNABLE_BUTTON_IDS
+      : REMAP_STANDARD_BUTTON_IDS) as readonly ChordAssignableButtonId[]
+  ), [showDualSenseEdgeRemapButtons]);
+  function chordButtonOptionsFor(
+    starter: ChordStarterId,
+    includeUnassigned = false
+  ): Array<[string, ChordButtonSelectValue]> {
+    const ids = chordAssignableButtonIds;
+    const options = ids
+      .filter((id) => isChordBindingAllowed(starter, id))
+      .map((id): [string, ChordButtonSelectValue] => [REMAP_BUTTONS[id].label, id]);
+    return includeUnassigned
+      ? [['Choose Button', CHORD_UNASSIGNED_BUTTON], ...options]
+      : options;
+  }
+  function firstAllowedChordButton(starter: ChordStarterId): ChordAssignableButtonId | null {
+    return chordAssignableButtonIds.find((id) => isChordBindingAllowed(starter, id)) ?? null;
+  }
+  const canAddChordDraft = Boolean(defaultChordFunctionId)
+    && chordAssignments.length + chordAssignmentDraftRows.length < MAX_CHORD_ASSIGNMENTS;
 
   useEffect(() => {
     if (snapshot?.status?.controllerConnected && liveControllerType && liveControllerType !== 'unknown') {
@@ -2282,6 +2635,37 @@ export function App() {
       window.localStorage.setItem(LAST_REMAP_CONTROLLER_TYPE_STORAGE_KEY, liveControllerType);
     }
   }, [liveControllerType, snapshot?.status?.controllerConnected]);
+
+  useEffect(() => {
+    if (chordFunctions.length === 0) {
+      setSelectedChordFunctionId('');
+      setChordFunctionDraft(EMPTY_CHORD_FUNCTION_DRAFT);
+      setChordAssignmentDraftRows([]);
+      return;
+    }
+    const nextSelected = chordFunctions.find((func) => func.id === selectedChordFunctionId) ?? chordFunctions[0]!;
+    if (nextSelected.id !== selectedChordFunctionId) {
+      setSelectedChordFunctionId(nextSelected.id);
+    }
+    setChordFunctionDraft(chordFunctionToDraft(nextSelected));
+  }, [chordFunctionsSignature]);
+
+  useEffect(() => {
+    setChordAssignmentDraftRows((rows) => rows
+      .map((row) => {
+        const starter = chordStarterOptions.some(([, option]) => option === row.starter) ? row.starter : 'ps';
+        const functionId = chordFunctions.some((func) => func.id === row.functionId)
+          ? row.functionId
+          : defaultChordFunctionId;
+        const button = row.button
+          && chordAssignableButtonIds.includes(row.button)
+          && isChordBindingAllowed(starter, row.button)
+          ? row.button
+          : null;
+        return functionId ? { ...row, starter, button, functionId } : null;
+      })
+      .filter((row): row is ChordAssignmentDraftRow => row !== null));
+  }, [chordAssignableButtonIds, chordFunctionsSignature, chordStarterOptions, defaultChordFunctionId]);
 
   function applySnapshot(next: BridgeSnapshot) {
     setSnapshot(next);
@@ -3238,6 +3622,19 @@ export function App() {
       setSnapshot(next);
     } finally {
       setPendingAction(null);
+    }
+  }
+
+  async function runQuietAction(action: () => Promise<BridgeSnapshot>) {
+    if (!snapshot) {
+      return;
+    }
+    try {
+      const next = await action();
+      setSnapshot(next);
+    } catch {
+      const next = await window.bridge.getStatus();
+      setSnapshot(next);
     }
   }
 
@@ -4221,6 +4618,291 @@ export function App() {
     }
   }
 
+  function commitChordConfiguration(
+    nextFunctions: ChordFunction[],
+    nextAssignments: ChordAssignment[],
+    _action = 'chords-save'
+  ) {
+    void runQuietAction(() => window.bridge.setChordConfiguration(nextFunctions, nextAssignments));
+  }
+
+  function createChordFunction() {
+    const id = `function-${Date.now().toString(36)}`;
+    const nextDraft: ChordFunctionDraft = {
+      ...EMPTY_CHORD_FUNCTION_DRAFT,
+      id,
+      name: `Function ${chordFunctions.length + 1}`
+    };
+    const nextFunction = chordFunctionFromDraft(nextDraft);
+    setSelectedChordFunctionId(id);
+    setChordFunctionDraft(chordFunctionToDraft(nextFunction));
+    commitChordConfiguration([...chordFunctions, nextFunction], chordAssignments, 'chords-create-function');
+  }
+
+  function commitChordFunctionDraft(nextDraft = chordFunctionDraft) {
+    const nextFunction = chordFunctionFromDraft(nextDraft);
+    const exists = chordFunctions.some((func) => func.id === nextFunction.id);
+    const nextFunctions = exists
+      ? chordFunctions.map((func) => (func.id === nextFunction.id ? nextFunction : func))
+      : [...chordFunctions, nextFunction];
+    setSelectedChordFunctionId(nextFunction.id);
+    commitChordConfiguration(nextFunctions, chordAssignments, `chords-function-${nextFunction.id}`);
+  }
+
+  function setChordFunctionControllerAction(action: ChordControllerSettingAction) {
+    const nextDraft = { ...chordFunctionDraft, controllerAction: action };
+    setChordFunctionDraft(nextDraft);
+    commitChordFunctionDraft(nextDraft);
+  }
+
+  function renderChordFunctionSummary(func: ChordFunction) {
+    if (func.type !== 'controller-setting') {
+      return (
+        <div className="chords-function-summary">
+          <strong>{chordFunctionTypeLabel(func.type)}</strong>
+          <span>{chordFunctionSummary(func)}</span>
+        </div>
+      );
+    }
+
+    const notchTarget = chordNotchTargetForAction(func.action);
+    if (!notchTarget) {
+      return (
+        <div className="chords-function-summary">
+          <strong>{chordFunctionTypeLabel(func.type)}</strong>
+          <span>{chordFunctionSummary(func)}</span>
+        </div>
+      );
+    }
+
+    return (
+      <div className="chords-function-summary chords-function-summary-stepper">
+        <div className="chords-function-summary-copy">
+          <strong>{notchTarget.target.label}</strong>
+          <span>{chordControllerSettingSummary(func.action)}</span>
+        </div>
+        <div className="dual-selector chords-notch-direction-selector" role="group" aria-label={`${notchTarget.target.label} direction`}>
+          <button
+            type="button"
+            className={notchTarget.direction === 'down' ? 'active' : ''}
+            title={`Decrease ${notchTarget.target.label}`}
+            aria-label={`Decrease ${notchTarget.target.label}`}
+            disabled={pendingAction !== null}
+            onClick={() => setChordFunctionControllerAction(notchTarget.target.downAction)}
+          >
+            <Minus size={15} />
+          </button>
+          <button
+            type="button"
+            className={notchTarget.direction === 'up' ? 'active' : ''}
+            title={`Increase ${notchTarget.target.label}`}
+            aria-label={`Increase ${notchTarget.target.label}`}
+            disabled={pendingAction !== null}
+            onClick={() => setChordFunctionControllerAction(notchTarget.target.upAction)}
+          >
+            <Plus size={15} />
+          </button>
+        </div>
+      </div>
+    );
+  }
+
+  function openChordFunctionDialog(mode: ChordFunctionDialogMode) {
+    if (!selectedChordFunction) {
+      return;
+    }
+    setChordFunctionNameDraft(selectedChordFunction.name);
+    setChordFunctionDialog({ mode, functionId: selectedChordFunction.id });
+  }
+
+  function closeChordFunctionDialog() {
+    setChordFunctionDialog(null);
+    setChordFunctionNameDraft('');
+  }
+
+  function deleteChordFunction(functionId: string) {
+    const nextFunctions = chordFunctions.filter((func) => func.id !== functionId);
+    const nextAssignments = chordAssignments.filter((assignment) => assignment.functionId !== functionId);
+    const nextSelected = nextFunctions[0] ?? null;
+    setSelectedChordFunctionId(nextSelected?.id ?? '');
+    setChordFunctionDraft(chordFunctionToDraft(nextSelected));
+    setChordAssignmentDraftRows((rows) => rows.filter((row) => row.functionId !== functionId));
+    commitChordConfiguration(nextFunctions, nextAssignments, `chords-delete-function-${functionId}`);
+  }
+
+  function submitChordFunctionDialog() {
+    if (!chordFunctionDialog) {
+      return;
+    }
+    const current = chordFunctions.find((func) => func.id === chordFunctionDialog.functionId);
+    if (!current) {
+      closeChordFunctionDialog();
+      return;
+    }
+    if (chordFunctionDialog.mode === 'delete') {
+      deleteChordFunction(current.id);
+      closeChordFunctionDialog();
+      return;
+    }
+    const nextName = chordFunctionNameDraft.trim().slice(0, MAX_CHORD_FUNCTION_NAME_LENGTH);
+    if (!nextName || nextName === current.name) {
+      closeChordFunctionDialog();
+      return;
+    }
+    const nextFunction = { ...current, name: nextName };
+    const nextFunctions = chordFunctions.map((func) => (func.id === current.id ? nextFunction : func));
+    setSelectedChordFunctionId(current.id);
+    setChordFunctionDraft(chordFunctionToDraft(nextFunction));
+    commitChordConfiguration(nextFunctions, chordAssignments, `chords-rename-function-${current.id}`);
+    closeChordFunctionDialog();
+  }
+
+  function commitChordAssignment(nextAssignment: ChordAssignment, replaceAssignmentId?: string) {
+    const nextBindingKey = chordAssignmentKey(nextAssignment);
+    const existingIndex = chordAssignments.findIndex((assignment) => (
+      assignment.id !== replaceAssignmentId && chordAssignmentKey(assignment) === nextBindingKey
+    ));
+    const replacingExisting = replaceAssignmentId
+      ? chordAssignments.some((assignment) => assignment.id === replaceAssignmentId)
+      : false;
+    if (!replacingExisting && existingIndex === -1 && chordAssignments.length >= MAX_CHORD_ASSIGNMENTS) {
+      return;
+    }
+    const nextAssignments: ChordAssignment[] = [];
+    let inserted = false;
+    for (const assignment of chordAssignments) {
+      if (assignment.id === replaceAssignmentId) {
+        nextAssignments.push(nextAssignment);
+        inserted = true;
+        continue;
+      }
+      if (chordAssignmentKey(assignment) === nextBindingKey) {
+        if (!inserted && !replaceAssignmentId) {
+          nextAssignments.push(nextAssignment);
+          inserted = true;
+        }
+        continue;
+      }
+      nextAssignments.push(assignment);
+    }
+    if (!inserted) {
+      nextAssignments.push(nextAssignment);
+    }
+    commitChordConfiguration(chordFunctions, nextAssignments, `chords-assignment-${nextAssignment.id}`);
+  }
+
+  function addChordAssignmentDraft() {
+    if (!canAddChordDraft) {
+      return;
+    }
+    setChordAssignmentDraftRows((rows) => [
+      ...rows,
+      {
+        id: `draft-${Date.now().toString(36)}-${rows.length}`,
+        starter: chordStarterOptions[0]?.[1] ?? 'ps',
+        button: null,
+        functionId: defaultChordFunctionId
+      }
+    ]);
+  }
+
+  function commitChordAssignmentDraft(row: ChordAssignmentDraftRow, button: ChordAssignableButtonId) {
+    if (!row.functionId || !isChordBindingAllowed(row.starter, button)) {
+      return;
+    }
+    const nextAssignment: ChordAssignment = {
+      id: `chord-${row.starter}-${button}`,
+      kind: 'chord',
+      starter: row.starter,
+      button,
+      functionId: row.functionId
+    };
+    setChordAssignmentDraftRows((rows) => rows.filter((draft) => draft.id !== row.id));
+    commitChordAssignment(nextAssignment);
+  }
+
+  function updateChordAssignmentDraftStarter(rowId: string, starter: ChordStarterId) {
+    setChordAssignmentDraftRows((rows) => rows.map((row) => (
+      row.id === rowId
+        ? {
+          ...row,
+          starter,
+          button: row.button && isChordBindingAllowed(starter, row.button) ? row.button : null
+        }
+        : row
+    )));
+  }
+
+  function updateChordAssignmentDraftButton(rowId: string, button: ChordButtonSelectValue) {
+    if (button === CHORD_UNASSIGNED_BUTTON) {
+      return;
+    }
+    const row = chordAssignmentDraftRows.find((draft) => draft.id === rowId);
+    if (row) {
+      commitChordAssignmentDraft(row, button);
+    }
+  }
+
+  function updateChordAssignmentDraftFunction(rowId: string, functionId: string) {
+    setChordAssignmentDraftRows((rows) => rows.map((row) => (
+      row.id === rowId ? { ...row, functionId } : row
+    )));
+  }
+
+  function deleteChordAssignmentDraft(rowId: string) {
+    setChordAssignmentDraftRows((rows) => rows.filter((row) => row.id !== rowId));
+  }
+
+  function updateChordAssignmentStarter(assignmentId: string, starter: ChordStarterId) {
+    const current = chordAssignments.find((assignment) => assignment.id === assignmentId);
+    if (!current) {
+      return;
+    }
+    const button = isChordBindingAllowed(starter, current.button)
+      ? current.button
+      : firstAllowedChordButton(starter);
+    if (!button) {
+      return;
+    }
+    commitChordAssignment({
+      ...current,
+      id: `chord-${starter}-${button}`,
+      starter,
+      button
+    }, assignmentId);
+  }
+
+  function updateChordAssignmentButton(assignmentId: string, button: ChordButtonSelectValue) {
+    if (button === CHORD_UNASSIGNED_BUTTON) {
+      return;
+    }
+    const current = chordAssignments.find((assignment) => assignment.id === assignmentId);
+    if (!current || !isChordBindingAllowed(current.starter, button)) {
+      return;
+    }
+    commitChordAssignment({
+      ...current,
+      id: `chord-${current.starter}-${button}`,
+      button
+    }, assignmentId);
+  }
+
+  function setChordAssignmentFunction(assignmentId: string, functionId: string) {
+    const current = chordAssignments.find((assignment) => assignment.id === assignmentId);
+    if (!current) {
+      return;
+    }
+    commitChordAssignment({
+      ...current,
+      functionId
+    }, assignmentId);
+  }
+
+  function deleteChordAssignment(assignmentId: string) {
+    const nextAssignments = chordAssignments.filter((assignment) => assignment.id !== assignmentId);
+    commitChordConfiguration(chordFunctions, nextAssignments, `chords-delete-assignment-${assignmentId}`);
+  }
+
   function toggleHapticsEnabled() {
     if (!snapshot) return;
     void runAction('haptics-enabled', () => window.bridge.setHapticsEnabled(!snapshot.settings.hapticsEnabled));
@@ -4504,6 +5186,8 @@ export function App() {
       return;
     }
     setShowCustomColorPicker(false);
+    setShowBridgeSettings(false);
+    setShowNotificationsMenu(false);
     setActiveControlTab(tab);
   }
 
@@ -4867,6 +5551,17 @@ export function App() {
               >
                 <SettingsIcon size={18} />
                 <span>Settings</span>
+              </button>
+              <button
+                className={`sidebar-action-button ${activeControlTab === 'chords' ? 'active' : ''}`}
+                id="control-tab-chords"
+                type="button"
+                aria-controls="control-panel-chords"
+                aria-selected={activeControlTab === 'chords'}
+                onClick={() => selectControlTab('chords')}
+              >
+                <IconReplace size={18} />
+                <span>Chords</span>
               </button>
             </div>
           </div>
@@ -6705,6 +7400,364 @@ export function App() {
           </div>
 
           <div
+            className={`control-page chords-page ${activeControlTab === 'chords' ? 'active' : ''}`}
+            role="tabpanel"
+            id="control-panel-chords"
+            aria-labelledby="control-tab-chords"
+            aria-hidden={activeControlTab !== 'chords'}
+          >
+              <div className="feature-heading chords-heading">
+                <div>
+                  <h2>Chords</h2>
+                  <p>Assign reusable functions to controller buttons and starter chords.</p>
+                </div>
+              </div>
+
+              <div className="chords-layout">
+                <section className="feature-card chords-card chords-function-card">
+                  <div className="feature-card-title">
+                    <span className="feature-icon">
+                      <Keyboard size={24} />
+                    </span>
+                    <div className="title-copy">
+                      <h3>Function Library</h3>
+                      <p>Create actions.</p>
+                    </div>
+                  </div>
+
+                  <div className="chords-function-strip">
+                    <CustomSelect
+                      value={selectedChordFunction?.id ?? ''}
+                      options={chordFunctionOptions}
+                      disabled={pendingAction !== null || chordFunctions.length === 0}
+                      ariaLabel="Chord function"
+                      className="chords-function-select"
+                      closeOnSelect={false}
+                      onChange={(value) => {
+                        const next = chordFunctions.find((func) => func.id === value) ?? null;
+                        setSelectedChordFunctionId(value);
+                        setChordFunctionDraft(chordFunctionToDraft(next));
+                      }}
+                      renderMenuFooter={(closeMenu) => (
+                        selectedChordFunction ? (
+                          <div className="trigger-lab-profile-actions chords-function-menu-actions">
+                            <button
+                              type="button"
+                              title="Rename"
+                              disabled={pendingAction !== null}
+                              onClick={() => {
+                                closeMenu();
+                                openChordFunctionDialog('rename');
+                              }}
+                            >
+                              <Pencil size={14} />
+                            </button>
+                            <button
+                              type="button"
+                              title="Delete"
+                              disabled={pendingAction !== null}
+                              onClick={() => {
+                                closeMenu();
+                                openChordFunctionDialog('delete');
+                              }}
+                            >
+                              <Trash2 size={14} />
+                            </button>
+                          </div>
+                        ) : null
+                      )}
+                    />
+                    <button
+                      className="heading-icon-action chords-new-function-button"
+                      type="button"
+                      title="New Function"
+                      aria-label="New Function"
+                      disabled={pendingAction !== null}
+                      onClick={createChordFunction}
+                    >
+                      <Plus size={17} />
+                    </button>
+                  </div>
+
+                  {selectedChordFunction ? (
+                    <div className="chords-editor">
+                      <label className="chords-field chords-inline-field">
+                        <span>Type</span>
+                        <CustomSelect
+                          value={chordFunctionDraft.type}
+                          options={CHORD_FUNCTION_TYPE_OPTIONS}
+                          disabled={pendingAction !== null}
+                          ariaLabel="Chord function type"
+                          onChange={(value) => {
+                            const nextDraft = { ...chordFunctionDraft, type: value };
+                            setChordFunctionDraft(nextDraft);
+                            commitChordFunctionDraft(nextDraft);
+                          }}
+                        />
+                      </label>
+
+                      {chordFunctionDraft.type === 'keyboard' && (
+                        <label className="chords-field">
+                          <span>Keys</span>
+                          <input
+                            value={chordFunctionDraft.keysText}
+                            disabled={pendingAction !== null}
+                            placeholder="Ctrl + Shift + Esc"
+                            onChange={(event) => {
+                              const keys = parseChordKeys(event.target.value);
+                              setChordFunctionDraft((draft) => ({
+                                ...draft,
+                                keysText: keys.length > MAX_KEYBOARD_FUNCTION_KEYS
+                                  ? keys.slice(0, MAX_KEYBOARD_FUNCTION_KEYS).join(' + ')
+                                  : event.target.value
+                              }));
+                            }}
+                            onBlur={() => {
+                              const keys = parseChordKeys(chordFunctionDraft.keysText);
+                              const nextDraft = {
+                                ...chordFunctionDraft,
+                                keysText: (keys.length > 0 ? keys : DEFAULT_CHORD_KEYBOARD_KEYS).join(' + ')
+                              };
+                              setChordFunctionDraft(nextDraft);
+                              commitChordFunctionDraft(nextDraft);
+                            }}
+                            onKeyDown={(event) => {
+                              if (event.key === 'Enter') {
+                                event.currentTarget.blur();
+                              }
+                            }}
+                          />
+                          <small>Up to {MAX_KEYBOARD_FUNCTION_KEYS} keys, including modifiers.</small>
+                        </label>
+                      )}
+
+                      {chordFunctionDraft.type === 'media' && (
+                        <label className="chords-field chords-inline-field">
+                          <span>Action</span>
+                          <CustomSelect
+                            value={chordFunctionDraft.mediaAction}
+                            options={CHORD_MEDIA_ACTION_OPTIONS}
+                            disabled={pendingAction !== null}
+                            ariaLabel="Chord media action"
+                            onChange={(value) => {
+                              const nextDraft = { ...chordFunctionDraft, mediaAction: value };
+                              setChordFunctionDraft(nextDraft);
+                              commitChordFunctionDraft(nextDraft);
+                            }}
+                          />
+                        </label>
+                      )}
+
+                      {chordFunctionDraft.type === 'controller-setting' && (
+                        <label className="chords-field chords-inline-field">
+                          <span>Action</span>
+                          <CustomSelect
+                            value={chordControllerSettingSelectValue(chordFunctionDraft.controllerAction)}
+                            options={CHORD_CONTROLLER_SETTING_ACTION_OPTIONS}
+                            disabled={pendingAction !== null}
+                            ariaLabel="Chord controller setting action"
+                            onChange={(value) => {
+                              const nextDraft = {
+                                ...chordFunctionDraft,
+                                controllerAction: chordControllerSettingActionFromSelectValue(
+                                  value,
+                                  chordFunctionDraft.controllerAction
+                                )
+                              };
+                              setChordFunctionDraft(nextDraft);
+                              commitChordFunctionDraft(nextDraft);
+                            }}
+                          />
+                        </label>
+                      )}
+
+                      {renderChordFunctionSummary(selectedChordFunction)}
+                    </div>
+                  ) : (
+                    <div className="chords-empty">
+                      <IconReplace size={26} />
+                      <strong>No functions yet</strong>
+                      <span>Create a function, then bind it to a button or chord.</span>
+                    </div>
+                  )}
+                </section>
+
+                <section className="feature-card chords-card chords-assignment-card">
+                  <div className="feature-card-title">
+                    <span className="feature-icon">
+                      <IconDeviceGamepad3 size={24} />
+                    </span>
+                    <div className="title-copy">
+                      <h3>Assignments</h3>
+                      <p>PS, LFN, or RFN starters.</p>
+                    </div>
+                  </div>
+
+                  <div className="chords-assignment-builder">
+                    <button
+                      className="heading-action chords-new-chord-button"
+                      type="button"
+                      disabled={pendingAction !== null || !canAddChordDraft}
+                      onClick={addChordAssignmentDraft}
+                    >
+                      <IconReplace size={18} />
+                      New Chord
+                    </button>
+                  </div>
+
+                  <div className="chords-assignment-list" aria-label="Chord assignments">
+                    {chordAssignments.length + chordAssignmentDraftRows.length > 0 ? (
+                      <>
+                        {chordAssignmentDraftRows.map((row) => {
+                          const func = chordFunctions.find((candidate) => candidate.id === row.functionId);
+                          return (
+                            <div className="chords-assignment-row draft" key={row.id}>
+                              <div
+                                className="chords-assignment-binding"
+                                aria-label="New chord"
+                                title="New chord"
+                              >
+                                <CustomSelect
+                                  value={row.starter}
+                                  options={chordStarterOptions}
+                                  disabled={pendingAction !== null}
+                                  className="chords-inline-glyph-select chords-inline-starter-select"
+                                  showSelectedCheck={false}
+                                  ariaLabel="Chord starter"
+                                  renderValue={(label, value) => <ChordStarterGlyphOption label={label} value={value} />}
+                                  renderOption={(label, value) => <ChordStarterGlyphOption label={label} value={value} />}
+                                  onChange={(value) => updateChordAssignmentDraftStarter(row.id, value)}
+                                />
+                                <span className="chords-binding-connector" aria-hidden="true" />
+                                <CustomSelect
+                                  value={row.button ?? CHORD_UNASSIGNED_BUTTON}
+                                  options={chordButtonOptionsFor(row.starter, true)}
+                                  disabled={pendingAction !== null}
+                                  className="chords-inline-glyph-select chords-inline-button-select"
+                                  showSelectedCheck={false}
+                                  ariaLabel="Chord button"
+                                  renderValue={(label, value) => <ChordButtonGlyphOption label={label} value={value} />}
+                                  renderOption={(label, value) => <ChordButtonGlyphOption label={label} value={value} />}
+                                  onChange={(value) => updateChordAssignmentDraftButton(row.id, value)}
+                                />
+                              </div>
+                              <span className="chords-function-connector" aria-hidden="true" />
+                              <CustomSelect
+                                value={row.functionId}
+                                options={chordFunctionOptions}
+                                disabled={pendingAction !== null}
+                                ariaLabel="New chord function"
+                                renderValue={(label) => (
+                                  <span className="chords-function-option">
+                                    <strong>{label}</strong>
+                                    <small>{func ? chordFunctionSummary(func) : 'Missing function'}</small>
+                                  </span>
+                                )}
+                                renderOption={(label, value) => {
+                                  const optionFunction = chordFunctions.find((candidate) => candidate.id === value);
+                                  return (
+                                    <span className="chords-function-option">
+                                      <strong>{label}</strong>
+                                      <small>{optionFunction ? chordFunctionSummary(optionFunction) : 'Missing function'}</small>
+                                    </span>
+                                  );
+                                }}
+                                onChange={(value) => updateChordAssignmentDraftFunction(row.id, value)}
+                              />
+                              <button
+                                className="heading-icon-action"
+                                type="button"
+                                title="Remove assignment"
+                                disabled={pendingAction !== null}
+                                onClick={() => deleteChordAssignmentDraft(row.id)}
+                              >
+                                <Trash2 size={17} />
+                              </button>
+                            </div>
+                          );
+                        })}
+                        {chordAssignments.map((assignment) => {
+                        const func = chordFunctions.find((candidate) => candidate.id === assignment.functionId);
+                        return (
+                          <div className="chords-assignment-row" key={assignment.id}>
+                            <div
+                              className="chords-assignment-binding"
+                              aria-label={chordAssignmentLabel(assignment)}
+                              title={chordAssignmentLabel(assignment)}
+                            >
+                              <CustomSelect
+                                value={assignment.starter}
+                                options={chordStarterOptions}
+                                disabled={pendingAction !== null}
+                                className="chords-inline-glyph-select chords-inline-starter-select"
+                                showSelectedCheck={false}
+                                ariaLabel={`${chordAssignmentLabel(assignment)} starter`}
+                                renderValue={(label, value) => <ChordStarterGlyphOption label={label} value={value} />}
+                                renderOption={(label, value) => <ChordStarterGlyphOption label={label} value={value} />}
+                                onChange={(value) => updateChordAssignmentStarter(assignment.id, value)}
+                              />
+                              <span className="chords-binding-connector" aria-hidden="true" />
+                              <CustomSelect
+                                value={assignment.button}
+                                options={chordButtonOptionsFor(assignment.starter)}
+                                disabled={pendingAction !== null}
+                                className="chords-inline-glyph-select chords-inline-button-select"
+                                showSelectedCheck={false}
+                                ariaLabel={`${chordAssignmentLabel(assignment)} button`}
+                                renderValue={(label, value) => <ChordButtonGlyphOption label={label} value={value} />}
+                                renderOption={(label, value) => <ChordButtonGlyphOption label={label} value={value} />}
+                                onChange={(value) => updateChordAssignmentButton(assignment.id, value)}
+                              />
+                            </div>
+                            <span className="chords-function-connector" aria-hidden="true" />
+                            <CustomSelect
+                              value={assignment.functionId}
+                              options={chordFunctionOptions}
+                              disabled={pendingAction !== null}
+                              ariaLabel={`${chordAssignmentLabel(assignment)} function`}
+                              renderValue={(label) => (
+                                <span className="chords-function-option">
+                                  <strong>{label}</strong>
+                                  <small>{func ? chordFunctionSummary(func) : 'Missing function'}</small>
+                                </span>
+                              )}
+                              renderOption={(label, value) => {
+                                const optionFunction = chordFunctions.find((candidate) => candidate.id === value);
+                                return (
+                                  <span className="chords-function-option">
+                                    <strong>{label}</strong>
+                                    <small>{optionFunction ? chordFunctionSummary(optionFunction) : 'Missing function'}</small>
+                                  </span>
+                                );
+                              }}
+                              onChange={(value) => setChordAssignmentFunction(assignment.id, value)}
+                            />
+                            <button
+                              className="heading-icon-action"
+                              type="button"
+                              title="Remove assignment"
+                              disabled={pendingAction !== null}
+                              onClick={() => deleteChordAssignment(assignment.id)}
+                            >
+                              <Trash2 size={17} />
+                            </button>
+                          </div>
+                        );
+                        })}
+                      </>
+                    ) : (
+                      <div className="chords-empty chords-empty-assignments">
+                        <IconDeviceGamepad3 size={26} />
+                        <strong>No assignments</strong>
+                        <span>Create a function, then add a chord.</span>
+                      </div>
+                    )}
+                  </div>
+                </section>
+              </div>
+          </div>
+
+          <div
             className={`control-page system-page ${activeControlTab === 'system' ? 'active' : ''}`}
             role="tabpanel"
             id="control-panel-system"
@@ -7132,6 +8185,70 @@ export function App() {
         </div>
       )}
 
+      {chordFunctionDialog && (
+        <div
+          className="modal-backdrop"
+          role="presentation"
+          onMouseDown={closeChordFunctionDialog}
+        >
+          <form
+            className="settings-menu bridge-settings-modal remap-profile-modal"
+            role="dialog"
+            aria-modal="true"
+            aria-label="Chord function"
+            onMouseDown={(event) => event.stopPropagation()}
+            onSubmit={(event) => {
+              event.preventDefault();
+              submitChordFunctionDialog();
+            }}
+          >
+            <div className="settings-menu-heading bridge-settings-modal-heading">
+              <div className="modal-heading-copy">
+                {chordFunctionDialog.mode === 'delete' ? <Trash2 size={16} /> : <Pencil size={16} />}
+                <span>
+                  {chordFunctionDialog.mode === 'delete' ? 'Delete Function' : 'Rename Function'}
+                </span>
+              </div>
+              <button
+                className="modal-close-button"
+                type="button"
+                aria-label="Close chord function dialog"
+                onClick={closeChordFunctionDialog}
+              >
+                <X size={16} />
+              </button>
+            </div>
+            {chordFunctionDialog.mode === 'delete' ? (
+              <p className="remap-profile-dialog-copy">
+                Delete {chordFunctionDialogFunction?.name ?? 'this function'}?
+              </p>
+            ) : (
+              <label className="remap-profile-name-field">
+                <span>Function Name</span>
+                <input
+                  autoFocus
+                  value={chordFunctionNameDraft}
+                  maxLength={MAX_CHORD_FUNCTION_NAME_LENGTH}
+                  onChange={(event) => setChordFunctionNameDraft(event.target.value)}
+                />
+              </label>
+            )}
+            <div className="remap-profile-dialog-actions">
+              <button type="button" className="secondary-action" onClick={closeChordFunctionDialog}>
+                Cancel
+              </button>
+              <button
+                type="submit"
+                className={`primary-action ${chordFunctionDialog.mode === 'delete' ? 'danger' : ''}`}
+                disabled={pendingAction !== null || (chordFunctionDialog.mode !== 'delete' && chordFunctionNameDraft.trim().length === 0)}
+              >
+                {chordFunctionDialog.mode === 'delete' ? 'Delete' : 'Save'}
+              </button>
+            </div>
+          </form>
+        </div>
+      )}
+
       {triggerLabProfileDialog && (
         <div
           className="modal-backdrop"
@@ -7498,6 +8615,24 @@ export function App() {
                     disabled={pendingAction !== null}
                     onClick={() => void runAction('controller-power-saving', () => (
                       window.bridge.setControllerPowerSavingEnabled(!snapshot.settings.controllerPowerSavingEnabled)
+                    ))}
+                  >
+                    <span />
+                  </button>
+                </div>
+                <div className="settings-menu-row">
+                  <div className="settings-menu-copy">
+                    <strong>Player Slot LED</strong>
+                    <span>Show the controller player indicator lights</span>
+                  </div>
+                  <button
+                    type="button"
+                    role="switch"
+                    aria-checked={snapshot.settings.playerLedEnabled}
+                    className={`switch ${snapshot.settings.playerLedEnabled ? 'on' : ''}`}
+                    disabled={!connected}
+                    onClick={() => void runAction('player-led', () => (
+                      window.bridge.setPlayerLedEnabled(!snapshot.settings.playerLedEnabled)
                     ))}
                   >
                     <span />

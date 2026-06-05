@@ -17,6 +17,7 @@
 #include "audio.h"
 #include "controller_packet_compositor.h"
 #include "controller_output_policy.h"
+#include "controller_output_state.h"
 #include "output_scheduler.h"
 #ifdef ENABLE_COMPANION
 #include "companion.h"
@@ -278,6 +279,7 @@ static uint8_t saved_lightbar_red = 0xff;
 static uint8_t saved_lightbar_green = 0xd7;
 static uint8_t saved_lightbar_blue = 0x00;
 static uint8_t saved_lightbar_brightness = 100;
+static bool player_led_enabled = true;
 static bool lightbar_restore_pending = false;
 static uint32_t lightbar_restore_at_us = 0;
 static uint8_t state_report_seq = 0;
@@ -877,10 +879,25 @@ void bt_set_lightbar_color(uint8_t red, uint8_t green, uint8_t blue, uint8_t bri
     init_state_report(report);
     report[3 + 1] = DS_OUTPUT_VALID_FLAG1_LIGHTBAR_CONTROL_ENABLE
         | DS_OUTPUT_VALID_FLAG1_PLAYER_INDICATOR_CONTROL_ENABLE;
-    report[3 + 43] = DS_PLAYER_LED_1_INSTANT;
+    report[3 + 43] = player_led_enabled ? DS_PLAYER_LED_1_INSTANT : 0;
     report[3 + 44] = scale_lightbar_channel(saved_lightbar_red, saved_lightbar_brightness);
     report[3 + 45] = scale_lightbar_channel(saved_lightbar_green, saved_lightbar_brightness);
     report[3 + 46] = scale_lightbar_channel(saved_lightbar_blue, saved_lightbar_brightness);
+    bt_write(report, sizeof(report));
+}
+
+void bt_set_player_led_enabled(bool enabled) {
+    player_led_enabled = enabled;
+    controller_output_state_set_player_led_enabled(enabled);
+
+    if (hid_interrupt_cid == 0) {
+        return;
+    }
+
+    uint8_t report[DS_OUTPUT_REPORT_BT_SIZE];
+    init_state_report(report);
+    report[3 + OUTPUT_PAYLOAD_VALID_FLAG1_OFFSET] = DS_OUTPUT_VALID_FLAG1_PLAYER_INDICATOR_CONTROL_ENABLE;
+    report[3 + OUTPUT_PAYLOAD_PLAYER_LEDS_OFFSET] = enabled ? DS_PLAYER_LED_1_INSTANT : 0;
     bt_write(report, sizeof(report));
 }
 
@@ -1963,6 +1980,17 @@ static void clear_payload_byte(uint8_t *payload, uint16_t payload_len, uint8_t o
     }
 }
 
+static void apply_player_led_policy_to_payload(uint8_t *payload, uint16_t payload_len) {
+    if (payload == nullptr || payload_len <= OUTPUT_PAYLOAD_PLAYER_LEDS_OFFSET) {
+        return;
+    }
+    if (player_led_enabled) {
+        return;
+    }
+    payload[OUTPUT_PAYLOAD_VALID_FLAG1_OFFSET] |= DS_OUTPUT_VALID_FLAG1_PLAYER_INDICATOR_CONTROL_ENABLE;
+    payload[OUTPUT_PAYLOAD_PLAYER_LEDS_OFFSET] = 0;
+}
+
 static bool has_unclassified_state_payload_data(uint8_t const *payload, uint16_t payload_len) {
     bool recognized[DS_OUTPUT_REPORT_COMMON_SIZE]{};
     const uint8_t flag0 = payload_len > OUTPUT_PAYLOAD_VALID_FLAG0_OFFSET
@@ -2314,6 +2342,7 @@ static bool split_state_from_mixed_output(uint8_t *data, uint16_t len) {
         copy_payload_byte(state_payload, payload, payload_len, OUTPUT_PAYLOAD_PLAYER_LEDS_OFFSET);
         clear_payload_byte(payload, payload_len, OUTPUT_PAYLOAD_PLAYER_LEDS_OFFSET);
     }
+    apply_player_led_policy_to_payload(state_payload, DS_OUTPUT_REPORT_COMMON_SIZE);
 
 #ifdef ENABLE_COMPANION
     uint8_t trace_critical_depth = 0;
@@ -2423,6 +2452,7 @@ static void merge_state_output_locked(uint8_t const *data, uint16_t len, uint32_
             ))
         );
         dst[OUTPUT_PAYLOAD_VALID_FLAG1_OFFSET] |= DS_OUTPUT_VALID_FLAG1_RELEASE_LEDS;
+        apply_player_led_policy_to_payload(dst, DS_OUTPUT_REPORT_COMMON_SIZE);
     } else if (led_flags != 0) {
         dst[OUTPUT_PAYLOAD_VALID_FLAG1_OFFSET] = static_cast<uint8_t>(
             dst[OUTPUT_PAYLOAD_VALID_FLAG1_OFFSET] & static_cast<uint8_t>(~DS_OUTPUT_VALID_FLAG1_RELEASE_LEDS)
@@ -2435,8 +2465,9 @@ static void merge_state_output_locked(uint8_t const *data, uint16_t len, uint32_
             dst[OUTPUT_PAYLOAD_LIGHTBAR_BLUE_OFFSET] = src[OUTPUT_PAYLOAD_LIGHTBAR_BLUE_OFFSET];
         }
         if (led_flags & DS_OUTPUT_VALID_FLAG1_PLAYER_INDICATOR_CONTROL_ENABLE) {
-            dst[OUTPUT_PAYLOAD_PLAYER_LEDS_OFFSET] = src[OUTPUT_PAYLOAD_PLAYER_LEDS_OFFSET];
+            dst[OUTPUT_PAYLOAD_PLAYER_LEDS_OFFSET] = player_led_enabled ? src[OUTPUT_PAYLOAD_PLAYER_LEDS_OFFSET] : 0;
         }
+        apply_player_led_policy_to_payload(dst, DS_OUTPUT_REPORT_COMMON_SIZE);
     }
     state_pending = true;
 }

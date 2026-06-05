@@ -3,6 +3,8 @@ import type {
   AdaptiveTriggerPreviewEffect,
   AudioReactiveHapticsConfig,
   BridgePresetId,
+  ChordAssignment,
+  ChordFunction,
   HostPersonaMode,
   MuteButtonMode,
   MuteKeyboardBehavior,
@@ -93,6 +95,9 @@ const api = {
     ipcRenderer.invoke('bridge:setMuteButtonAction', mode, usage, modifiers, behavior)
   ),
   setLedEnabled: (value: boolean): Promise<BridgeSnapshot> => ipcRenderer.invoke('bridge:setLedEnabled', value),
+  setPlayerLedEnabled: (value: boolean): Promise<BridgeSnapshot> => (
+    ipcRenderer.invoke('bridge:setPlayerLedEnabled', value)
+  ),
   setIdleDisconnectEnabled: (value: boolean): Promise<BridgeSnapshot> => ipcRenderer.invoke('bridge:setIdleDisconnectEnabled', value),
   setIdleDisconnectTimeoutMinutes: (value: number): Promise<BridgeSnapshot> => (
     ipcRenderer.invoke('bridge:setIdleDisconnectTimeoutMinutes', value)
@@ -164,6 +169,15 @@ const api = {
   ),
   restoreButtonRemappingDefaults: (): Promise<BridgeSnapshot> => (
     ipcRenderer.invoke('bridge:restoreButtonRemappingDefaults')
+  ),
+  setChordConfiguration: (functions: ChordFunction[], assignments: ChordAssignment[]): Promise<BridgeSnapshot> => (
+    ipcRenderer.invoke('bridge:setChordConfiguration', functions, assignments)
+  ),
+  setChordFunctions: (functions: ChordFunction[]): Promise<BridgeSnapshot> => (
+    ipcRenderer.invoke('bridge:setChordFunctions', functions)
+  ),
+  setChordAssignments: (assignments: ChordAssignment[]): Promise<BridgeSnapshot> => (
+    ipcRenderer.invoke('bridge:setChordAssignments', assignments)
   ),
   repairWindowsDeviceCache: (): Promise<WindowsDeviceCleanupResult> => (
     ipcRenderer.invoke('bridge:repairWindowsDeviceCache')

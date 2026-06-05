@@ -2,6 +2,8 @@ import type {
   BridgeAckPayload,
   AudioDebugStatsPayload,
   BridgeStatusPayload,
+  ChordAssignment,
+  ChordFunction,
   ButtonRemapMap,
   ButtonRemapProfile,
   ControllerProfile,
@@ -58,6 +60,7 @@ export interface CompanionSettings {
   muteKeyboardModifiers: number;
   muteKeyboardBehavior: MuteKeyboardBehavior;
   ledEnabled: boolean;
+  playerLedEnabled: boolean;
   idleDisconnectEnabled: boolean;
   idleDisconnectTimeoutMinutes: number;
   usbSuspendDisconnectEnabled: boolean;
@@ -75,6 +78,8 @@ export interface CompanionSettings {
   selectedButtonRemappingProfileId: string;
   buttonRemappingProfiles: ButtonRemapProfile[];
   buttonRemappingDraft: ButtonRemapMap;
+  chordFunctions: ChordFunction[];
+  chordAssignments: ChordAssignment[];
 }
 
 export interface HidDeviceSummary {

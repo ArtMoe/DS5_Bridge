@@ -1,10 +1,16 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import {
+  CHORD_ASSIGNABLE_BUTTON_IDS,
+  CHORD_STARTER_IDS,
   DEFAULT_BUTTON_REMAP_PROFILE,
   DEFAULT_BUTTON_REMAP_PROFILE_ID,
   DEFAULT_CONTROLLER_PROFILE_ID,
+  MAX_CHORD_ASSIGNMENTS,
+  MAX_CHORD_FUNCTION_NAME_LENGTH,
+  MAX_KEYBOARD_FUNCTION_KEYS,
   REMAP_BUTTON_IDS,
+  isChordBindingAllowed,
   isRemapButtonId,
   normalizeBridgePresetId
 } from '../shared/protocol';
@@ -20,6 +26,12 @@ import type {
   AudioReactiveHapticsResponse,
   AudioReactiveHapticsAttack,
   AudioReactiveHapticsRelease,
+  ChordAssignableButtonId,
+  ChordAssignment,
+  ChordControllerSettingAction,
+  ChordFunction,
+  ChordMediaAction,
+  ChordStarterId,
   HostPersonaMode,
   RemapButtonId
 } from '../shared/protocol';
@@ -153,6 +165,7 @@ export const DEFAULT_SETTINGS: CompanionSettings = {
   muteKeyboardModifiers: DEFAULT_CONTROLLER_PROFILE_SETTINGS.muteKeyboardModifiers,
   muteKeyboardBehavior: DEFAULT_CONTROLLER_PROFILE_SETTINGS.muteKeyboardBehavior,
   ledEnabled: true,
+  playerLedEnabled: true,
   idleDisconnectEnabled: true,
   idleDisconnectTimeoutMinutes: 15,
   usbSuspendDisconnectEnabled: true,
@@ -169,7 +182,9 @@ export const DEFAULT_SETTINGS: CompanionSettings = {
   controllerProfiles: [DEFAULT_CONTROLLER_PROFILE],
   selectedButtonRemappingProfileId: DEFAULT_BUTTON_REMAP_PROFILE_ID,
   buttonRemappingProfiles: [DEFAULT_BUTTON_REMAP_PROFILE],
-  buttonRemappingDraft: { ...DEFAULT_BUTTON_REMAP_PROFILE.mappings }
+  buttonRemappingDraft: { ...DEFAULT_BUTTON_REMAP_PROFILE.mappings },
+  chordFunctions: [],
+  chordAssignments: []
 };
 
 function normalizeColor(value: unknown): string {
@@ -579,6 +594,158 @@ function normalizeSelectedRemapProfileId(value: unknown, profiles: ButtonRemapPr
     : DEFAULT_BUTTON_REMAP_PROFILE_ID;
 }
 
+const CHORD_MEDIA_ACTIONS = new Set<ChordMediaAction>([
+  'play-pause',
+  'next-track',
+  'previous-track',
+  'mute',
+  'volume-up',
+  'volume-down'
+]);
+const CHORD_CONTROLLER_SETTING_ACTIONS = new Set<ChordControllerSettingAction>([
+  'toggle-audio-haptics',
+  'toggle-lightbar-override',
+  'toggle-mic-mute',
+  'sleep-controller',
+  'speaker-down',
+  'speaker-up',
+  'mic-down',
+  'mic-up',
+  'haptics-down',
+  'haptics-up',
+  'rumble-down',
+  'rumble-up',
+  'triggers-down',
+  'triggers-up',
+  'lighting-down',
+  'lighting-up'
+]);
+
+function isChordStarterId(value: unknown): value is ChordStarterId {
+  return typeof value === 'string' && (CHORD_STARTER_IDS as readonly string[]).includes(value);
+}
+
+function isChordAssignableButtonId(value: unknown): value is ChordAssignableButtonId {
+  return typeof value === 'string' && (CHORD_ASSIGNABLE_BUTTON_IDS as readonly string[]).includes(value);
+}
+
+function normalizeChordName(value: unknown, fallback: string): string {
+  return typeof value === 'string' && value.trim().length > 0
+    ? value.trim().slice(0, MAX_CHORD_FUNCTION_NAME_LENGTH)
+    : fallback.slice(0, MAX_CHORD_FUNCTION_NAME_LENGTH);
+}
+
+function normalizeChordId(value: unknown, fallbackPrefix: string, index: number): string {
+  return typeof value === 'string' && value.trim().length > 0
+    ? value.trim().slice(0, 64)
+    : `${fallbackPrefix}-${index + 1}`;
+}
+
+function normalizeChordFunction(value: unknown, index: number): ChordFunction | null {
+  if (!value || typeof value !== 'object') {
+    return null;
+  }
+  const candidate = value as Partial<ChordFunction>;
+  const id = normalizeChordId(candidate.id, 'function', index);
+  switch (candidate.type) {
+    case 'keyboard': {
+      const keys = Array.isArray(candidate.keys)
+        ? candidate.keys
+          .filter((key): key is string => typeof key === 'string' && key.trim().length > 0)
+          .map((key) => key.trim().slice(0, 24))
+          .slice(0, MAX_KEYBOARD_FUNCTION_KEYS)
+        : [];
+      if (keys.length === 0) {
+        return null;
+      }
+      return {
+        id,
+        name: normalizeChordName(candidate.name, 'Shortcut'),
+        type: 'keyboard',
+        keys
+      };
+    }
+    case 'media':
+      return {
+        id,
+        name: normalizeChordName(candidate.name, 'Media'),
+        type: 'media',
+        action: CHORD_MEDIA_ACTIONS.has(candidate.action as ChordMediaAction)
+          ? candidate.action as ChordMediaAction
+          : 'play-pause'
+      };
+    case 'controller-setting':
+      return {
+        id,
+        name: normalizeChordName(candidate.name, 'Setting'),
+        type: 'controller-setting',
+        action: CHORD_CONTROLLER_SETTING_ACTIONS.has(candidate.action as ChordControllerSettingAction)
+          ? candidate.action as ChordControllerSettingAction
+          : 'sleep-controller'
+      };
+    default:
+      return null;
+  }
+}
+
+function normalizeChordFunctions(value: unknown): ChordFunction[] {
+  const functions = Array.isArray(value)
+    ? value.map(normalizeChordFunction).filter((func): func is ChordFunction => func !== null)
+    : [];
+  const unique = new Map<string, ChordFunction>();
+  for (const func of functions) {
+    unique.set(func.id, func);
+  }
+  return Array.from(unique.values()).slice(0, 64);
+}
+
+function normalizeChordAssignment(
+  value: unknown,
+  functionIds: Set<string>,
+  usedBindings: Set<string>,
+  index: number
+): ChordAssignment | null {
+  if (!value || typeof value !== 'object') {
+    return null;
+  }
+  const candidate = value as Partial<ChordAssignment>;
+  if (typeof candidate.functionId !== 'string' || !functionIds.has(candidate.functionId)) {
+    return null;
+  }
+  const id = normalizeChordId(candidate.id, 'assignment', index);
+  if (candidate.kind === 'chord') {
+    if (
+      !isChordStarterId(candidate.starter)
+      || !isChordAssignableButtonId(candidate.button)
+      || !isChordBindingAllowed(candidate.starter, candidate.button)
+    ) {
+      return null;
+    }
+    const bindingKey = `chord:${candidate.starter}:${candidate.button}`;
+    if (usedBindings.has(bindingKey)) {
+      return null;
+    }
+    usedBindings.add(bindingKey);
+    return {
+      id,
+      kind: 'chord',
+      starter: candidate.starter,
+      button: candidate.button,
+      functionId: candidate.functionId
+    };
+  }
+  return null;
+}
+
+function normalizeChordAssignments(value: unknown, functions: ChordFunction[]): ChordAssignment[] {
+  const functionIds = new Set(functions.map((func) => func.id));
+  const usedBindings = new Set<string>();
+  return (Array.isArray(value) ? value : [])
+    .map((assignment, index) => normalizeChordAssignment(assignment, functionIds, usedBindings, index))
+    .filter((assignment): assignment is ChordAssignment => assignment !== null)
+    .slice(0, MAX_CHORD_ASSIGNMENTS);
+}
+
 function syncSelectedButtonRemappingProfile(settings: CompanionSettings): CompanionSettings {
   const mappings = cloneRemapMap(settings.buttonRemappingDraft);
   if (settings.selectedButtonRemappingProfileId === DEFAULT_BUTTON_REMAP_PROFILE_ID) {
@@ -623,7 +790,9 @@ function cloneSettings(settings: CompanionSettings): CompanionSettings {
       ...profile,
       mappings: cloneRemapMap(profile.mappings)
     })),
-    buttonRemappingDraft: cloneRemapMap(settings.buttonRemappingDraft)
+    buttonRemappingDraft: cloneRemapMap(settings.buttonRemappingDraft),
+    chordFunctions: settings.chordFunctions.map((func) => ({ ...func })),
+    chordAssignments: settings.chordAssignments.map((assignment) => ({ ...assignment }))
   };
 }
 
@@ -684,6 +853,7 @@ function normalizeSettings(value: Partial<CompanionSettings> | null | undefined)
     value?.selectedButtonRemappingProfileId,
     buttonRemappingProfiles
   );
+  const chordFunctions = normalizeChordFunctions(value?.chordFunctions);
 
   return {
     selectedPresetId,
@@ -766,6 +936,9 @@ function normalizeSettings(value: Partial<CompanionSettings> | null | undefined)
       ? value.muteKeyboardBehavior
       : DEFAULT_SETTINGS.muteKeyboardBehavior,
     ledEnabled: typeof value?.ledEnabled === 'boolean' ? value.ledEnabled : DEFAULT_SETTINGS.ledEnabled,
+    playerLedEnabled: typeof value?.playerLedEnabled === 'boolean'
+      ? value.playerLedEnabled
+      : DEFAULT_SETTINGS.playerLedEnabled,
     idleDisconnectEnabled: typeof value?.idleDisconnectEnabled === 'boolean'
       ? value.idleDisconnectEnabled
       : DEFAULT_SETTINGS.idleDisconnectEnabled,
@@ -802,7 +975,9 @@ function normalizeSettings(value: Partial<CompanionSettings> | null | undefined)
     controllerProfiles,
     selectedButtonRemappingProfileId,
     buttonRemappingProfiles,
-    buttonRemappingDraft: normalizeRemapMap(value?.buttonRemappingDraft)
+    buttonRemappingDraft: normalizeRemapMap(value?.buttonRemappingDraft),
+    chordFunctions,
+    chordAssignments: normalizeChordAssignments(value?.chordAssignments, chordFunctions)
   };
 }
 
@@ -1030,6 +1205,26 @@ export class SettingsStore {
     return this.update({
       selectedButtonRemappingProfileId: DEFAULT_BUTTON_REMAP_PROFILE_ID,
       buttonRemappingDraft: DEFAULT_BUTTON_REMAP_PROFILE.mappings
+    });
+  }
+
+  setChordConfiguration(functions: ChordFunction[], assignments: ChordAssignment[]): CompanionSettings {
+    return this.update({
+      chordFunctions: functions,
+      chordAssignments: assignments
+    });
+  }
+
+  setChordFunctions(functions: ChordFunction[]): CompanionSettings {
+    return this.update({
+      chordFunctions: functions,
+      chordAssignments: this.settings.chordAssignments
+    });
+  }
+
+  setChordAssignments(assignments: ChordAssignment[]): CompanionSettings {
+    return this.update({
+      chordAssignments: assignments
     });
   }
 

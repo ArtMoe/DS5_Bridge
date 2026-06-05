@@ -9,6 +9,8 @@ import type {
   AdaptiveTriggerPreviewEffect,
   AudioReactiveHapticsConfig,
   BridgePresetId,
+  ChordAssignment,
+  ChordFunction,
   HostPersonaMode,
   MuteButtonMode,
   MuteKeyboardBehavior,
@@ -637,6 +639,7 @@ function registerIpc(service: BridgeService): void {
     service.setMuteButtonAction(mode, usage, modifiers, behavior)
   ));
   ipcMain.handle('bridge:setLedEnabled', (_event, value: boolean) => service.setLedEnabled(value));
+  ipcMain.handle('bridge:setPlayerLedEnabled', (_event, value: boolean) => service.setPlayerLedEnabled(value));
   ipcMain.handle('bridge:setIdleDisconnectEnabled', (_event, value: boolean) => service.setIdleDisconnectEnabled(value));
   ipcMain.handle('bridge:setIdleDisconnectTimeoutMinutes', (_event, value: number) => (
     service.setIdleDisconnectTimeoutMinutes(value)
@@ -718,6 +721,15 @@ function registerIpc(service: BridgeService): void {
     service.deleteButtonRemappingProfile(profileId)
   ));
   ipcMain.handle('bridge:restoreButtonRemappingDefaults', () => service.restoreButtonRemappingDefaults());
+  ipcMain.handle('bridge:setChordConfiguration', (_event, functions: ChordFunction[], assignments: ChordAssignment[]) => (
+    service.setChordConfiguration(functions, assignments)
+  ));
+  ipcMain.handle('bridge:setChordFunctions', (_event, functions: ChordFunction[]) => (
+    service.setChordFunctions(functions)
+  ));
+  ipcMain.handle('bridge:setChordAssignments', (_event, assignments: ChordAssignment[]) => (
+    service.setChordAssignments(assignments)
+  ));
   ipcMain.handle('bridge:repairWindowsDeviceCache', () => service.repairWindowsDeviceCache());
   ipcMain.handle('bridge:getDiagnostics', () => service.getSnapshot().diagnostics);
   ipcMain.handle('window:minimize', () => mainWindow?.minimize());

@@ -3,9 +3,12 @@ import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import {
+  type ChordFunction,
   DEFAULT_BUTTON_REMAP_PROFILE_ID,
-  DEFAULT_CONTROLLER_PROFILE_ID
+  DEFAULT_CONTROLLER_PROFILE_ID,
+  MAX_CHORD_FUNCTION_NAME_LENGTH
 } from '../shared/protocol';
+import type { ChordAssignment } from '../shared/protocol';
 import { DEFAULT_SETTINGS, SettingsStore } from './settings-store';
 
 describe('SettingsStore', () => {
@@ -218,6 +221,81 @@ describe('SettingsStore', () => {
     expect(afterMutation.speakerVolumePercent).toBe(35);
     expect(afterMutation.controllerProfiles.find((profile) => profile.id === 'custom')?.settings.speakerVolumePercent).toBe(35);
     expect(afterMutation.buttonRemappingDraft.square).toBe('square');
+  });
+
+  it('normalizes and persists chord functions and assignments', () => {
+    const userDataPath = tempUserDataPath();
+    const store = new SettingsStore(userDataPath);
+
+    const updated = store.setChordConfiguration([{
+      id: 'open-task-manager',
+      name: 'Open Task Manager',
+      type: 'keyboard',
+      keys: ['Ctrl', 'Shift', 'Esc', 'Extra', 'Ignored']
+    }, {
+      id: 'media-play',
+      name: 'Play Pause',
+      type: 'media',
+      action: 'play-pause'
+    }], ([{
+      id: 'ps-triangle',
+      kind: 'chord',
+      starter: 'ps',
+      button: 'triangle',
+      functionId: 'open-task-manager'
+    }, {
+      id: 'duplicate-ps-triangle',
+      kind: 'chord',
+      starter: 'ps',
+      button: 'triangle',
+      functionId: 'media-play'
+    }, {
+      id: 'reserved-lfn-square',
+      kind: 'chord',
+      starter: 'lfn',
+      button: 'square',
+      functionId: 'media-play'
+    }, {
+      id: 'missing-function',
+      kind: 'button',
+      button: 'create',
+      functionId: 'missing'
+    }] as unknown as ChordAssignment[]));
+
+    expect(updated.chordFunctions[0]).toMatchObject({
+      id: 'open-task-manager',
+      name: 'Open Task Manager'.slice(0, MAX_CHORD_FUNCTION_NAME_LENGTH),
+      keys: ['Ctrl', 'Shift', 'Esc', 'Extra']
+    });
+    expect(updated.chordAssignments).toEqual([{
+      id: 'ps-triangle',
+      kind: 'chord',
+      starter: 'ps',
+      button: 'triangle',
+      functionId: 'open-task-manager'
+    }]);
+    expect(new SettingsStore(userDataPath).get().chordAssignments).toEqual(updated.chordAssignments);
+  });
+
+  it('preserves notch controller-setting chord functions', () => {
+    const userDataPath = tempUserDataPath();
+    const store = new SettingsStore(userDataPath);
+    const functions: ChordFunction[] = [{
+      id: 'speaker-up',
+      name: 'Speaker Up',
+      type: 'controller-setting',
+      action: 'speaker-up'
+    }, {
+      id: 'triggers-down',
+      name: 'Triggers Down',
+      type: 'controller-setting',
+      action: 'triggers-down'
+    }];
+
+    const updated = store.setChordFunctions(functions);
+
+    expect(updated.chordFunctions).toEqual(functions);
+    expect(new SettingsStore(userDataPath).get().chordFunctions).toEqual(functions);
   });
 
   it('deduplicates persisted custom profiles while preserving the selected winner', () => {

@@ -17,10 +17,12 @@ import {
   ProtocolError,
   REPORT_ID,
   buildButtonRemapPayload,
+  buildChordBindingsPayload,
   buildCommandReport,
   buildHostAudioFastFrameReports,
   buildHostAudioFrameChunkReports,
   hostPersonaModeValue,
+  isChordBindingAllowed,
   normalizeBridgePresetId,
   parseAudioDebugReport,
   parseAudioStatsReport,
@@ -402,6 +404,34 @@ describe('companion protocol', () => {
     expect(report[7]).toBe(COMMAND_ID.SET_BUTTON_REMAP);
     expect(report[11 + 13]).toBe(12);
     expect(report[11 + 16]).toBe(14);
+  });
+
+  it('builds chord binding command payloads', () => {
+    const payload = buildChordBindingsPayload([{
+      id: 'chord-ps-triangle',
+      kind: 'chord',
+      starter: 'ps',
+      button: 'triangle',
+      functionId: 'play-pause'
+    }, {
+      id: 'chord-lfn-options',
+      kind: 'chord',
+      starter: 'lfn',
+      button: 'options',
+      functionId: 'open-task-manager'
+    }]);
+    const report = buildCommandReport(COMMAND_ID.SET_CHORD_BINDINGS, 8, 2, payload);
+
+    expect(payload).toEqual([0x20, 0x01, 11, 0x21, 0x02, 10]);
+    expect(report[7]).toBe(COMMAND_ID.SET_CHORD_BINDINGS);
+    expect(report.slice(11, 17)).toEqual(payload);
+  });
+
+  it('marks Edge Fn face-button chord combos as reserved', () => {
+    expect(isChordBindingAllowed('ps', 'triangle')).toBe(true);
+    expect(isChordBindingAllowed('lfn', 'options')).toBe(true);
+    expect(isChordBindingAllowed('rfn', 'square')).toBe(false);
+    expect(isChordBindingAllowed('lfn', 'circle')).toBe(false);
   });
 
   it('builds sleep controller command reports', () => {

@@ -20,7 +20,7 @@ namespace {
 
 constexpr uint8_t kMagic[] = {'D', 'S', '5', 'B'};
 constexpr uint8_t kProtocolMajor = 1;
-constexpr uint8_t kProtocolMinor = 10;
+constexpr uint8_t kProtocolMinor = 11;
 constexpr uint8_t kProtocolMinSupportedMinor = 7;
 constexpr uint8_t kFirmwareMajor = 1;
 constexpr uint8_t kFirmwareMinor = 5;
@@ -133,6 +133,8 @@ enum CommandId : uint8_t {
     CommandApplyAdaptiveTriggerEffect = 0x20,
     CommandSetHostPersona = 0x21,
     CommandSetAudioReactiveHaptics = 0x22,
+    CommandSetChordBindings = 0x23,
+    CommandSetPlayerLedEnabled = 0x24,
 };
 
 enum AckResult : uint8_t {
@@ -214,6 +216,18 @@ constexpr ShortcutBinding kShortcutBindings[] = {
 };
 constexpr size_t kShortcutBindingCount = sizeof(kShortcutBindings) / sizeof(kShortcutBindings[0]);
 constexpr uint8_t kShortcutEventQueueDepth = 8;
+constexpr uint8_t kDynamicShortcutEventBase = 0x20;
+constexpr uint8_t kDynamicChordBindingMax = 16;
+constexpr uint8_t kChordStarterHome = 1;
+constexpr uint8_t kChordStarterLfn = 2;
+constexpr uint8_t kChordStarterRfn = 3;
+
+struct DynamicChordBinding {
+    uint8_t event;
+    uint8_t starter;
+    RemapButton button;
+    bool last_pressed;
+};
 
 critical_section_t companion_report_cs;
 uint8_t last_controller_report[63]{};
@@ -224,6 +238,8 @@ uint8_t lightbar_green = 0xd7;
 uint8_t lightbar_blue = 0x00;
 uint8_t lightbar_brightness = 100;
 bool lightbar_override_enabled = false;
+DynamicChordBinding dynamic_chord_bindings[kDynamicChordBindingMax]{};
+uint8_t dynamic_chord_binding_count = 0;
 uint16_t host_output_report_count = 0;
 uint8_t host_output_report_len = 0;
 uint8_t host_output_report_id = 0;
@@ -652,6 +668,15 @@ void clear_shortcut_events() {
     critical_section_exit(&companion_report_cs);
 }
 
+void set_player_led_enabled(bool enabled) {
+    bt_set_player_led_enabled(enabled);
+}
+
+void clear_dynamic_chord_bindings() {
+    dynamic_chord_binding_count = 0;
+    memset(dynamic_chord_bindings, 0, sizeof(dynamic_chord_bindings));
+}
+
 uint8_t take_shortcut_event() {
     uint8_t event = 0;
     critical_section_enter_blocking(&companion_report_cs);
@@ -664,13 +689,13 @@ uint8_t take_shortcut_event() {
     return event;
 }
 
-void queue_shortcut_event(ShortcutEvent event) {
+void queue_shortcut_event(uint8_t event) {
     critical_section_enter_blocking(&companion_report_cs);
     if (shortcut_event_count == kShortcutEventQueueDepth) {
         shortcut_event_head = static_cast<uint8_t>((shortcut_event_head + 1) % kShortcutEventQueueDepth);
         shortcut_event_count--;
     }
-    shortcut_event_queue[shortcut_event_tail] = static_cast<uint8_t>(event);
+    shortcut_event_queue[shortcut_event_tail] = event;
     shortcut_event_tail = static_cast<uint8_t>((shortcut_event_tail + 1) % kShortcutEventQueueDepth);
     shortcut_event_count++;
     critical_section_exit(&companion_report_cs);
@@ -699,6 +724,7 @@ void restore_defaults() {
     speaker_volume_shortcut_enabled = false;
     std::fill(shortcut_binding_last_pressed, shortcut_binding_last_pressed + kShortcutBindingCount, false);
     std::fill(shortcut_binding_last_step_us, shortcut_binding_last_step_us + kShortcutBindingCount, 0);
+    clear_dynamic_chord_bindings();
     clear_shortcut_events();
     mute_keyboard_pending = false;
     mute_keyboard_pressed = false;
@@ -726,6 +752,7 @@ void restore_defaults() {
     lightbar_override_enabled = false;
     set_lightbar_color(0x00, 0x00, 0xff, 100);
     set_led_enabled(true);
+    set_player_led_enabled(true);
     set_idle_disconnect_enabled(true);
     bt_set_idle_disconnect_timeout_minutes(15);
     usb_set_suspend_disconnect_enabled(true);
@@ -1102,6 +1129,71 @@ bool valid_button_remap_payload(uint8_t const *payload, uint16_t len) {
         }
     }
     return true;
+}
+
+bool valid_chord_starter(uint8_t starter) {
+    return starter >= kChordStarterHome && starter <= kChordStarterRfn;
+}
+
+bool valid_chord_button(uint8_t button) {
+    return button < RemapButtonCount
+        && button != RemapLfn
+        && button != RemapRfn;
+}
+
+bool reserved_edge_chord_combo(uint8_t starter, uint8_t button) {
+    if (starter != kChordStarterLfn && starter != kChordStarterRfn) {
+        return false;
+    }
+    return button == RemapTriangle
+        || button == RemapCircle
+        || button == RemapCross
+        || button == RemapSquare;
+}
+
+bool valid_chord_bindings_payload(uint8_t const *payload, uint16_t len, uint16_t count) {
+    if (count > kDynamicChordBindingMax) {
+        return false;
+    }
+    if (count > 0 && payload == nullptr) {
+        return false;
+    }
+    if (len < count * 3) {
+        return false;
+    }
+    for (uint8_t i = 0; i < count; i++) {
+        const uint8_t event = payload[i * 3];
+        const uint8_t starter = payload[i * 3 + 1];
+        const uint8_t button = payload[i * 3 + 2];
+        if (
+            event < kDynamicShortcutEventBase
+            || event >= kDynamicShortcutEventBase + kDynamicChordBindingMax
+            || !valid_chord_starter(starter)
+            || !valid_chord_button(button)
+            || reserved_edge_chord_combo(starter, button)
+        ) {
+            return false;
+        }
+        for (uint8_t previous = 0; previous < i; previous++) {
+            if (payload[previous * 3 + 1] == starter && payload[previous * 3 + 2] == button) {
+                return false;
+            }
+        }
+    }
+    return true;
+}
+
+void set_dynamic_chord_bindings(uint8_t const *payload, uint16_t count) {
+    clear_dynamic_chord_bindings();
+    dynamic_chord_binding_count = static_cast<uint8_t>(count);
+    for (uint8_t i = 0; i < dynamic_chord_binding_count; i++) {
+        dynamic_chord_bindings[i] = {
+            payload[i * 3],
+            payload[i * 3 + 1],
+            static_cast<RemapButton>(payload[i * 3 + 2]),
+            false
+        };
+    }
 }
 
 bool schedule_adaptive_trigger_test(uint8_t mode, uint8_t target) {
@@ -1950,6 +2042,16 @@ void handle_command(uint8_t const *buffer, uint16_t bufsize) {
             set_ack(command_id, sequence, AckOk);
             return;
 
+        case CommandSetPlayerLedEnabled:
+            if (value > 1) {
+                set_ack(command_id, sequence, AckInvalidValue);
+                return;
+            }
+            set_player_led_enabled(value == 1);
+            settings_revision++;
+            set_ack(command_id, sequence, AckOk);
+            return;
+
         case CommandSetIdleDisconnectEnabled:
             if (value > 1) {
                 set_ack(command_id, sequence, AckInvalidValue);
@@ -2010,6 +2112,17 @@ void handle_command(uint8_t const *buffer, uint16_t bufsize) {
                 return;
             }
             memcpy(button_remap, buffer + 10, RemapButtonCount);
+            settings_revision++;
+            set_ack(command_id, sequence, AckOk);
+            return;
+
+        case CommandSetChordBindings:
+            if (!valid_chord_bindings_payload(buffer + 10, bufsize - 10, value)) {
+                set_ack(command_id, sequence, AckInvalidValue);
+                return;
+            }
+            set_dynamic_chord_bindings(buffer + 10, value);
+            clear_shortcut_events();
             settings_revision++;
             set_ack(command_id, sequence, AckOk);
             return;
@@ -2274,6 +2387,197 @@ uint8_t dpad_direction_from_buttons(bool up, bool right, bool down, bool left) {
     return kDpadNeutral;
 }
 
+bool remap_button_pressed(uint8_t const *report, uint16_t len, RemapButton button) {
+    if (report == nullptr || len <= 8) {
+        return false;
+    }
+    const uint8_t dpad_direction = report[7] & kDpadMask;
+    switch (button) {
+        case RemapL2:
+            return (report[8] & kL2ButtonBit) != 0 || report[4] > 0;
+        case RemapL1:
+            return (report[8] & kL1ButtonBit) != 0;
+        case RemapCreate:
+            return (report[8] & kCreateButtonBit) != 0;
+        case RemapDpadUp:
+        case RemapDpadLeft:
+        case RemapDpadDown:
+        case RemapDpadRight:
+            return dpad_direction_has(dpad_direction, button);
+        case RemapL3:
+            return (report[8] & kL3ButtonBit) != 0;
+        case RemapR2:
+            return (report[8] & kR2ButtonBit) != 0 || report[5] > 0;
+        case RemapR1:
+            return (report[8] & kR1ButtonBit) != 0;
+        case RemapOptions:
+            return (report[8] & kOptionsButtonBit) != 0;
+        case RemapTriangle:
+            return (report[7] & kTriangleButtonBit) != 0;
+        case RemapCircle:
+            return (report[7] & kCircleButtonBit) != 0;
+        case RemapCross:
+            return (report[7] & kCrossButtonBit) != 0;
+        case RemapSquare:
+            return (report[7] & kSquareButtonBit) != 0;
+        case RemapR3:
+            return (report[8] & kR3ButtonBit) != 0;
+        case RemapLb:
+            return len > 9 && (report[9] & kLeftBackButtonBit) != 0;
+        case RemapRb:
+            return len > 9 && (report[9] & kRightBackButtonBit) != 0;
+        case RemapLfn:
+            return len > 9 && (report[9] & kLeftFunctionButtonBit) != 0;
+        case RemapRfn:
+            return len > 9 && (report[9] & kRightFunctionButtonBit) != 0;
+        default:
+            return false;
+    }
+}
+
+void suppress_dpad_button(uint8_t *report, RemapButton button) {
+    const uint8_t dpad_direction = report[7] & kDpadMask;
+    bool up = dpad_direction_has(dpad_direction, RemapDpadUp);
+    bool right = dpad_direction_has(dpad_direction, RemapDpadRight);
+    bool down = dpad_direction_has(dpad_direction, RemapDpadDown);
+    bool left = dpad_direction_has(dpad_direction, RemapDpadLeft);
+    if (button == RemapDpadUp) up = false;
+    if (button == RemapDpadRight) right = false;
+    if (button == RemapDpadDown) down = false;
+    if (button == RemapDpadLeft) left = false;
+    report[7] = static_cast<uint8_t>(
+        (report[7] & ~kDpadMask)
+        | dpad_direction_from_buttons(up, right, down, left)
+    );
+}
+
+void suppress_remap_button(uint8_t *report, uint16_t len, RemapButton button) {
+    if (report == nullptr || len <= 8) {
+        return;
+    }
+    switch (button) {
+        case RemapL2:
+            report[4] = 0;
+            report[8] &= static_cast<uint8_t>(~kL2ButtonBit);
+            break;
+        case RemapL1:
+            report[8] &= static_cast<uint8_t>(~kL1ButtonBit);
+            break;
+        case RemapCreate:
+            report[8] &= static_cast<uint8_t>(~kCreateButtonBit);
+            break;
+        case RemapDpadUp:
+        case RemapDpadLeft:
+        case RemapDpadDown:
+        case RemapDpadRight:
+            suppress_dpad_button(report, button);
+            break;
+        case RemapL3:
+            report[8] &= static_cast<uint8_t>(~kL3ButtonBit);
+            break;
+        case RemapR2:
+            report[5] = 0;
+            report[8] &= static_cast<uint8_t>(~kR2ButtonBit);
+            break;
+        case RemapR1:
+            report[8] &= static_cast<uint8_t>(~kR1ButtonBit);
+            break;
+        case RemapOptions:
+            report[8] &= static_cast<uint8_t>(~kOptionsButtonBit);
+            break;
+        case RemapTriangle:
+            report[7] &= static_cast<uint8_t>(~kTriangleButtonBit);
+            break;
+        case RemapCircle:
+            report[7] &= static_cast<uint8_t>(~kCircleButtonBit);
+            break;
+        case RemapCross:
+            report[7] &= static_cast<uint8_t>(~kCrossButtonBit);
+            break;
+        case RemapSquare:
+            report[7] &= static_cast<uint8_t>(~kSquareButtonBit);
+            break;
+        case RemapR3:
+            report[8] &= static_cast<uint8_t>(~kR3ButtonBit);
+            break;
+        case RemapLb:
+            if (len > 9) report[9] &= static_cast<uint8_t>(~kLeftBackButtonBit);
+            break;
+        case RemapRb:
+            if (len > 9) report[9] &= static_cast<uint8_t>(~kRightBackButtonBit);
+            break;
+        case RemapLfn:
+            if (len > 9) report[9] &= static_cast<uint8_t>(~kLeftFunctionButtonBit);
+            break;
+        case RemapRfn:
+            if (len > 9) report[9] &= static_cast<uint8_t>(~kRightFunctionButtonBit);
+            break;
+        default:
+            break;
+    }
+}
+
+bool chord_starter_pressed(uint8_t const *report, uint16_t len, uint8_t starter) {
+    if (report == nullptr || len <= 9) {
+        return false;
+    }
+    switch (starter) {
+        case kChordStarterHome:
+            return (report[9] & kHomeButtonBit) != 0;
+        case kChordStarterLfn:
+            return (report[9] & kLeftFunctionButtonBit) != 0;
+        case kChordStarterRfn:
+            return (report[9] & kRightFunctionButtonBit) != 0;
+        default:
+            return false;
+    }
+}
+
+void suppress_chord_starter(uint8_t *report, uint16_t len, uint8_t starter) {
+    if (report == nullptr || len <= 9) {
+        return;
+    }
+    switch (starter) {
+        case kChordStarterHome:
+            report[9] &= static_cast<uint8_t>(~kHomeButtonBit);
+            break;
+        case kChordStarterLfn:
+            report[9] &= static_cast<uint8_t>(~kLeftFunctionButtonBit);
+            break;
+        case kChordStarterRfn:
+            report[9] &= static_cast<uint8_t>(~kRightFunctionButtonBit);
+            break;
+        default:
+            break;
+    }
+}
+
+void process_dynamic_chord_bindings(uint8_t *report, uint16_t len) {
+    if (report == nullptr || len <= 9 || dynamic_chord_binding_count == 0) {
+        return;
+    }
+
+    uint8_t source_report[63]{};
+    const uint16_t source_len = std::min<uint16_t>(len, sizeof(source_report));
+    memcpy(source_report, report, source_len);
+
+    for (uint8_t i = 0; i < dynamic_chord_binding_count; i++) {
+        DynamicChordBinding &binding = dynamic_chord_bindings[i];
+        const bool starter_pressed = chord_starter_pressed(source_report, source_len, binding.starter);
+        const bool pressed = starter_pressed
+            && remap_button_pressed(source_report, source_len, binding.button);
+
+        if (pressed) {
+            suppress_remap_button(report, len, binding.button);
+            suppress_chord_starter(report, len, binding.starter);
+            if (!binding.last_pressed) {
+                queue_shortcut_event(binding.event);
+            }
+        }
+        binding.last_pressed = pressed;
+    }
+}
+
 void apply_button_remap(uint8_t *report, uint16_t len) {
     if (report == nullptr || len <= 8) {
         return;
@@ -2380,6 +2684,7 @@ void companion_process_controller_report(uint8_t *report, uint16_t len) {
     const bool home_pressed = (report[9] & kHomeButtonBit) != 0;
     const uint8_t dpad_direction = report[7] & kDpadMask;
     const bool dpad_pressed = dpad_direction <= 0x07;
+    process_dynamic_chord_bindings(report, len);
     process_shortcut_bindings(report);
     if (home_pressed && dpad_pressed) {
         report[9] &= static_cast<uint8_t>(~kHomeButtonBit);

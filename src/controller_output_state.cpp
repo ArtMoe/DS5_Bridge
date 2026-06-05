@@ -27,6 +27,7 @@ bool cached_right_trigger_valid = false;
 bool cached_left_trigger_valid = false;
 uint8_t cached_trigger_power = 0;
 bool cached_trigger_power_valid = false;
+bool player_led_enabled = true;
 
 void clamp_speaker_volume() {
     if (state_data[kSpeakerVolumeOffset] > kSpeakerVolumeMax) {
@@ -61,6 +62,18 @@ void clear_mic_control(uint8_t *payload) {
 
 uint8_t scale_lightbar_channel(uint8_t channel, uint8_t brightness_percent) {
     return scaled_percent(channel, brightness_percent);
+}
+
+uint8_t player_led_value() {
+    return player_led_enabled ? kPlayerLed1Instant : 0;
+}
+
+void apply_player_led_policy(uint8_t *payload) {
+    if (payload == nullptr) {
+        return;
+    }
+    payload[kValidFlag1Offset] |= kFlag1PlayerIndicatorControlEnable;
+    payload[kPlayerLedsOffset] = player_led_value();
 }
 
 } // namespace
@@ -200,10 +213,15 @@ void controller_output_state_set_lightbar(uint8_t red, uint8_t green, uint8_t bl
         state_data[kValidFlag2Offset] & static_cast<uint8_t>(~kLightbarSetupControlMask)
     );
     state_data[kLedBrightnessOffset] = 0x01;
-    state_data[kPlayerLedsOffset] = kPlayerLed1Instant;
+    state_data[kPlayerLedsOffset] = player_led_value();
     state_data[kLightbarRedOffset] = scale_lightbar_channel(red, brightness);
     state_data[kLightbarGreenOffset] = scale_lightbar_channel(green, brightness);
     state_data[kLightbarBlueOffset] = scale_lightbar_channel(blue, brightness);
+}
+
+void controller_output_state_set_player_led_enabled(bool enabled) {
+    player_led_enabled = enabled;
+    apply_player_led_policy(state_data);
 }
 
 void controller_output_state_copy_audio_snapshot(uint8_t *destination, bool headset_plugged) {
@@ -214,6 +232,7 @@ void controller_output_state_copy_audio_snapshot(uint8_t *destination, bool head
     std::memcpy(destination, state_data, sizeof(state_data));
     controller_output_state_clear_zero_rumble(destination);
     clear_mic_control(destination);
+    apply_player_led_policy(destination);
     if (headset_plugged) {
         destination[kValidFlag0Offset] = static_cast<uint8_t>(
             (destination[kValidFlag0Offset] | kFlag0AudioControlEnable)

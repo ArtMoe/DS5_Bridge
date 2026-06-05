@@ -6,6 +6,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import {
   ACK_RESULT,
   AUDIO_DEBUG_EVENT,
+  CHORD_FUNCTION_EVENT_BASE,
   COMMAND_ID,
   COMPANION_USAGE,
   COMPANION_USAGE_PAGE,
@@ -105,12 +106,14 @@ const FULL_REAPPLY_COMMANDS = [
   COMMAND_ID.SET_HOST_AUDIO_ENABLED,
   COMMAND_ID.SET_DUPLEX_ENABLED,
   COMMAND_ID.SET_LED_ENABLED,
+  COMMAND_ID.SET_PLAYER_LED_ENABLED,
   COMMAND_ID.SET_IDLE_DISCONNECT_ENABLED,
   COMMAND_ID.SET_IDLE_DISCONNECT_TIMEOUT,
   COMMAND_ID.SET_USB_SUSPEND_DISCONNECT_ENABLED,
   COMMAND_ID.SET_SLEEP_KEYBIND_ENABLED,
   COMMAND_ID.SET_SPEAKER_VOLUME_SHORTCUT_ENABLED,
   COMMAND_ID.SET_BUTTON_REMAP,
+  COMMAND_ID.SET_CHORD_BINDINGS,
   COMMAND_ID.SET_POLLING_RATE_MODE,
   COMMAND_ID.SET_HOST_PERSONA
 ];
@@ -1197,6 +1200,22 @@ describe('BridgeService', () => {
     expect(snapshot.settings.idleDisconnectTimeoutMinutes).toBe(20);
   });
 
+  it('sends and stores player slot LED settings', async () => {
+    const service = serviceFixture();
+    const device = new MockHidDevice();
+    device.status = statusReport({ controllerConnected: true });
+    hidMock.state.devicesList = [companionDeviceInfo()];
+    hidMock.state.openDevices.set('companion-path', device);
+
+    await poll(service);
+    const snapshot = await service.setPlayerLedEnabled(false);
+
+    const command = device.sentReports.at(-1);
+    expect(command?.[7]).toBe(COMMAND_ID.SET_PLAYER_LED_ENABLED);
+    expect(command?.[9]).toBe(0);
+    expect(snapshot.settings.playerLedEnabled).toBe(false);
+  });
+
   it('sends and stores sleep keybind settings', async () => {
     const service = serviceFixture();
     const device = new MockHidDevice();
@@ -1271,6 +1290,41 @@ describe('BridgeService', () => {
 
     expect(service.getSnapshot().settings.speakerVolumePercent).toBe(40);
     expect(service.getSnapshot().status?.speakerVolumePercent).toBe(40);
+    const volumeCommand = device.sentReports.filter((report) => report[7] === COMMAND_ID.SET_SPEAKER_VOLUME).at(-1);
+    expect(volumeCommand?.[9]).toBe(40);
+  });
+
+  it('applies notch chord functions through the normal setting command path', async () => {
+    const service = serviceFixture({ speakerVolumePercent: 30 });
+    const device = new MockHidDevice();
+    device.status = statusReport({
+      controllerConnected: false,
+      settingsRevision: 4,
+      speakerVolumePercent: 30
+    });
+    hidMock.state.devicesList = [companionDeviceInfo()];
+    hidMock.state.openDevices.set('companion-path', device);
+
+    await poll(service);
+    await service.setChordConfiguration([{
+      id: 'speaker-up',
+      name: 'Speaker Up',
+      type: 'controller-setting',
+      action: 'speaker-up'
+    }], [{
+      id: 'ps-triangle',
+      kind: 'chord',
+      starter: 'ps',
+      button: 'triangle',
+      functionId: 'speaker-up'
+    }]);
+
+    device.queueShortcutEvent(CHORD_FUNCTION_EVENT_BASE);
+    await pollShortcut(service);
+    await flushReapply();
+    await flushReapply();
+
+    expect(service.getSnapshot().settings.speakerVolumePercent).toBe(40);
     const volumeCommand = device.sentReports.filter((report) => report[7] === COMMAND_ID.SET_SPEAKER_VOLUME).at(-1);
     expect(volumeCommand?.[9]).toBe(40);
   });

@@ -4,7 +4,7 @@ export const REPORT_LENGTH = 64;
 export const PAYLOAD_LENGTH = 63;
 export const MAGIC = 'DS5B';
 export const PROTOCOL_MAJOR = 1;
-export const PROTOCOL_MINOR = 10;
+export const PROTOCOL_MINOR = 11;
 
 export const REPORT_ID = {
   STATUS: 0x01,
@@ -90,7 +90,9 @@ export const COMMAND_ID = {
   PREVIEW_ADAPTIVE_TRIGGER_EFFECT: 0x1F,
   APPLY_ADAPTIVE_TRIGGER_EFFECT: 0x20,
   SET_HOST_PERSONA: 0x21,
-  SET_AUDIO_REACTIVE_HAPTICS: 0x22
+  SET_AUDIO_REACTIVE_HAPTICS: 0x22,
+  SET_CHORD_BINDINGS: 0x23,
+  SET_PLAYER_LED_ENABLED: 0x24
 } as const;
 
 export const HOST_AUDIO_PACKET_TYPE = {
@@ -137,6 +139,10 @@ export interface AdaptiveTriggerPreviewEffect {
 }
 export type PollingRateMode = '250' | '500' | '1000';
 export type HostPersonaMode = 'dualsense' | 'xbox' | 'ds4';
+export const CHORD_FUNCTION_EVENT_BASE = 0x20;
+export const MAX_CHORD_ASSIGNMENTS = 16;
+export const MAX_CHORD_FUNCTION_NAME_LENGTH = 16;
+export const MAX_KEYBOARD_FUNCTION_KEYS = 4;
 export interface AudioReactiveHapticsAppSource {
   kind: 'app-session';
   processId: number;
@@ -205,6 +211,64 @@ export const REMAP_BUTTON_IDS = [
   'rfn'
 ] as const;
 export type RemapButtonId = typeof REMAP_BUTTON_IDS[number];
+export const CHORD_STARTER_IDS = ['ps', 'lfn', 'rfn'] as const;
+export type ChordStarterId = typeof CHORD_STARTER_IDS[number];
+export type ChordAssignableButtonId = Exclude<RemapButtonId, 'lfn' | 'rfn'>;
+export const CHORD_ASSIGNABLE_BUTTON_IDS = REMAP_BUTTON_IDS.filter((id) => id !== 'lfn' && id !== 'rfn') as ChordAssignableButtonId[];
+export const CHORD_EDGE_RESERVED_FACE_BUTTON_IDS = ['triangle', 'circle', 'cross', 'square'] as const;
+export type ChordFunctionId = string;
+export type ChordFunctionType = 'keyboard' | 'media' | 'controller-setting';
+export type ChordMediaAction =
+  | 'play-pause'
+  | 'next-track'
+  | 'previous-track'
+  | 'mute'
+  | 'volume-up'
+  | 'volume-down';
+export type ChordControllerSettingAction =
+  | 'toggle-audio-haptics'
+  | 'toggle-lightbar-override'
+  | 'toggle-mic-mute'
+  | 'sleep-controller'
+  | 'speaker-down'
+  | 'speaker-up'
+  | 'mic-down'
+  | 'mic-up'
+  | 'haptics-down'
+  | 'haptics-up'
+  | 'rumble-down'
+  | 'rumble-up'
+  | 'triggers-down'
+  | 'triggers-up'
+  | 'lighting-down'
+  | 'lighting-up';
+export interface ChordKeyboardFunction {
+  id: ChordFunctionId;
+  name: string;
+  type: 'keyboard';
+  keys: string[];
+}
+export interface ChordMediaFunction {
+  id: ChordFunctionId;
+  name: string;
+  type: 'media';
+  action: ChordMediaAction;
+}
+export interface ChordControllerSettingFunction {
+  id: ChordFunctionId;
+  name: string;
+  type: 'controller-setting';
+  action: ChordControllerSettingAction;
+}
+export type ChordFunction = ChordKeyboardFunction | ChordMediaFunction | ChordControllerSettingFunction;
+export interface ChordComboAssignment {
+  id: string;
+  kind: 'chord';
+  starter: ChordStarterId;
+  button: ChordAssignableButtonId;
+  functionId: ChordFunctionId;
+}
+export type ChordAssignment = ChordComboAssignment;
 export type ButtonRemapMap = Record<RemapButtonId, RemapButtonId>;
 export interface ButtonRemapProfile {
   id: string;
@@ -276,14 +340,47 @@ export function isRemapButtonId(value: unknown): value is RemapButtonId {
   return typeof value === 'string' && (REMAP_BUTTON_IDS as readonly string[]).includes(value);
 }
 
+export function isChordStarterId(value: unknown): value is ChordStarterId {
+  return typeof value === 'string' && (CHORD_STARTER_IDS as readonly string[]).includes(value);
+}
+
+export function isChordAssignableButtonId(value: unknown): value is ChordAssignableButtonId {
+  return typeof value === 'string' && (CHORD_ASSIGNABLE_BUTTON_IDS as readonly string[]).includes(value);
+}
+
+export function isChordBindingAllowed(starter: ChordStarterId, button: ChordAssignableButtonId): boolean {
+  return starter === 'ps' || !(CHORD_EDGE_RESERVED_FACE_BUTTON_IDS as readonly string[]).includes(button);
+}
+
 export function remapButtonIdValue(buttonId: RemapButtonId): number {
   return REMAP_BUTTON_IDS.indexOf(buttonId);
+}
+
+export function chordStarterIdValue(starter: ChordStarterId): number {
+  switch (starter) {
+    case 'ps':
+      return 0x01;
+    case 'lfn':
+      return 0x02;
+    case 'rfn':
+      return 0x03;
+  }
 }
 
 export function buildButtonRemapPayload(mapping: ButtonRemapMap): number[] {
   return REMAP_BUTTON_IDS.map((buttonId) => {
     const target = mapping[buttonId];
     return remapButtonIdValue(isRemapButtonId(target) ? target : buttonId);
+  });
+}
+
+export function buildChordBindingsPayload(assignments: ChordAssignment[]): number[] {
+  return assignments.slice(0, MAX_CHORD_ASSIGNMENTS).flatMap((assignment, index) => {
+    return [
+      (CHORD_FUNCTION_EVENT_BASE + index) & 0xff,
+      chordStarterIdValue(assignment.starter),
+      remapButtonIdValue(assignment.button)
+    ];
   });
 }
 export const MUTE_KEYBOARD_HOLD_FLAG = 0x80;

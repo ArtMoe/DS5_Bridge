@@ -9,10 +9,13 @@ import {
   COMMAND_ID,
   REPORT_ID,
   REPORT_LENGTH,
+  CHORD_FUNCTION_EVENT_BASE,
+  MAX_CHORD_ASSIGNMENTS,
   MUTE_KEYBOARD_HOLD_FLAG,
   MUTE_KEYBOARD_MODIFIER_MASK,
   ProtocolError,
   ackUserMessage,
+  buildChordBindingsPayload,
   buildCommandReport,
   buildHostAudioFastFrameReports,
   buildHostAudioStreamReport,
@@ -42,6 +45,8 @@ import type {
   AudioDebugEventPayload,
   AudioDebugStatsPayload,
   BridgePresetId,
+  ChordAssignment,
+  ChordFunction,
   RemapButtonId,
   HostPersonaMode,
   HostAudioStatusPayload,
@@ -129,6 +134,11 @@ const MAX_IDLE_DISCONNECT_TIMEOUT_MINUTES = 120;
 const CONTROLLER_POWER_SAVING_CAP_PERCENT = 60;
 const STANDARD_FEEDBACK_GAIN_PERCENT = 200;
 const BOOSTED_FEEDBACK_GAIN_PERCENT = 500;
+const HAPTICS_STEP = 20;
+const SPEAKER_VOLUME_STEP = 10;
+const MIC_VOLUME_STEP = 10;
+const LIGHTBAR_BRIGHTNESS_STEP = 10;
+const TRIGGER_EFFECT_STEP = 10;
 const AUDIO_REACTIVE_HAPTICS_FIXED_GAIN_PERCENT = 100;
 const AUDIO_REACTIVE_HAPTICS_SUPPRESS_CLASSIC_RUMBLE_MODE_FLAG = 0x80;
 const SONY_VENDOR_ID = 0x054c;
@@ -580,19 +590,140 @@ function formatMicDebugEvent(prefix: string, args: number[]): string {
   }
 }
 
-function parseShortcutEvent(data: Buffer | number[]): ShortcutEvent | null {
+type InputShortcutEvent =
+  | { kind: 'shortcut'; event: ShortcutEvent }
+  | { kind: 'chord-function'; slot: number };
+
+function parseShortcutEvent(data: Buffer | number[]): InputShortcutEvent | null {
   const report = Array.from(data);
   const event = report[0] === REPORT_ID.INPUT ? report[1] : report[0];
+  if (event >= CHORD_FUNCTION_EVENT_BASE && event < CHORD_FUNCTION_EVENT_BASE + MAX_CHORD_ASSIGNMENTS) {
+    return {
+      kind: 'chord-function',
+      slot: event - CHORD_FUNCTION_EVENT_BASE
+    };
+  }
   switch (event) {
     case SHORTCUT_EVENT.CONTROLLER_VOLUME_DOWN:
     case SHORTCUT_EVENT.CONTROLLER_VOLUME_UP:
     case SHORTCUT_EVENT.SLEEP_CONTROLLER:
     case SHORTCUT_EVENT.MIC_MUTE_ON:
     case SHORTCUT_EVENT.MIC_MUTE_OFF:
-      return event;
+      return { kind: 'shortcut', event };
     default:
       return null;
   }
+}
+
+const VIRTUAL_KEY_CODES: Record<string, number> = {
+  BACKSPACE: 0x08,
+  TAB: 0x09,
+  ENTER: 0x0d,
+  RETURN: 0x0d,
+  SHIFT: 0x10,
+  CTRL: 0x11,
+  CONTROL: 0x11,
+  ALT: 0x12,
+  PAUSE: 0x13,
+  CAPSLOCK: 0x14,
+  ESC: 0x1b,
+  ESCAPE: 0x1b,
+  SPACE: 0x20,
+  PAGEUP: 0x21,
+  PAGEDOWN: 0x22,
+  END: 0x23,
+  HOME: 0x24,
+  LEFT: 0x25,
+  UP: 0x26,
+  RIGHT: 0x27,
+  DOWN: 0x28,
+  INSERT: 0x2d,
+  DELETE: 0x2e,
+  WIN: 0x5b,
+  WINDOWS: 0x5b,
+  META: 0x5b,
+  COMMAND: 0x5b,
+  MENU: 0x5d,
+  NUMLOCK: 0x90,
+  SCROLLLOCK: 0x91,
+  PLAYPAUSE: 0xb3,
+  MEDIAPLAYPAUSE: 0xb3,
+  NEXTTRACK: 0xb0,
+  MEDIANEXTTRACK: 0xb0,
+  PREVIOUSTRACK: 0xb1,
+  MEDIAPREVIOUSTRACK: 0xb1,
+  VOLUMEMUTE: 0xad,
+  VOLUMEUP: 0xaf,
+  VOLUMEDOWN: 0xae
+};
+
+for (let index = 0; index < 26; index += 1) {
+  VIRTUAL_KEY_CODES[String.fromCharCode(65 + index)] = 0x41 + index;
+}
+for (let index = 0; index <= 9; index += 1) {
+  VIRTUAL_KEY_CODES[String(index)] = 0x30 + index;
+}
+for (let index = 1; index <= 24; index += 1) {
+  VIRTUAL_KEY_CODES[`F${index}`] = 0x6f + index;
+}
+
+const MEDIA_ACTION_KEY_CODES: Record<Extract<ChordFunction, { type: 'media' }>['action'], number> = {
+  'play-pause': 0xb3,
+  'next-track': 0xb0,
+  'previous-track': 0xb1,
+  mute: 0xad,
+  'volume-up': 0xaf,
+  'volume-down': 0xae
+};
+
+function normalizeVirtualKeyName(key: string): string {
+  return key.trim().replace(/\s+/g, '').replace(/-/g, '').toUpperCase();
+}
+
+function virtualKeyCodeFor(key: string): number | null {
+  const normalized = normalizeVirtualKeyName(key);
+  return VIRTUAL_KEY_CODES[normalized] ?? null;
+}
+
+async function sendVirtualKeySequence(codes: number[]): Promise<void> {
+  const normalized = codes
+    .map((code) => Math.max(0, Math.min(0xff, Math.round(code))))
+    .filter((code) => Number.isFinite(code) && code > 0);
+  if (normalized.length === 0) {
+    return;
+  }
+  const downCodes = normalized.join(',');
+  const upCodes = [...normalized].reverse().join(',');
+  const script = [
+    "$ErrorActionPreference = 'Stop'",
+    "Add-Type -Namespace DS5Bridge -Name KeyboardInput -MemberDefinition '[DllImport(\"user32.dll\")] public static extern void keybd_event(byte bVk, byte bScan, uint dwFlags, UIntPtr dwExtraInfo);'",
+    `foreach ($vk in @(${downCodes})) { [DS5Bridge.KeyboardInput]::keybd_event([byte]$vk, 0, 0, [UIntPtr]::Zero) }`,
+    'Start-Sleep -Milliseconds 20',
+    `foreach ($vk in @(${upCodes})) { [DS5Bridge.KeyboardInput]::keybd_event([byte]$vk, 0, 2, [UIntPtr]::Zero) }`
+  ].join('; ');
+  await new Promise<void>((resolve, reject) => {
+    const child = spawn('powershell.exe', [
+      '-NoProfile',
+      '-ExecutionPolicy',
+      'Bypass',
+      '-Command',
+      script
+    ], {
+      windowsHide: true
+    });
+    let stderr = '';
+    child.stderr?.on('data', (chunk: Buffer) => {
+      stderr += chunk.toString('utf8');
+    });
+    child.on('error', reject);
+    child.on('exit', (code) => {
+      if (code === 0) {
+        resolve();
+      } else {
+        reject(new Error(`Shortcut key injection failed${stderr ? `: ${stderr.trim()}` : ''}`));
+      }
+    });
+  });
 }
 
 function formatUsbDebugEvent(prefix: string, args: number[]): string {
@@ -1199,12 +1330,12 @@ export class BridgeService extends EventEmitter {
     });
   }
 
-  private enqueueShortcutEvent(event: ShortcutEvent): void {
+  private enqueueShortcutEvent(event: InputShortcutEvent): void {
     this.shortcutActionQueue = this.shortcutActionQueue
       .catch(() => {
         // Keep later shortcut events alive after a failed command.
       })
-      .then(() => this.dispatchShortcutAction(event));
+      .then(() => this.dispatchInputShortcutAction(event));
   }
 
   private async pollShortcutEvent(): Promise<void> {
@@ -2347,6 +2478,13 @@ export class BridgeService extends EventEmitter {
     return this.getSnapshot();
   }
 
+  async setPlayerLedEnabled(enabled: boolean): Promise<BridgeSnapshot> {
+    await this.sendSettingCommand(COMMAND_ID.SET_PLAYER_LED_ENABLED, enabled ? 1 : 0, {
+      playerLedEnabled: enabled
+    });
+    return this.getSnapshot();
+  }
+
   async setIdleDisconnectEnabled(enabled: boolean): Promise<BridgeSnapshot> {
     await this.sendSettingCommand(COMMAND_ID.SET_IDLE_DISCONNECT_ENABLED, enabled ? 1 : 0, {
       idleDisconnectEnabled: enabled
@@ -2354,8 +2492,176 @@ export class BridgeService extends EventEmitter {
     return this.getSnapshot();
   }
 
+  private async dispatchInputShortcutAction(event: InputShortcutEvent): Promise<void> {
+    if (event.kind === 'chord-function') {
+      await this.dispatchChordFunctionSlot(event.slot);
+      return;
+    }
+    await this.dispatchShortcutAction(event.event);
+  }
+
   private async dispatchShortcutAction(event: ShortcutEvent): Promise<void> {
     await this.shortcutActionHandlers[event]();
+  }
+
+  private async dispatchChordFunctionSlot(slot: number): Promise<void> {
+    const settings = this.settingsStore.get();
+    const assignment = settings.chordAssignments[slot];
+    if (!assignment) {
+      return;
+    }
+    const func = settings.chordFunctions.find((candidate) => candidate.id === assignment.functionId);
+    if (!func) {
+      return;
+    }
+    await this.executeChordFunction(func);
+  }
+
+  private async executeChordFunction(func: ChordFunction): Promise<void> {
+    switch (func.type) {
+      case 'keyboard': {
+        const codes = func.keys.map(virtualKeyCodeFor).filter((code): code is number => code !== null);
+        if (codes.length !== func.keys.length || codes.length === 0) {
+          this.appendAudioDebugLines([`[Chords] ignored invalid keyboard function id=${func.id} keys=${func.keys.join('+')}`]);
+          return;
+        }
+        await sendVirtualKeySequence(codes);
+        return;
+      }
+      case 'media':
+        await sendVirtualKeySequence([MEDIA_ACTION_KEY_CODES[func.action]]);
+        return;
+      case 'controller-setting':
+        await this.executeChordControllerSettingAction(func.action);
+        return;
+    }
+  }
+
+  private async executeChordControllerSettingAction(action: Extract<ChordFunction, { type: 'controller-setting' }>['action']): Promise<void> {
+    const settings = this.settingsStore.get();
+    switch (action) {
+      case 'toggle-audio-haptics':
+        await this.setAudioReactiveHapticsConfig({ enabled: !settings.audioReactiveHapticsEnabled });
+        return;
+      case 'toggle-lightbar-override':
+        await this.setLightbarOverrideEnabled(!settings.lightbarOverrideEnabled);
+        return;
+      case 'toggle-mic-mute':
+        if (!settings.duplexMicEnabled) {
+          return;
+        }
+        await this.setMicMute(!settings.micMuted);
+        return;
+      case 'sleep-controller':
+        await this.sleepController();
+        return;
+      case 'speaker-down':
+        await this.stepSpeakerVolume(-SPEAKER_VOLUME_STEP);
+        return;
+      case 'speaker-up':
+        await this.stepSpeakerVolume(SPEAKER_VOLUME_STEP);
+        return;
+      case 'mic-down':
+        await this.stepMicVolume(-MIC_VOLUME_STEP);
+        return;
+      case 'mic-up':
+        await this.stepMicVolume(MIC_VOLUME_STEP);
+        return;
+      case 'haptics-down':
+        await this.stepHapticsGain(-HAPTICS_STEP);
+        return;
+      case 'haptics-up':
+        await this.stepHapticsGain(HAPTICS_STEP);
+        return;
+      case 'rumble-down':
+        await this.stepClassicRumbleGain(-HAPTICS_STEP);
+        return;
+      case 'rumble-up':
+        await this.stepClassicRumbleGain(HAPTICS_STEP);
+        return;
+      case 'triggers-down':
+        await this.stepTriggerEffectIntensity(-TRIGGER_EFFECT_STEP);
+        return;
+      case 'triggers-up':
+        await this.stepTriggerEffectIntensity(TRIGGER_EFFECT_STEP);
+        return;
+      case 'lighting-down':
+        await this.stepLightbarBrightness(-LIGHTBAR_BRIGHTNESS_STEP);
+        return;
+      case 'lighting-up':
+        await this.stepLightbarBrightness(LIGHTBAR_BRIGHTNESS_STEP);
+        return;
+    }
+  }
+
+  private clampChordPercent(value: number, max: number): number {
+    return Math.max(0, Math.min(max, Math.round(value)));
+  }
+
+  private async stepSpeakerVolume(deltaPercent: number): Promise<void> {
+    const settings = this.settingsStore.get();
+    if (!settings.speakerEnabled) {
+      return;
+    }
+    const nextValue = this.clampChordPercent(settings.speakerVolumePercent + deltaPercent, 100);
+    if (nextValue !== settings.speakerVolumePercent) {
+      await this.setSpeakerVolume(nextValue);
+    }
+  }
+
+  private async stepMicVolume(deltaPercent: number): Promise<void> {
+    const settings = this.settingsStore.get();
+    if (!settings.duplexMicEnabled) {
+      return;
+    }
+    const nextValue = this.clampChordPercent(settings.micVolumePercent + deltaPercent, 100);
+    if (nextValue !== settings.micVolumePercent) {
+      await this.setMicVolume(nextValue);
+    }
+  }
+
+  private async stepHapticsGain(deltaPercent: number): Promise<void> {
+    const settings = this.settingsStore.get();
+    if (!settings.hapticsEnabled) {
+      return;
+    }
+    const nextValue = this.clampChordPercent(settings.hapticsGainPercent + deltaPercent, this.feedbackGainMax(settings));
+    if (nextValue !== settings.hapticsGainPercent) {
+      await this.setHapticsGain(nextValue);
+    }
+  }
+
+  private async stepClassicRumbleGain(deltaPercent: number): Promise<void> {
+    const settings = this.settingsStore.get();
+    if (!settings.classicRumbleEnabled) {
+      return;
+    }
+    const nextValue = this.clampChordPercent(settings.classicRumbleGainPercent + deltaPercent, this.feedbackGainMax(settings));
+    if (nextValue !== settings.classicRumbleGainPercent) {
+      await this.setClassicRumbleGain(nextValue);
+    }
+  }
+
+  private async stepTriggerEffectIntensity(deltaPercent: number): Promise<void> {
+    const settings = this.settingsStore.get();
+    if (!settings.adaptiveTriggersEnabled) {
+      return;
+    }
+    const nextValue = this.clampChordPercent(settings.triggerEffectIntensityPercent + deltaPercent, 100);
+    if (nextValue !== settings.triggerEffectIntensityPercent) {
+      await this.setTriggerEffectIntensity(nextValue);
+    }
+  }
+
+  private async stepLightbarBrightness(deltaPercent: number): Promise<void> {
+    const settings = this.settingsStore.get();
+    if (!settings.lightbarEnabled) {
+      return;
+    }
+    const nextValue = this.clampChordPercent(settings.lightbarBrightnessPercent + deltaPercent, 100);
+    if (nextValue !== settings.lightbarBrightnessPercent) {
+      await this.setLightbarColor(settings.lightbarColor, nextValue);
+    }
   }
 
   private async applyControllerVolumeShortcut(deltaPercent: number): Promise<void> {
@@ -2693,6 +2999,33 @@ export class BridgeService extends EventEmitter {
     return this.getSnapshot();
   }
 
+  async setChordConfiguration(functions: ChordFunction[], assignments: ChordAssignment[]): Promise<BridgeSnapshot> {
+    this.snapshot.settings = this.settingsStore.setChordConfiguration(functions, assignments);
+    if (this.snapshot.state === 'connected') {
+      await this.applyChordBindings(this.snapshot.settings);
+    }
+    this.emitSnapshot();
+    return this.getSnapshot();
+  }
+
+  async setChordFunctions(functions: ChordFunction[]): Promise<BridgeSnapshot> {
+    this.snapshot.settings = this.settingsStore.setChordFunctions(functions);
+    if (this.snapshot.state === 'connected') {
+      await this.applyChordBindings(this.snapshot.settings);
+    }
+    this.emitSnapshot();
+    return this.getSnapshot();
+  }
+
+  async setChordAssignments(assignments: ChordAssignment[]): Promise<BridgeSnapshot> {
+    this.snapshot.settings = this.settingsStore.setChordAssignments(assignments);
+    if (this.snapshot.state === 'connected') {
+      await this.applyChordBindings(this.snapshot.settings);
+    }
+    this.emitSnapshot();
+    return this.getSnapshot();
+  }
+
   private async applyButtonRemapping(
     settings: CompanionSettings,
     expectSettingsRevisionChange: boolean
@@ -2700,6 +3033,13 @@ export class BridgeService extends EventEmitter {
     await this.sendCommand(COMMAND_ID.SET_BUTTON_REMAP, 0, {
       expectSettingsRevisionChange,
       extraPayload: buildButtonRemapPayload(settings.buttonRemappingDraft)
+    });
+  }
+
+  private async applyChordBindings(settings: CompanionSettings): Promise<void> {
+    await this.sendCommand(COMMAND_ID.SET_CHORD_BINDINGS, settings.chordAssignments.length, {
+      throwOnCommandError: false,
+      extraPayload: buildChordBindingsPayload(settings.chordAssignments)
     });
   }
 
@@ -3580,6 +3920,9 @@ export class BridgeService extends EventEmitter {
     await this.sendCommand(COMMAND_ID.SET_LED_ENABLED, settings.ledEnabled ? 1 : 0, {
       expectSettingsRevisionChange
     });
+    await this.sendCommand(COMMAND_ID.SET_PLAYER_LED_ENABLED, settings.playerLedEnabled ? 1 : 0, {
+      expectSettingsRevisionChange
+    });
     await this.sendCommand(COMMAND_ID.SET_IDLE_DISCONNECT_ENABLED, settings.idleDisconnectEnabled ? 1 : 0, {
       expectSettingsRevisionChange
     });
@@ -3602,6 +3945,7 @@ export class BridgeService extends EventEmitter {
       { expectSettingsRevisionChange }
     );
     await this.applyButtonRemapping(settings, expectSettingsRevisionChange);
+    await this.applyChordBindings(settings);
     await this.sendCommand(
       COMMAND_ID.SET_POLLING_RATE_MODE,
       pollingRateModeValue(settings.pollingRateMode),
