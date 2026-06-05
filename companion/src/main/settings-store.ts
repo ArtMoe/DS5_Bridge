@@ -23,7 +23,7 @@ import type {
   HostPersonaMode,
   RemapButtonId
 } from '../shared/protocol';
-import type { CompanionSettings, UiScalePercent } from '../shared/types';
+import type { CompanionSettings, UiScalePercent, UiThemePreset } from '../shared/types';
 
 const DEFAULT_CONTROLLER_PROFILE_SETTINGS: ControllerProfileSettings = {
   hapticsEnabled: true,
@@ -121,6 +121,7 @@ const CONTROLLER_PROFILE_SETTING_KEYS = new Set<keyof ControllerProfileSettings>
 export const DEFAULT_SETTINGS: CompanionSettings = {
   selectedPresetId: 'balanced',
   uiScalePercent: 100,
+  uiThemePreset: 'dark',
   launchAtStartupEnabled: false,
   hapticsEnabled: DEFAULT_CONTROLLER_PROFILE_SETTINGS.hapticsEnabled,
   hapticsGainPercent: DEFAULT_CONTROLLER_PROFILE_SETTINGS.hapticsGainPercent,
@@ -287,6 +288,19 @@ function normalizeAudioReactiveHapticsRelease(value: unknown): AudioReactiveHapt
 
 export function normalizeUiScalePercent(value: unknown): UiScalePercent {
   return value === 75 || value === 125 || value === 150 ? value : 100;
+}
+
+export function normalizeUiThemePreset(value: unknown): UiThemePreset {
+  switch (value) {
+    case 'light':
+    case 'dark':
+    case 'bubble-gum':
+    case 'pomegranate':
+    case 'kiwi':
+      return value;
+    default:
+      return DEFAULT_SETTINGS.uiThemePreset;
+  }
 }
 
 function cloneRemapMap(map: ButtonRemapMap): ButtonRemapMap {
@@ -674,6 +688,7 @@ function normalizeSettings(value: Partial<CompanionSettings> | null | undefined)
   return {
     selectedPresetId,
     uiScalePercent: normalizeUiScalePercent(value?.uiScalePercent),
+    uiThemePreset: normalizeUiThemePreset(value?.uiThemePreset),
     launchAtStartupEnabled: typeof value?.launchAtStartupEnabled === 'boolean'
       ? value.launchAtStartupEnabled
       : DEFAULT_SETTINGS.launchAtStartupEnabled,

@@ -50,9 +50,7 @@ import {
   IconVolumeOff as VolumeX,
   IconX as X
 } from '@tabler/icons-react';
-import kofiBadgeUrl from '../../../assets/brand/support_me_on_kofi_badge_dark.png';
 import playStationLogoUrl from '../../../assets/brand/playstation-logo.svg';
-import bridgeMarkUrl from '../../../assets/controllers/ds5-bridge_mark.svg';
 import controllerImage from '../../../assets/controllers/dualsense-edge-front.svg';
 import remappingEdgeLayoutImage from '../../../assets/controllers/dualsense-edge-remapping-layout.svg';
 import remappingLayoutImage from '../../../assets/controllers/dualsense-remapping-layout.svg';
@@ -74,6 +72,12 @@ import rightStickClickGlyphUrl from '../../../assets/glyphs/ps5-buttons-outline-
 import squareGlyphUrl from '../../../assets/glyphs/ps5-buttons-outline-white/svg/Square.svg';
 import triangleGlyphUrl from '../../../assets/glyphs/ps5-buttons-outline-white/svg/Triangle.svg';
 import testSpeakerToneUrl from './assets/test-speaker-tone-silence-tail.mp3';
+import {
+  DEFAULT_UI_THEME_PRESET,
+  UI_THEME_KOFI_BADGES,
+  UI_THEME_OPTIONS,
+  UI_THEME_SWATCHES
+} from './ui-themes';
 import { DEFAULT_BUTTON_REMAP_PROFILE_ID, DEFAULT_CONTROLLER_PROFILE_ID, REMAP_BUTTON_IDS, ackResultName } from '../shared/protocol';
 import type {
   AudioReactiveHapticsBassFocus,
@@ -93,7 +97,7 @@ import type {
   TriggerTestMode,
   TriggerTestTarget
 } from '../shared/protocol';
-import type { AudioHapticsSession, BridgeSnapshot, UiScalePercent } from '../shared/types';
+import type { AudioHapticsSession, BridgeSnapshot, UiScalePercent, UiThemePreset } from '../shared/types';
 
 type ControlTab = 'overview' | 'haptics' | 'audio' | 'triggers' | 'lighting' | 'remapping' | 'system';
 type ControllerType = BridgeStatusPayload['controllerType'];
@@ -400,16 +404,16 @@ const REMAP_STICK_CLICK_TARGET_OPTIONS: Array<[string, StandardRemapButtonId]> =
   id
 ]);
 const REMAP_CALLOUT_POINTS: Record<StandardRemapButtonId, Array<[number, number]>> = {
-  l2: [[2.4, 3.17], [117.91, 3.17], [171.1, 93.49]],
-  l1: [[2.4, 63.71], [129.99, 63.71], [161.13, 118.36]],
+  l2: [[2.4, 3.17], [118.22, 3.17], [171.1, 93.49]],
+  l1: [[2.4, 63.71], [121.9, 63.71], [153.13, 118.36]],
   create: [[2.4, 124.24], [110.86, 124.24], [134, 163], [186.65, 162.89]],
   'dpad-up': [[2.4, 184.78], [146.83, 184.78]],
   'dpad-right': [[2.4, 245.32], [126.31, 245.32], [138.09, 221.25]],
   'dpad-down': [[2.4, 305.86], [124.63, 305.86], [162.42, 241.39]],
   'dpad-left': [[2.4, 366.39], [106.55, 366.39], [189.13, 221.85]],
   l3: [[2.4, 426.93], [143.77, 426.93], [230.4, 275.47]],
-  r2: [[595.34, 3.17], [480.78, 3.17], [427.95, 93.94]],
-  r1: [[595.34, 63.71], [468.92, 63.71], [437.92, 117.79]],
+  r2: [[595.34, 3.17], [481.09, 3.17], [427.95, 93.94]],
+  r1: [[595.34, 63.71], [476.83, 63.71], [445.92, 117.79]],
   options: [[595.34, 124.24], [487.5, 124.24], [464.28, 162.89], [411.62, 162.89]],
   triangle: [[595.34, 184.78], [453.97, 184.78]],
   circle: [[595.34, 245.32], [486.88, 245.32], [473.71, 222.09]],
@@ -418,16 +422,16 @@ const REMAP_CALLOUT_POINTS: Record<StandardRemapButtonId, Array<[number, number]
   r3: [[595.34, 426.93], [453.97, 426.93], [369.45, 275.47]]
 };
 const REMAP_EDGE_CALLOUT_POINTS: Record<StandardRemapButtonId, Array<[number, number]>> = {
-  l2: [[0.5, 0.5], [116.01, 0.5], [162.08, 90.82]],
-  l1: [[0.5, 61.04], [128.09, 61.04], [162.08, 112.52]],
+  l2: [[0.5, 0.5], [119.4, 0.5], [162.08, 90.82]],
+  l1: [[0.5, 61.04], [118.08, 61.04], [154.08, 112.52]],
   create: [[0.5, 121.57], [108.96, 121.57], [132.1, 160.28], [183.55, 160.28]],
   'dpad-up': [[0.5, 182.11], [141.23, 182.11]],
   'dpad-right': [[0.5, 363.72], [104.65, 363.72], [188.5, 216.96]],
   'dpad-down': [[0.5, 303.19], [122.73, 303.19], [159.9, 239.79]],
   'dpad-left': [[0.5, 242.65], [124.41, 242.65], [137.98, 216.32]],
   l3: [[0.5, 424.26], [141.87, 424.26], [226.76, 271.06]],
-  r2: [[593.44, 0.5], [478.88, 0.5], [439.58, 90.82]],
-  r1: [[593.44, 61.04], [467.02, 61.04], [439.58, 112.52]],
+  r2: [[593.44, 0.5], [482.26, 0.5], [439.58, 90.82]],
+  r1: [[593.44, 61.04], [483.58, 61.04], [447.58, 112.52]],
   options: [[593.44, 121.57], [485.6, 121.57], [462.38, 160.22], [414.99, 160.22]],
   triangle: [[593.44, 182.11], [455.88, 182.11]],
   circle: [[593.44, 242.65], [484.98, 242.65], [470.67, 217.4]],
@@ -515,10 +519,25 @@ type SinkSelectableAudio = HTMLAudioElement & {
 const LAST_REMAP_CONTROLLER_TYPE_STORAGE_KEY = 'ds5bridge.lastRemapControllerType';
 const TRIGGER_LAB_CUSTOM_PROFILES_STORAGE_KEY = 'ds5bridge.triggerLabProfiles';
 const TRIGGER_LAB_WORKSPACE_STORAGE_KEY = 'ds5bridge.triggerLabWorkspace';
+const UI_THEME_PRESET_STORAGE_KEY = 'ds5bridge.uiThemePreset';
+const STARTUP_READY_HOLD_MS = 1000;
 
 function storedRemapControllerType(): KnownControllerType {
   const saved = window.localStorage.getItem(LAST_REMAP_CONTROLLER_TYPE_STORAGE_KEY);
   return saved === 'dualsense-edge' ? 'dualsense-edge' : 'dualsense';
+}
+
+function isUiThemePreset(value: string | null): value is UiThemePreset {
+  return UI_THEME_OPTIONS.some(([, preset]) => preset === value);
+}
+
+function storedUiThemePreset(): UiThemePreset {
+  const saved = window.localStorage.getItem(UI_THEME_PRESET_STORAGE_KEY);
+  return isUiThemePreset(saved) ? saved : DEFAULT_UI_THEME_PRESET;
+}
+
+function saveUiThemePreset(preset: UiThemePreset): void {
+  window.localStorage.setItem(UI_THEME_PRESET_STORAGE_KEY, preset);
 }
 
 type CustomSelectProps<T extends SelectValue> = {
@@ -930,6 +949,59 @@ function hostAudioCaptureIssueTooltip(reason: HostAudioCaptureStatusReason): str
     case 'helper-exit':
       return 'The host audio encoder stopped before capture started. The app will retry automatically.';
   }
+}
+
+function BridgeMark() {
+  return (
+    <svg className="bridge-mark" viewBox="335 88 310 292" aria-hidden="true" focusable="false">
+      <path
+        d="M 864.77 430.4 L 864.77 430.4 A 0.3453 0.3389 -55.841 0 1 864.65 429.74 C 890.7 418.97 908.21 394.39 913.07 367.04 Q 913.87 362.54 913.87 350.25 Q 913.87 343.85 913.73 310.51 C 913.59 279.64 890.84 248.89 859.8 243.26 Q 855.01 242.39 845.2 242.4 Q 735.01 242.44 716.25 242.4 Q 708.72 242.38 705.28 242.67 C 688.41 244.09 674.53 255.82 670.13 271.87 Q 668.71 277.05 668.72 288.26 Q 668.8 403.3 668.79 407.26 C 668.73 429.15 687.02 445.81 708.28 445.78 Q 723.29 445.75 737.72 445.69 L 737.72 445.69 A 0.6565 0.6519 78.2735 0 1 738.34 446.1 Q 748.79 472.7 773.46 487.92 L 773.46 487.92 A 0.2759 0.2737 60.5847 0 1 773.32 488.43 Q 746.06 488.27 717.83 488.45 Q 699.82 488.56 692.29 486.93 Q 675.65 483.32 663.78 475.73 Q 640.67 460.95 630.84 435.18 C 626.71 424.34 625.81 415.24 625.82 402.4 Q 625.87 313.63 625.78 289.05 Q 625.72 274.97 627.22 267.58 C 634.19 233.22 661.15 206.38 695.82 200.44 Q 701.96 199.39 712.75 199.39 Q 768.15 199.4 854 199.4 Q 858.34 199.41 867.8 201.07 Q 874.86 202.32 881.21 204.48 C 914.65 215.86 940.3 242.82 951.4 276.34 Q 956.72 292.43 956.78 308.5 Q 956.81 318.91 956.88 344.27 Q 956.94 364.15 955.25 374.14 Q 951.72 395.08 941.77 413.99 C 938.94 419.38 934.77 424.88 931.3 429.85 L 931.3 429.85 A 1.2776 1.2741 17.2763 0 1 930.25 430.4 L 864.77 430.4 Z"
+        fill="var(--bridge-mark-primary)"
+        transform="matrix(0.5818 0 0 0.5818 0 0)"
+      />
+      <path
+        d="M 896.95 373.03 L 896.95 373.03 A 0.6463 0.6441 -83.8938 0 1 896.32 373.54 Q 871.83 373.82 838.84 373.65 Q 820.82 373.56 816.73 374.53 C 795.55 379.55 784.9 400.68 790.87 421.13 C 793.48 430.08 798.91 436.11 806.81 440.77 Q 815.27 445.76 824.54 445.77 Q 857.29 445.77 980.74 445.82 Q 993.93 445.83 1007.2 451.29 C 1046.5 467.48 1065.63 510.54 1050.8199 550.98 Q 1043.61 570.68 1027.51 584.73 Q 1023.67 588.08 1014.98 593.18 Q 1005.17 598.94 992.3 601.61 Q 986.5 602.81 968.13 602.8 Q 876.32 602.75 842.35 602.75 Q 818.37 602.75 817.15 602.59 C 805.99 601.11 795.75 597.97 785.66 591.65 Q 759.6 575.33 750.46 544.77 Q 746.76 532.39 747.41 519.21 L 747.41 519.21 A 1.3529 1.3514 -88.6671 0 1 748.76 517.92 L 787.86 517.92 L 787.86 517.92 A 1.8981 1.8942 -88.1551 0 1 789.75 519.94 C 788.61 537.13 798.59 553.44 815.27 558.67 Q 820.27 560.24 835.53 560.22 Q 897.28 560.16 976.26 560.16 Q 990.81 560.16 1000.68 551.71 Q 1015.36 539.15 1013.57 519.34 Q 1013.3 516.35 1011.1 510.38 C 1008.01 501.96 1001.86 496.55 993.91 492.23 C 986.35 488.13 979.5 488.45 970 488.44 Q 892 488.41 827.25 488.47 Q 816.38 488.48 807.56 486.62 C 787.46 482.39 769.98 469.71 759.32 452.36 Q 757.23 448.98 755.78 445.86 C 754.36 442.81 752.55 439.97 751.58 437.02 Q 740.83 404.12 755.51 374.72 C 767.26 351.19 788.59 335.04 814.84 331.58 Q 820.95 330.78 832.06 330.81 Q 883.87 330.98 897.79 330.8 L 897.79 330.8 A 0.7015 0.6915 -89.2094 0 1 898.49 331.53 Q 898.05 343.01 898.46 354.62 C 898.72 361.7 898.34 366.91 896.95 373.03 Z"
+        fill="var(--bridge-mark-secondary)"
+        transform="matrix(0.5818 0 0 0.5818 0 0)"
+      />
+      <path
+        d="M 971.82 331.88 L 971.82 331.88 A 0.98 0.98 -60.1943 0 1 972.8 330.9 C 994.8 331.03 1015.5 340.93 1030.0601 357.64 Q 1049.92 380.42 1049.22 413.11 L 1049.22 413.11 A 1.591 1.5905 -89.2606 0 1 1047.63 414.66 L 1008.32 414.66 L 1008.32 414.66 A 1.9801 1.98 89.8546 0 1 1006.34 412.69 Q 1006.3 406.39 1006.21 405.46 Q 1004.53 389.03 991.04 379.45 Q 983.23 373.91 972.94 373.98 L 972.94 373.98 A 1.1101 1.11 -0.2558 0 1 971.82 372.87 L 971.82 331.88 Z"
+        fill="var(--bridge-mark-secondary)"
+        transform="matrix(0.5818 0 0 0.5818 0 0)"
+      />
+    </svg>
+  );
+}
+
+function StartupScreen({ ready }: { ready: boolean }) {
+  return (
+    <main className={`startup-screen ${ready ? 'ready' : ''}`} aria-live="polite">
+      <section className="startup-card" aria-label="Starting DS5 Bridge">
+        <div className="startup-brand">
+          <BridgeMark />
+          <div>
+            <strong>DS5 Bridge</strong>
+            <span>Starting companion</span>
+          </div>
+        </div>
+        <div className="startup-progress" aria-hidden="true">
+          <span />
+        </div>
+      </section>
+    </main>
+  );
+}
+
+function ProfileSaveStatus() {
+  return (
+    <div className="system-profile-save-status">
+      <span className="autosave-check-icon" aria-hidden="true">
+        <Check className="autosave-check-outline" size={16} />
+        <Check className="autosave-check-fill" size={16} />
+      </span>
+      <span>Changes Are Automatically Saved</span>
+    </div>
+  );
 }
 
 function FeatureTipsPanel({
@@ -1891,6 +1963,19 @@ function CustomSelect<T extends SelectValue>({
   );
 }
 
+function ThemeOption({ label, value }: { label: string; value: UiThemePreset }) {
+  return (
+    <span className="theme-option">
+      <span className="theme-option-swatches" aria-hidden="true">
+        {UI_THEME_SWATCHES[value].map((color, index) => (
+          <span key={`${value}-${index}`} style={{ background: color }} />
+        ))}
+      </span>
+      <span className="theme-option-label">{label}</span>
+    </span>
+  );
+}
+
 function AudioHapticsConfigLabel({
   id,
   label,
@@ -2035,6 +2120,7 @@ function remapTargetOptionsFor(buttonId: RemapButtonId): Array<[string, RemapBut
 
 export function App() {
   const [snapshot, setSnapshot] = useState<BridgeSnapshot | null>(null);
+  const [startupVisible, setStartupVisible] = useState(true);
   const [showDiagnostics, setShowDiagnostics] = useState(false);
   const [activeControlTab, setActiveControlTab] = useState<ControlTab>('overview');
   const [hapticsValue, setHapticsValue] = useState(100);
@@ -2091,6 +2177,7 @@ export function App() {
   const [lastRemapControllerType, setLastRemapControllerType] = useState<KnownControllerType>(storedRemapControllerType);
   const [windowDragging, setWindowDragging] = useState(false);
   const [testLocked, setTestLocked] = useState(false);
+  const [startupTheme, setStartupTheme] = useState<UiThemePreset>(storedUiThemePreset);
   const [speakerTestLocked, setSpeakerTestLocked] = useState(false);
   const [speakerOutputAvailable, setSpeakerOutputAvailable] = useState<boolean | null>(null);
   const [speakerTestError, setSpeakerTestError] = useState<string | null>(null);
@@ -2129,6 +2216,8 @@ export function App() {
   const featureFocusTimerRef = useRef<number | null>(null);
   const windowDraggingRef = useRef(false);
   const windowDragReleaseTimerRef = useRef<number | null>(null);
+  const startupReadyTimerRef = useRef<number | null>(null);
+  const startupReadyArmedRef = useRef(false);
   const triggerLabRestoreAppliedRef = useRef(false);
   const deferredSnapshotRef = useRef<BridgeSnapshot | null>(null);
   const overviewSleepConfirmArmedRef = useRef(false);
@@ -2137,6 +2226,29 @@ export function App() {
   useEffect(() => {
     saveTriggerLabCustomProfiles(triggerLabCustomProfiles);
   }, [triggerLabCustomProfiles]);
+
+  useEffect(() => {
+    const liveTheme = snapshot?.settings.uiThemePreset;
+    if (!liveTheme) return;
+    setStartupTheme(liveTheme);
+    saveUiThemePreset(liveTheme);
+  }, [snapshot?.settings.uiThemePreset]);
+
+  useEffect(() => {
+    const hasSnapshot = Boolean(snapshot);
+    if (!hasSnapshot || !startupVisible || startupReadyArmedRef.current) return undefined;
+    startupReadyArmedRef.current = true;
+    startupReadyTimerRef.current = window.setTimeout(() => {
+      setStartupVisible(false);
+      startupReadyTimerRef.current = null;
+    }, STARTUP_READY_HOLD_MS);
+    return () => {
+      if (startupReadyTimerRef.current !== null) {
+        window.clearTimeout(startupReadyTimerRef.current);
+        startupReadyTimerRef.current = null;
+      }
+    };
+  }, [Boolean(snapshot), startupVisible]);
 
   useEffect(() => {
     saveTriggerLabWorkspaceState({
@@ -2288,6 +2400,9 @@ export function App() {
       }
       if (windowDragReleaseTimerRef.current !== null) {
         window.clearTimeout(windowDragReleaseTimerRef.current);
+      }
+      if (startupReadyTimerRef.current !== null) {
+        window.clearTimeout(startupReadyTimerRef.current);
       }
       window.removeEventListener('mouseup', finishWindowDrag);
       window.removeEventListener('blur', finishWindowDrag);
@@ -4614,9 +4729,17 @@ export function App() {
     );
   }
 
-  if (!snapshot) {
-    return <div className="shell loading">Starting bridge companion</div>;
+  const activeTheme = snapshot?.settings.uiThemePreset ?? startupTheme;
+
+  if (!snapshot || startupVisible) {
+    return (
+      <div className="shell loading" data-theme={activeTheme}>
+        <StartupScreen ready={Boolean(snapshot)} />
+      </div>
+    );
   }
+
+  const kofiBadgeUrl = UI_THEME_KOFI_BADGES[activeTheme] ?? UI_THEME_KOFI_BADGES[DEFAULT_UI_THEME_PRESET];
 
   return (
     <div
@@ -4625,6 +4748,7 @@ export function App() {
         windowDragging ? 'window-dragging' : '',
         controllerControlsAvailable ? '' : 'controller-unavailable'
       ].filter(Boolean).join(' ')}
+      data-theme={activeTheme}
     >
       <div
         className="window-bar"
@@ -4641,7 +4765,7 @@ export function App() {
         }}
       >
         <span className="bridge-wordmark" aria-label="DS5 Bridge">
-          <img className="bridge-mark" src={bridgeMarkUrl} alt="" aria-hidden="true" />
+          <BridgeMark />
           <span className="bridge-wordmark-ds">DS5</span>
           <span className="bridge-wordmark-name">Bridge</span>
         </span>
@@ -6426,10 +6550,7 @@ export function App() {
               </div>
               <section className="feature-card remapping-card">
                 <div className="remapping-profile-strip">
-                  <div className="system-profile-save-status">
-                    <Check size={16} />
-                    <span>Changes Are Automatically Saved</span>
-                  </div>
+                  <ProfileSaveStatus />
                   <div className="remapping-profile-actions">
                     <button
                       type="button"
@@ -6890,10 +7011,7 @@ export function App() {
               </div>
               <section className="feature-help-panel system-profile-panel" aria-label="System profiles and tips">
                 <div className="system-profile-strip">
-                  <div className="system-profile-save-status">
-                    <Check size={16} />
-                    <span>Changes Are Automatically Saved</span>
-                  </div>
+                  <ProfileSaveStatus />
                   <div className="remapping-profile-actions">
                     <button
                       type="button"
@@ -7295,7 +7413,25 @@ export function App() {
             </div>
             <div className="bridge-settings-columns">
               <div className="bridge-settings-column">
-                <div className="settings-menu-section-label">General</div>
+                <div className="settings-menu-section-label">Appearance</div>
+                <div className="settings-menu-row">
+                  <div className="settings-menu-copy">
+                    <strong>Theme</strong>
+                  </div>
+                  <CustomSelect
+                    value={snapshot.settings.uiThemePreset}
+                    options={UI_THEME_OPTIONS}
+                    className="settings-theme-select"
+                    showSelectedCheck={false}
+                    ariaLabel="UI theme"
+                    disabled={pendingAction !== null}
+                    renderValue={(label, value) => <ThemeOption label={label} value={value} />}
+                    renderOption={(label, value) => <ThemeOption label={label} value={value} />}
+                    onChange={(value) => {
+                      void runAction('ui-theme', () => window.bridge.setUiThemePreset(value));
+                    }}
+                  />
+                </div>
                 <div className="settings-menu-row">
                   <div className="settings-menu-copy">
                     <strong>UI Scale</strong>
@@ -7312,6 +7448,7 @@ export function App() {
                     }}
                   />
                 </div>
+                <div className="settings-menu-section-label">General</div>
                 <div className="settings-menu-row">
                   <div className="settings-menu-copy">
                     <strong>Launch at Startup</strong>

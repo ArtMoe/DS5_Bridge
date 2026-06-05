@@ -56,6 +56,7 @@ describe('SettingsStore', () => {
     });
     expect(settings.hostEncodedAudioEnabled).toBe(true);
     expect(settings.duplexMicEnabled).toBe(false);
+    expect(settings.uiThemePreset).toBe('dark');
     expect(settings.micVolumePercent).toBe(100);
     expect(settings.micMuted).toBe(true);
     expect(settings.lightbarColor).toBe('#0000ff');
@@ -345,6 +346,7 @@ describe('SettingsStore', () => {
     const userDataPath = tempUserDataPath();
     writeFileSync(path.join(userDataPath, 'settings.json'), JSON.stringify({
       uiScalePercent: 110,
+      uiThemePreset: 'laserwave',
       lightbarColor: '#golden',
       speakerVolumePercent: 999,
       idleDisconnectTimeoutMinutes: -10,
@@ -367,6 +369,7 @@ describe('SettingsStore', () => {
     const settings = new SettingsStore(userDataPath).get();
 
     expect(settings.uiScalePercent).toBe(100);
+    expect(settings.uiThemePreset).toBe(DEFAULT_SETTINGS.uiThemePreset);
     expect(settings.lightbarColor).toBe(DEFAULT_SETTINGS.lightbarColor);
     expect(settings.speakerVolumePercent).toBe(100);
     expect(settings.idleDisconnectTimeoutMinutes).toBe(1);
@@ -374,5 +377,16 @@ describe('SettingsStore', () => {
     expect(settings.controllerProfiles[0]?.settings.speakerVolumePercent).toBe(100);
     expect(settings.controllerProfiles[1]?.settings.pollingRateMode).toBe(DEFAULT_SETTINGS.pollingRateMode);
     expect(settings.controllerProfiles[1]?.settings.lightbarColor).toBe('#123456');
+  });
+
+  it('persists the selected UI theme preset', () => {
+    const userDataPath = tempUserDataPath();
+    const store = new SettingsStore(userDataPath);
+
+    const updated = store.update({ uiThemePreset: 'kiwi' });
+
+    expect(updated.uiThemePreset).toBe('kiwi');
+    expect(persistedSettings(userDataPath).uiThemePreset).toBe('kiwi');
+    expect(new SettingsStore(userDataPath).get().uiThemePreset).toBe('kiwi');
   });
 });

@@ -5,6 +5,7 @@ import { describe, expect, it } from 'vitest';
 
 const styles = readFileSync(new URL('./styles.css', import.meta.url), 'utf8');
 const appSource = readFileSync(new URL('./App.tsx', import.meta.url), 'utf8');
+const themeSource = readFileSync(new URL('./ui-themes.ts', import.meta.url), 'utf8');
 const normalizedStyles = styles.replace(/\s+/g, ' ').trim();
 
 function cssBlock(selector: string, requiredText?: string): string {
@@ -103,25 +104,187 @@ describe('companion layout CSS', () => {
   });
 
   it('keeps feature cards visually aligned with the darker tips surface', () => {
-    expect(cssBlock('.feature-card', 'background: rgba(3, 10, 18, 0.52);')).toContain(
-      'background: rgba(3, 10, 18, 0.52);'
+    expect(cssBlock('.feature-card', 'background: var(--surface-card);')).toContain(
+      'background: var(--surface-card);'
     );
-    expect(cssBlock('.system-card', 'background: rgba(3, 10, 18, 0.52);')).toContain(
-      'background: rgba(3, 10, 18, 0.52);'
+    expect(cssBlock('.system-card', 'background: var(--surface-card);')).toContain(
+      'background: var(--surface-card);'
     );
-    const featureCardTitle = cssBlock('.feature-card-title', 'background: rgba(3, 9, 16, 0.48);');
-    expect(featureCardTitle).toContain('background: rgba(3, 9, 16, 0.48);');
+    const featureCardTitle = cssBlock('.feature-card-title', 'background: var(--surface-card-header);');
+    expect(featureCardTitle).toContain('background: var(--surface-card-header);');
+    expect(featureCardTitle).toContain('border-radius: calc(var(--card-radius) - 1px) calc(var(--card-radius) - 1px) 0 0;');
     expect(featureCardTitle).not.toContain('radial-gradient');
+    expect(cssBlock('.hero-card,', 'background-clip: padding-box;')).toContain('background-clip: padding-box;');
   });
 
   it('keeps overview containers on the darker card surface while retaining restrained radial accents', () => {
     const overviewCard = cssBlock('.overview-card', 'background:');
-    expect(overviewCard).toContain('radial-gradient(circle at 92% 0%, rgba(40, 124, 255, 0.045), transparent 38%)');
-    expect(overviewCard).toContain('rgba(3, 10, 18, 0.52)');
-    const overviewControlPanel = cssBlock('.overview-control-panel', 'background: rgba(3, 10, 18, 0.52);');
-    expect(overviewControlPanel).toContain('background: rgba(3, 10, 18, 0.52);');
-    const overviewStatusPanel = cssBlock('.overview-status-panel', 'background: rgba(3, 10, 18, 0.52);');
-    expect(overviewStatusPanel).toContain('background: rgba(3, 10, 18, 0.52);');
+    expect(overviewCard).toContain('var(--overview-accent-gradient)');
+    expect(overviewCard).toContain('var(--surface-card)');
+    const overviewControlPanel = cssBlock('.overview-control-panel', 'background: var(--surface-panel);');
+    expect(overviewControlPanel).toContain('background: var(--surface-panel);');
+    const overviewStatusPanel = cssBlock('.overview-status-panel', 'background: var(--surface-panel);');
+    expect(overviewStatusPanel).toContain('background: var(--surface-panel);');
+  });
+
+  it('defines preset theme selectors and the Bridge Settings theme control', () => {
+    for (const theme of ['light', 'dark', 'bubble-gum', 'pomegranate', 'kiwi']) {
+      expect(styles).toContain(`.shell[data-theme="${theme}"]`);
+      expect(themeSource).toContain(`'${theme}'`);
+    }
+    expect(appSource).toContain('ariaLabel="UI theme"');
+    expect(appSource).toContain('settings-theme-select');
+    expect(themeSource).toContain('support_me_on_kofi_badge_beige.png');
+    expect(themeSource).toContain('support_me_on_kofi_badge_blue.png');
+    expect(themeSource).toContain('support_me_on_kofi_badge_red.png');
+    expect(themeSource).toContain("'bubble-gum': kofiBadgeBlueUrl");
+    expect(themeSource).toContain('kiwi: kofiBadgeDarkUrl');
+  });
+
+  it('uses the cached theme and branded panel for the startup loading state', () => {
+    expect(appSource).toContain("const UI_THEME_PRESET_STORAGE_KEY = 'ds5bridge.uiThemePreset';");
+    expect(appSource).toContain('const STARTUP_READY_HOLD_MS = 1000;');
+    expect(appSource).toContain('function storedUiThemePreset()');
+    expect(appSource).toContain('function StartupScreen({ ready }: { ready: boolean })');
+    expect(appSource).toContain('const startupReadyArmedRef = useRef(false);');
+    expect(appSource).toContain('}, [Boolean(snapshot), startupVisible]);');
+    expect(appSource).not.toContain('}, [snapshot, startupVisible]);');
+    expect(appSource).toContain('<StartupScreen ready={Boolean(snapshot)} />');
+    expect(appSource).not.toContain('>Starting bridge companion</div>');
+    expect(cssBlock('.loading', 'grid-template-rows: minmax(0, 1fr);')).toContain('place-items: center;');
+    expect(cssBlock('.startup-card', 'background: var(--surface-card);')).toContain(
+      'border: 1px solid var(--surface-border-strong);'
+    );
+    const startupProgress = cssBlock('.startup-progress span', 'animation: startup-progress-prime 180ms ease-out forwards;');
+    expect(startupProgress).toContain('background: var(--accent-selected);');
+    expect(startupProgress).toContain('transform: scaleX(0);');
+    expect(startupProgress).toContain('transform-origin: left center;');
+    expect(cssBlock('.startup-screen.ready .startup-progress span', 'animation: startup-progress-complete 1000ms ease-out forwards;')).toContain(
+      'animation: startup-progress-complete 1000ms ease-out forwards;'
+    );
+    expect(normalizedStyles).toContain('@keyframes startup-progress-prime');
+    expect(normalizedStyles).toContain('transform: scaleX(0.84);');
+    expect(normalizedStyles).toContain('@keyframes startup-progress-complete');
+    expect(normalizedStyles).toContain('transform: scaleX(1);');
+  });
+
+  it('keeps theme window bars and sidebars flat instead of gradient layered', () => {
+    for (const selector of [
+      ':root',
+      '.shell[data-theme="light"]',
+      '.shell[data-theme="bubble-gum"]',
+      '.shell[data-theme="pomegranate"]',
+      '.shell[data-theme="kiwi"]'
+    ]) {
+      const themeBlock = cssBlock(selector, '--window-bar-bg:');
+      expect(themeBlock).not.toContain('var(--sidebar-width)');
+      expect(themeBlock).not.toContain('--window-bar-bg: linear-gradient');
+      expect(themeBlock).not.toContain('--sidebar-bg: linear-gradient');
+      expect(themeBlock).not.toContain('--sidebar-overlay: linear-gradient');
+      expect(themeBlock).toContain('--window-bar-bg: var(--window-bar-bg-flat);');
+      expect(themeBlock).toContain('--sidebar-overlay: transparent;');
+    }
+    const bubbleGumTheme = cssBlock('.shell[data-theme="bubble-gum"]', '--window-bar-bg-flat: #d86fbd;');
+    expect(bubbleGumTheme).toContain('--window-bar-border: rgba(124, 30, 111, 0.56);');
+  });
+
+  it('uses theme-aware colors for the navbar bridge mark', () => {
+    expect(appSource).toContain('function BridgeMark()');
+    expect(appSource).toContain('fill="var(--bridge-mark-primary)"');
+    expect(appSource).toContain('fill="var(--bridge-mark-secondary)"');
+    expect(appSource).not.toContain('bridgeMarkUrl');
+    expect(cssBlock(':root', '--bridge-mark-primary: #ffffff;')).toContain('--bridge-mark-secondary: #046fff;');
+    expect(cssBlock('.shell[data-theme="light"]', '--bridge-mark-primary: #172232;')).toContain(
+      '--bridge-mark-secondary: #046fff;'
+    );
+    expect(cssBlock('.shell[data-theme="bubble-gum"]', '--bridge-mark-primary: #140d18;')).toContain(
+      '--bridge-mark-secondary: #046fff;'
+    );
+    expect(cssBlock('.shell[data-theme="pomegranate"]', '--bridge-mark-primary: #ffffff;')).toContain(
+      '--bridge-mark-secondary: #00a3ff;'
+    );
+    expect(cssBlock('.shell[data-theme="kiwi"]', '--bridge-mark-primary: #eaffef;')).toContain(
+      '--bridge-mark-secondary: #9cff2f;'
+    );
+  });
+
+  it('uses dedicated sidebar text tokens for section labels and nav links', () => {
+    const rootTokens = cssBlock(':root', '--sidebar-label: var(--text-dim);');
+    const pomegranateTheme = cssBlock('.shell[data-theme="pomegranate"]', '--sidebar-label: #ff6ead;');
+    const kiwiTheme = cssBlock('.shell[data-theme="kiwi"]', '--sidebar-label: #7bbd67;');
+    expect(rootTokens).toContain('--sidebar-link: var(--text-secondary);');
+    expect(rootTokens).toContain('--sidebar-link-hover: var(--text-strong);');
+    expect(rootTokens).toContain('--sidebar-link-disabled: var(--text-dim);');
+    expect(pomegranateTheme).toContain('--sidebar-link: #f0d4e5;');
+    expect(pomegranateTheme).toContain('--sidebar-link-hover: #fff7fc;');
+    expect(kiwiTheme).toContain('--sidebar-link: #c6e8ca;');
+    expect(kiwiTheme).toContain('--sidebar-link-hover: #f4fff5;');
+    expect(cssBlock('.shell[data-theme="light"]', '--sidebar-label: #53647a;')).toContain(
+      '--sidebar-link-disabled: #63748c;'
+    );
+    expect(cssBlock('.shell[data-theme="bubble-gum"]', '--sidebar-label: #6a2b65;')).toContain(
+      '--sidebar-link-disabled: #68456d;'
+    );
+    expect(cssBlock('.sidebar-section-label', 'color: var(--sidebar-label);')).toContain(
+      'color: var(--sidebar-label);'
+    );
+    expect(cssBlock('.control-tabs button,', 'color: var(--sidebar-link);')).toContain(
+      'color: var(--sidebar-link);'
+    );
+    expect(cssBlock('.control-tabs button:not(.active):hover,', 'color: var(--sidebar-link-hover);')).toContain(
+      'color: var(--sidebar-link-hover);'
+    );
+    const disabledSidebarButton = cssBlock('.sidebar-nav-button:disabled', 'color: var(--sidebar-link-disabled);');
+    expect(disabledSidebarButton).toContain('color: var(--sidebar-link-disabled);');
+    expect(disabledSidebarButton).toContain('opacity: 1;');
+  });
+
+  it('splits page headings from card headings so themes can tint page chrome', () => {
+    const rootTokens = cssBlock(':root', '--page-heading-text: var(--text-primary);');
+    const pomegranateTheme = cssBlock('.shell[data-theme="pomegranate"]', '--page-heading-text: #ff5aa6;');
+    const kiwiTheme = cssBlock('.shell[data-theme="kiwi"]', '--page-heading-text: #9cff2f;');
+    expect(rootTokens).toContain('--page-subtitle-text: var(--text-secondary);');
+    expect(rootTokens).toContain('--card-heading-text: var(--text-primary);');
+    expect(rootTokens).toContain('--card-subtitle-text: var(--text-secondary);');
+    expect(rootTokens).toContain('--settings-copy-text: var(--text-muted);');
+    expect(pomegranateTheme).toContain('--page-subtitle-text: #d94f8f;');
+    expect(pomegranateTheme).toContain('--card-heading-text: var(--text-strong);');
+    expect(pomegranateTheme).toContain('--settings-copy-text: var(--text-secondary);');
+    expect(kiwiTheme).toContain('--page-subtitle-text: #a7dba7;');
+    expect(kiwiTheme).toContain('--card-heading-text: var(--text-strong);');
+    expect(cssBlock('.shell[data-theme="light"]', '--page-heading-text: #0b1320;')).toContain(
+      '--settings-copy-text: #4d6179;'
+    );
+    expect(cssBlock('.shell[data-theme="bubble-gum"]', '--page-heading-text: #140d18;')).toContain(
+      '--settings-copy-text: #5a3e60;'
+    );
+    expect(cssBlock('.control-heading h2,', 'color: var(--page-heading-text);')).toContain(
+      'color: var(--page-heading-text);'
+    );
+    expect(cssBlock('.system-card h3,', 'color: var(--card-heading-text);')).toContain(
+      'color: var(--card-heading-text);'
+    );
+    expect(cssBlock('.control-heading p,', 'color: var(--page-subtitle-text);')).toContain(
+      'color: var(--page-subtitle-text);'
+    );
+    expect(cssBlock('.title-copy p', 'color: var(--card-subtitle-text);')).toContain(
+      'color: var(--card-subtitle-text);'
+    );
+    expect(cssBlock('.settings-menu-copy > span', 'color: var(--settings-copy-text);')).toContain(
+      'color: var(--settings-copy-text);'
+    );
+    expect(cssBlock('.notifications-menu .settings-menu-row span', 'color: var(--settings-copy-text);')).toContain(
+      'color: var(--settings-copy-text);'
+    );
+  });
+
+  it('sizes the theme selector to its longest option instead of a fixed wide box', () => {
+    const themeSelect = cssBlock('.settings-theme-select', 'width: max-content;');
+    expect(themeSelect).toContain('flex: 0 0 auto;');
+    expect(themeSelect).toContain('width: max-content;');
+    expect(cssBlock('.settings-theme-select .custom-select-menu', 'min-width: max-content;')).toContain(
+      'min-width: max-content;'
+    );
   });
 
   it('keeps the remapping profile strip aligned with shared feature headers', () => {
@@ -136,15 +299,40 @@ describe('companion layout CSS', () => {
     );
   });
 
+  it('keeps autosave indicators aligned with profile action button styling', () => {
+    expect(styles).not.toContain('--autosave-status-bg');
+    expect(styles).not.toContain('--autosave-status-border');
+    expect(styles).not.toContain('--autosave-status-text');
+    const systemProfileStrip = cssBlock('.system-profile-strip', 'padding: 10px 14px;');
+    expect(systemProfileStrip).toContain('min-height: 58px;');
+    expect(systemProfileStrip).toContain('padding: 10px 14px;');
+    expect(normalizedStyles).toContain('.remapping-profile-actions button, .system-profile-save-status {');
+    const profileButtonBlock = cssBlock('.remapping-profile-actions button,', 'background: var(--surface-control-soft);');
+    expect(profileButtonBlock).toContain('min-height: 30px;');
+    expect(profileButtonBlock).toContain('gap: 6px;');
+    expect(profileButtonBlock).toContain('border: 1px solid var(--surface-border-strong);');
+    expect(profileButtonBlock).toContain('color: var(--text-control);');
+    expect(profileButtonBlock).toContain('background: var(--surface-control-soft);');
+    expect(profileButtonBlock).toContain('font-size: 12px;');
+    expect(profileButtonBlock).toContain('font-weight: 700;');
+    expect(profileButtonBlock).toContain('box-shadow: none;');
+    expect(cssBlock('.system-profile-save-status', 'min-width: 0;')).not.toContain('background:');
+    expect(appSource).toContain('function ProfileSaveStatus()');
+    expect(appSource).toContain('autosave-check-outline');
+    expect(appSource).toContain('autosave-check-fill');
+    expect(cssBlock('.autosave-check-outline', 'color: #ffffff;')).toContain('stroke-width: 5;');
+    expect(cssBlock('.autosave-check-fill', 'color: var(--success);')).toContain('stroke-width: 2.5;');
+  });
+
   it('mutes active toggles when the controller is unavailable', () => {
-    expect(cssBlock('.shell.controller-unavailable .inline-switch', 'color: rgba(199, 211, 228, 0.58);')).toContain(
-      'color: rgba(199, 211, 228, 0.58);'
+    expect(cssBlock('.shell.controller-unavailable .inline-switch', 'color: var(--text-disabled);')).toContain(
+      'color: var(--text-disabled);'
     );
-    expect(cssBlock('.shell.controller-unavailable .inline-switch .host-encoding-state', 'opacity: 0.62;')).toContain(
-      'opacity: 0.62;'
+    expect(cssBlock('.shell.controller-unavailable .inline-switch .host-encoding-state', 'opacity: var(--disabled-opacity);')).toContain(
+      'opacity: var(--disabled-opacity);'
     );
-    expect(cssBlock('.shell.controller-unavailable .inline-switch .switch.on', 'background: rgba(126, 145, 172, 0.2);')).toContain(
-      'background: rgba(126, 145, 172, 0.2);'
+    expect(cssBlock('.shell.controller-unavailable .inline-switch .switch.on', 'background: var(--surface-disabled-strong);')).toContain(
+      'background: var(--surface-disabled-strong);'
     );
     expect(cssBlock('.shell.controller-unavailable button.feature-icon.active', 'box-shadow: none;')).toContain(
       'box-shadow: none;'
@@ -154,27 +342,158 @@ describe('companion layout CSS', () => {
   });
 
   it('colors the device container border by device status', () => {
-    expect(cssBlock('.hero-main.device-status-good', 'border-color: rgba(115, 223, 99, 0.4);')).toContain(
-      'border-color: rgba(115, 223, 99, 0.4);'
+    expect(cssBlock('.hero-main.device-status-good', 'border-color: var(--success-border-strong);')).toContain(
+      'border-color: var(--success-border-strong);'
     );
-    expect(cssBlock('.hero-main.device-status-warn', 'border-color: rgba(244, 192, 93, 0.4);')).toContain(
-      'border-color: rgba(244, 192, 93, 0.4);'
+    expect(cssBlock('.hero-main.device-status-warn', 'border-color: var(--warning-border-strong);')).toContain(
+      'border-color: var(--warning-border-strong);'
     );
-    expect(cssBlock('.hero-main.device-status-bad', 'border-color: rgba(255, 90, 112, 0.4);')).toContain(
-      'border-color: rgba(255, 90, 112, 0.4);'
+    expect(cssBlock('.hero-main.device-status-bad', 'border-color: var(--danger-border-strong);')).toContain(
+      'border-color: var(--danger-border-strong);'
+    );
+  });
+
+  it('renders the Power Saving Green Icon tip as the filled success tile with a white glyph', () => {
+    const successTip = cssBlock('.feature-help-icon.success', 'background: var(--success-selected);');
+    expect(appSource).toContain("title: 'Green Icon'");
+    expect(appSource).toContain("tone: 'success'");
+    expect(successTip).toContain('color: #ffffff;');
+    expect(successTip).toContain('border-color: var(--success-border-strong);');
+    expect(successTip).toContain('background: var(--success-selected);');
+    expect(successTip).toContain('inset 0 -2px 0 var(--success-border-strong);');
+    const successTipHover = cssBlock('.feature-help-icon-button.success:hover,', 'background: var(--success-selected);');
+    expect(successTipHover).toContain('color: #ffffff;');
+    expect(successTipHover).toContain('background: var(--success-selected);');
+  });
+
+  it('uses theme text tokens for trigger lab meter labels and values', () => {
+    expect(cssBlock('.trigger-lab-meter-row > span', 'color: var(--text-secondary);')).toContain(
+      'color: var(--text-secondary);'
+    );
+    expect(cssBlock('.trigger-lab-meter-row > strong', 'color: var(--text-strong);')).toContain(
+      'color: var(--text-strong);'
+    );
+  });
+
+  it('uses selected tokens for active navigation and audio haptics mode chips', () => {
+    const shellTokens = cssBlock('.shell', '--nav-active-bg:');
+    const lightTheme = cssBlock('.shell[data-theme="light"]', '--nav-active-base: white;');
+    const bubbleGumTheme = cssBlock('.shell[data-theme="bubble-gum"]', '--nav-active-base: white;');
+    const pomegranateTheme = cssBlock('.shell[data-theme="pomegranate"]', '--nav-active-base: #211323;');
+    const kiwiTheme = cssBlock('.shell[data-theme="kiwi"]', '--nav-active-base: #0d1f13;');
+    expect(cssBlock('.control-tabs button.active', 'background: var(--nav-active-bg);')).toContain(
+      'background: var(--nav-active-bg);'
+    );
+    expect(cssBlock('.control-tabs button.active svg', 'color: var(--nav-active-icon);')).toContain(
+      'color: var(--nav-active-icon);'
+    );
+    expect(cssBlock('.sidebar-action-button.active', 'background: var(--nav-active-bg);')).toContain(
+      'background: var(--nav-active-bg);'
+    );
+    expect(cssBlock('.audio-haptics-mode-state.warn', 'background: var(--info-selected);')).toContain(
+      'color: var(--info-selected-text);'
+    );
+    expect(cssBlock('.audio-haptics-mode-state.retry', 'background: var(--info-selected);')).toContain(
+      'color: var(--info-selected-text);'
+    );
+    expect(shellTokens).toContain(
+      '--nav-active-bg: color-mix(in srgb, var(--accent) var(--nav-active-bg-weight), var(--nav-active-base));'
+    );
+    expect(shellTokens).toContain(
+      '--nav-active-rail: color-mix(in srgb, var(--accent-strong) var(--nav-active-rail-weight), var(--accent));'
+    );
+    for (const theme of [lightTheme, bubbleGumTheme]) {
+      expect(theme).toContain('--nav-active-base: white;');
+      expect(theme).toContain('--nav-active-bg-weight: 40%;');
+      expect(theme).toContain('--nav-active-border-weight: 78%;');
+      expect(theme).toContain('--nav-active-rail-weight: 84%;');
+    }
+    expect(lightTheme).toContain('--command-chip-muted-text: #1559bd;');
+    expect(lightTheme).toContain('--command-chip-active-bg: #2f78d8;');
+    expect(lightTheme).toContain('--command-chip-active-border: #1559bd;');
+    expect(lightTheme).toContain('--command-chip-active-text: #ffffff;');
+    expect(lightTheme).toContain('--command-chip-muted-bg: color-mix(in srgb, var(--accent) 18%, #edf3fa 82%);');
+    expect(lightTheme).toContain('--command-chip-muted-border: color-mix(in srgb, var(--accent) 66%, #edf3fa 34%);');
+    expect(lightTheme).toContain('--success: #00b866;');
+    expect(lightTheme).toContain('--success-selected: #14935a;');
+    expect(bubbleGumTheme).toContain('--command-chip-muted-text: #8f2174;');
+    expect(bubbleGumTheme).toContain('--command-chip-active-bg: #d44799;');
+    expect(bubbleGumTheme).toContain('--command-chip-active-border: #a3368e;');
+    expect(bubbleGumTheme).toContain('--command-chip-active-text: #ffffff;');
+    expect(bubbleGumTheme).toContain('--command-chip-muted-bg: color-mix(in srgb, var(--accent) 20%, #ffd8f5 80%);');
+    expect(bubbleGumTheme).toContain('--command-chip-muted-border: color-mix(in srgb, var(--accent) 70%, #ffd8f5 30%);');
+    expect(bubbleGumTheme).toContain('--success: #00b866;');
+    expect(bubbleGumTheme).toContain('--success-selected: #14935a;');
+    expect(bubbleGumTheme).toContain('--info-selected: #d44799;');
+    expect(bubbleGumTheme).toContain('--info-border-strong: rgba(163, 54, 142, 0.66);');
+    expect(pomegranateTheme).toContain('--nav-active-base: #211323;');
+    expect(pomegranateTheme).toContain('--nav-active-bg-weight: 50%;');
+    expect(pomegranateTheme).toContain('--nav-active-border-weight: 86%;');
+    expect(pomegranateTheme).toContain('--nav-active-rail-weight: 88%;');
+    expect(kiwiTheme).toContain('--nav-active-bg-weight: 48%;');
+    expect(kiwiTheme).toContain('--accent-selected: #9cff2f;');
+    expect(kiwiTheme).toContain('--accent-text: #061006;');
+    expect(kiwiTheme).toContain('--command-chip-active-bg: #9cff2f;');
+    expect(kiwiTheme).toContain('--command-chip-active-border: #6ecf18;');
+    expect(kiwiTheme).toContain('--danger-selected: #d52d3e;');
+    expect(kiwiTheme).toContain('--danger-selected-text: #ffffff;');
+    expect(bubbleGumTheme).toContain('--warning-selected-text: #ffffff;');
+    expect(cssBlock('.emergency-repair-button', 'background: var(--danger-selected);')).toContain(
+      'color: var(--danger-selected-text);'
+    );
+    expect(shellTokens).toContain('--command-chip-bg: color-mix(in srgb, var(--accent) 18%, var(--command-chip-base) 82%);');
+    expect(shellTokens).toContain('--command-chip-active-bg: color-mix(in srgb, var(--accent) 44%, var(--command-chip-base) 56%);');
+    expect(shellTokens).toContain('--command-chip-muted-bg: color-mix(in srgb, var(--accent) 14%, var(--command-chip-base) 86%);');
+  });
+
+  it('uses solid command-chip tokens for overview status actions', () => {
+    expect(cssBlock('.overview-chip', 'background: var(--command-chip-bg);')).toContain(
+      'border: 1px solid var(--command-chip-border);'
+    );
+    expect(cssBlock('.overview-chip', 'background: var(--command-chip-bg);')).toContain(
+      'box-shadow: inset 0 -2px 0 var(--command-chip-border);'
+    );
+    expect(cssBlock('button.overview-chip:hover', 'background: var(--command-chip-hover-bg);')).toContain(
+      'border-color: var(--command-chip-hover-border);'
+    );
+    expect(cssBlock('.overview-chip.active', 'background: var(--command-chip-active-bg);')).toContain(
+      'color: var(--command-chip-active-text);'
+    );
+    expect(cssBlock('.overview-chip.active', 'background: var(--command-chip-active-bg);')).toContain(
+      'box-shadow: inset 0 -2px 0 var(--command-chip-active-border);'
+    );
+    expect(cssBlock('.overview-chip.success', 'background: var(--command-chip-success-bg);')).toContain(
+      'color: var(--command-chip-success-text);'
+    );
+    expect(cssBlock('.overview-chip.muted', 'background: var(--command-chip-muted-bg);')).toContain(
+      'border-color: var(--command-chip-muted-border);'
     );
   });
 
   it('frames overview quick controls like tab slider containers', () => {
-    const overviewSliderList = cssBlock('.overview-slider-list', 'background: rgba(4, 10, 17, 0.18);');
+    const overviewSliderList = cssBlock('.overview-slider-list', 'background: var(--surface-control-soft);');
+    const overviewRangeTicks = cssBlock('.overview-range-ticks', 'height: 5px;');
 
     expect(cssBlock('.overview-sliders', 'grid-template-rows: auto minmax(0, 1fr);')).toContain(
       'grid-template-rows: auto minmax(0, 1fr);'
     );
-    expect(overviewSliderList).toContain('border: 1px solid rgba(142, 164, 194, 0.22);');
+    expect(overviewSliderList).toContain('border: 1px solid var(--surface-border);');
     expect(overviewSliderList).toContain('border-radius: var(--card-radius);');
     expect(overviewSliderList).toContain('padding: 16px 18px 12px;');
     expect(overviewSliderList).toContain('align-self: stretch;');
-    expect(overviewSliderList).toContain('background: rgba(4, 10, 17, 0.18);');
+    expect(overviewSliderList).toContain('background: var(--surface-control-soft);');
+    const overviewRangeControl = cssBlock('.overview-range-control', 'gap: 0;');
+    expect(overviewRangeControl).toContain('position: relative;');
+    expect(overviewRangeControl).toContain('gap: 0;');
+    expect(cssBlock('.overview-range-control input[type="range"]', 'z-index: 2;')).toContain('position: relative;');
+    expect(cssBlock('.overview-range-control input[type="range"]', 'z-index: 2;')).toContain('z-index: 2;');
+    expect(overviewRangeTicks).toContain('height: 5px;');
+    expect(overviewRangeTicks).toContain('z-index: 1;');
+    expect(overviewRangeTicks).toContain('margin-top: -2px;');
+    expect(overviewRangeTicks).toContain('padding: 0 9px;');
+    expect(overviewRangeTicks).toContain('overflow: visible;');
+    expect(cssBlock('.overview-range-ticks span', 'height: 6px;')).toContain('height: 6px;');
+    expect(cssBlock('.overview-range-ticks span.milestone', 'width: 2px;')).toContain('height: 11px;');
+    expect(cssBlock('.overview-range-ticks span.endpoint', 'height: 9px;')).toContain('height: 9px;');
   });
 });

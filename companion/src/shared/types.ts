@@ -21,10 +21,12 @@ import type {
 } from './protocol';
 
 export type UiScalePercent = 75 | 100 | 125 | 150;
+export type UiThemePreset = 'light' | 'dark' | 'bubble-gum' | 'pomegranate' | 'kiwi';
 
 export interface CompanionSettings {
   selectedPresetId: BridgePresetId;
   uiScalePercent: UiScalePercent;
+  uiThemePreset: UiThemePreset;
   launchAtStartupEnabled: boolean;
   hapticsEnabled: boolean;
   hapticsGainPercent: number;

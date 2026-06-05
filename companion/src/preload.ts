@@ -15,6 +15,7 @@ import type {
   AudioHapticsSession,
   BridgeDiagnostics,
   BridgeSnapshot,
+  UiThemePreset,
   WindowsDeviceCleanupResult
 } from './shared/types';
 
@@ -112,6 +113,9 @@ const api = {
     ipcRenderer.invoke('bridge:setLaunchAtStartupEnabled', value)
   ),
   setUiScalePercent: (value: number): Promise<BridgeSnapshot> => ipcRenderer.invoke('bridge:setUiScalePercent', value),
+  setUiThemePreset: (value: UiThemePreset): Promise<BridgeSnapshot> => (
+    ipcRenderer.invoke('bridge:setUiThemePreset', value)
+  ),
   setPollingRateMode: (value: PollingRateMode): Promise<BridgeSnapshot> => (
     ipcRenderer.invoke('bridge:setPollingRateMode', value)
   ),

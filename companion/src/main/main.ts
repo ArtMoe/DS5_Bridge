@@ -18,7 +18,7 @@ import type {
   TriggerTestTarget
 } from '../shared/protocol';
 import type { BridgeToast } from './bridge-service';
-import type { AudioHapticsSession, UiScalePercent } from '../shared/types';
+import type { AudioHapticsSession, UiScalePercent, UiThemePreset } from '../shared/types';
 
 const APP_NAME = 'DS5 Bridge';
 const WINDOWS_APP_USER_MODEL_ID = 'io.github.sundaymoments.ds5bridge';
@@ -658,6 +658,9 @@ function registerIpc(service: BridgeService): void {
     applySnapshotWindowScale(snapshot);
     return snapshot;
   });
+  ipcMain.handle('bridge:setUiThemePreset', (_event, value: UiThemePreset) => (
+    service.setUiThemePreset(value)
+  ));
   ipcMain.handle('bridge:setLaunchAtStartupEnabled', (_event, value: boolean) => {
     const snapshot = service.setLaunchAtStartupEnabled(Boolean(value));
     applyLaunchAtStartup(snapshot.settings.launchAtStartupEnabled);
