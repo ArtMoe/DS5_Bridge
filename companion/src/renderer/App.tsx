@@ -7972,7 +7972,7 @@ export function App() {
                             </div>
                           );
                         })}
-                        {chordAssignments.map((assignment) => {
+                        {chordAssignments.map((assignment, assignmentIndex) => {
                         const func = chordFunctions.find((candidate) => candidate.id === assignment.functionId);
                         const hasConflict = chordAssignmentConflictState.conflictKeys.has(chordAssignmentKey(assignment));
                         const dropPlacement = chordAssignmentDropHint?.targetId === assignment.id
@@ -7985,7 +7985,8 @@ export function App() {
                               hasConflict ? 'conflict' : '',
                               draggedChordAssignmentId === assignment.id ? 'dragging' : '',
                               dropPlacement === 'before' ? 'drop-before' : '',
-                              dropPlacement === 'after' ? 'drop-after' : ''
+                              dropPlacement === 'after' ? 'drop-after' : '',
+                              assignmentIndex === 0 && dropPlacement === 'before' ? 'drop-list-start' : ''
                             ].filter(Boolean).join(' ')}
                             key={assignment.id}
                             data-assignment-id={assignment.id}

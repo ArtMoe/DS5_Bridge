@@ -5978,6 +5978,8 @@ button.trigger-lab-chip {
   gap: 0;
   padding: 6px;
   background: var(--surface-control-soft);
+  -webkit-user-select: none;
+  user-select: none;
   transition:
     border-color 140ms ease,
     background 140ms ease,
@@ -6040,6 +6042,10 @@ button.trigger-lab-chip {
   top: -6px;
 }
 
+.chords-assignment-row.drop-before.drop-list-start::before {
+  top: 1px;
+}
+
 .chords-assignment-row.drop-after::after {
   bottom: -6px;
 }
@@ -6083,6 +6089,12 @@ button.trigger-lab-chip {
 .chords-assignment-row img,
 .chords-assignment-drag-overlay img {
   -webkit-user-drag: none;
+}
+
+.chords-assignment-row *,
+.chords-assignment-drag-overlay * {
+  -webkit-user-select: none;
+  user-select: none;
 }
 
 .chords-assignment-binding {
