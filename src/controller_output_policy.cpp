@@ -7,7 +7,12 @@ using namespace ds5::output;
 namespace {
 
 uint16_t classic_rumble_gain_percent = 100;
-bool audio_haptics_replace_active = false;
+bool audio_haptics_replace_requested = false;
+bool audio_haptics_replace_producer_active = false;
+
+bool audio_haptics_replace_active() {
+    return audio_haptics_replace_requested && audio_haptics_replace_producer_active;
+}
 
 } // namespace
 
@@ -19,16 +24,20 @@ uint16_t controller_output_policy_classic_rumble_gain() {
     return classic_rumble_gain_percent;
 }
 
-void controller_output_policy_set_audio_haptics_replace_active(bool active) {
-    audio_haptics_replace_active = active;
+void controller_output_policy_set_audio_haptics_replace_requested(bool requested) {
+    audio_haptics_replace_requested = requested;
+}
+
+void controller_output_policy_set_audio_haptics_replace_producer_active(bool active) {
+    audio_haptics_replace_producer_active = active;
 }
 
 bool controller_output_policy_audio_haptics_replace_active() {
-    return audio_haptics_replace_active;
+    return audio_haptics_replace_active();
 }
 
 uint8_t controller_output_policy_scale_classic_rumble_byte(uint8_t value) {
-    if (audio_haptics_replace_active) {
+    if (audio_haptics_replace_active()) {
         return 0;
     }
 
@@ -53,7 +62,7 @@ bool controller_output_policy_apply_classic_rumble_gain_payload(uint8_t *payload
 
     const uint8_t right = payload[kMotorRightOffset];
     const uint8_t left = payload[kMotorLeftOffset];
-    if (audio_haptics_replace_active) {
+    if (audio_haptics_replace_active()) {
         bool changed = false;
 
         const uint8_t next_flag0 = static_cast<uint8_t>(flag0 & ~(

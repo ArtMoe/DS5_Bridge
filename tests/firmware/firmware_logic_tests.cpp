@@ -131,7 +131,8 @@ uint8_t haptic_frame_left_sign_flips(HapticFrame const &frame) {
 
 void reset_policy_state() {
     controller_output_policy_set_classic_rumble_gain(100);
-    controller_output_policy_set_audio_haptics_replace_active(false);
+    controller_output_policy_set_audio_haptics_replace_requested(false);
+    controller_output_policy_set_audio_haptics_replace_producer_active(false);
 }
 
 void reset_output_state() {
@@ -310,7 +311,12 @@ void classic_rumble_gain_clamps_rounds_and_only_touches_flagged_payloads() {
 void audio_haptics_replace_suppresses_classic_rumble_without_changing_saved_gain() {
     reset_policy_state();
     controller_output_policy_set_classic_rumble_gain(175);
-    controller_output_policy_set_audio_haptics_replace_active(true);
+    controller_output_policy_set_audio_haptics_replace_requested(true);
+
+    EXPECT_FALSE(controller_output_policy_audio_haptics_replace_active());
+    EXPECT_EQ(controller_output_policy_scale_classic_rumble_byte(40), 70);
+
+    controller_output_policy_set_audio_haptics_replace_producer_active(true);
 
     EXPECT_TRUE(controller_output_policy_audio_haptics_replace_active());
     EXPECT_EQ(controller_output_policy_classic_rumble_gain(), 175);
@@ -327,9 +333,14 @@ void audio_haptics_replace_suppresses_classic_rumble_without_changing_saved_gain
     EXPECT_EQ(payload[kMotorRightOffset], 0);
     EXPECT_EQ(payload[kMotorLeftOffset], 0);
 
-    controller_output_policy_set_audio_haptics_replace_active(false);
+    controller_output_policy_set_audio_haptics_replace_producer_active(false);
     EXPECT_EQ(controller_output_policy_classic_rumble_gain(), 175);
     EXPECT_EQ(controller_output_policy_scale_classic_rumble_byte(40), 70);
+
+    controller_output_policy_set_audio_haptics_replace_producer_active(true);
+    EXPECT_TRUE(controller_output_policy_audio_haptics_replace_active());
+    controller_output_policy_set_audio_haptics_replace_requested(false);
+    EXPECT_FALSE(controller_output_policy_audio_haptics_replace_active());
     reset_policy_state();
 }
 

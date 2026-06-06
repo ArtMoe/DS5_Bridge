@@ -1,4 +1,5 @@
 import { type CSSProperties, type PointerEvent as ReactPointerEvent, type ReactNode, useEffect, useMemo, useRef, useState } from 'react';
+import { createPortal } from 'react-dom';
 import {
   type TablerIcon,
   IconAdjustmentsSpark,
@@ -703,6 +704,8 @@ type CustomSelectProps<T extends SelectValue> = {
   options: Array<[string, T]>;
   disabled?: boolean;
   className?: string;
+  floatingMenu?: boolean;
+  floatingMenuMinWidth?: number;
   showSelectedCheck?: boolean;
   closeOnSelect?: boolean;
   getOptionClassName?: (label: string, value: T) => string | undefined;
@@ -711,6 +714,10 @@ type CustomSelectProps<T extends SelectValue> = {
   renderMenuFooter?: (closeMenu: () => void) => ReactNode;
   ariaLabel: string;
   onChange: (value: T) => void;
+};
+
+type CustomSelectMenuStyle = CSSProperties & {
+  '--custom-select-menu-max-height'?: string;
 };
 
 function snapHapticsValue(value: number, max = STANDARD_FEEDBACK_GAIN_PERCENT): number {
@@ -1956,6 +1963,8 @@ function CustomSelect<T extends SelectValue>({
   options,
   disabled = false,
   className = '',
+  floatingMenu = false,
+  floatingMenuMinWidth,
   showSelectedCheck = true,
   closeOnSelect = true,
   getOptionClassName,
@@ -1973,6 +1982,7 @@ function CustomSelect<T extends SelectValue>({
   const defaultMenuMaxHeight = longList ? 360 : 232;
   const [menuMaxHeight, setMenuMaxHeight] = useState(defaultMenuMaxHeight);
   const [menuPlacement, setMenuPlacement] = useState<'top' | 'bottom'>('bottom');
+  const [floatingMenuStyle, setFloatingMenuStyle] = useState<CustomSelectMenuStyle>({});
 
   function updateMenuMaxHeight() {
     const root = rootRef.current;
@@ -1982,25 +1992,51 @@ function CustomSelect<T extends SelectValue>({
     }
 
     const rootRect = root.getBoundingClientRect();
-    const boundary = root.closest('.system-card, .feature-card, .settings-menu, .control-page') as HTMLElement | null;
+    const boundary = floatingMenu
+      ? null
+      : root.closest('.system-card, .feature-card, .settings-menu, .control-page') as HTMLElement | null;
     const boundaryRect = boundary?.getBoundingClientRect();
     const menuGap = 6;
-    const lowerLimit = Math.min(window.innerHeight, boundaryRect?.bottom ?? window.innerHeight);
-    const upperLimit = Math.max(0, boundaryRect?.top ?? 0);
+    const viewportPadding = floatingMenu ? 8 : 0;
+    const lowerLimit = Math.min(window.innerHeight - viewportPadding, boundaryRect?.bottom ?? window.innerHeight);
+    const upperLimit = Math.max(viewportPadding, boundaryRect?.top ?? 0);
     const spaceBelow = Math.max(1, Math.floor(lowerLimit - rootRect.bottom - menuGap));
     const spaceAbove = Math.max(1, Math.floor(rootRect.top - upperLimit - menuGap));
-    const nextPlacement = spaceBelow < 92 && spaceAbove > spaceBelow ? 'top' : 'bottom';
+    const preferredVisibleHeight = Math.min(defaultMenuMaxHeight, 184);
+    const nextPlacement = spaceBelow < preferredVisibleHeight && spaceAbove > spaceBelow ? 'top' : 'bottom';
     const availableSpace = nextPlacement === 'top' ? spaceAbove : spaceBelow;
     const nextMaxHeight = longList ? availableSpace : Math.min(defaultMenuMaxHeight, availableSpace);
 
     setMenuPlacement(nextPlacement);
     setMenuMaxHeight(Math.max(1, nextMaxHeight));
+
+    if (floatingMenu) {
+      const minimumWidth = floatingMenuMinWidth ?? rootRect.width;
+      const width = Math.min(
+        Math.max(rootRect.width, minimumWidth),
+        Math.max(1, window.innerWidth - viewportPadding * 2)
+      );
+      const idealLeft = rootRect.left + (rootRect.width - width) / 2;
+      const left = Math.min(
+        Math.max(viewportPadding, idealLeft),
+        Math.max(viewportPadding, window.innerWidth - viewportPadding - width)
+      );
+      setFloatingMenuStyle({
+        left: `${Math.round(left)}px`,
+        width: `${Math.round(width)}px`,
+        ...(nextPlacement === 'top'
+          ? { bottom: `${Math.round(window.innerHeight - rootRect.top + menuGap)}px` }
+          : { top: `${Math.round(rootRect.bottom + menuGap)}px` }),
+        '--custom-select-menu-max-height': `${Math.max(1, nextMaxHeight)}px`
+      });
+    }
   }
 
   useEffect(() => {
     if (!open) return undefined;
     function closeIfOutside(event: MouseEvent) {
-      if (!rootRef.current?.contains(event.target as Node)) {
+      const target = event.target as Node;
+      if (!rootRef.current?.contains(target) && !menuRef.current?.contains(target)) {
         setOpen(false);
       }
     }
@@ -2017,18 +2053,19 @@ function CustomSelect<T extends SelectValue>({
       window.removeEventListener('resize', updateMenuMaxHeight);
       window.removeEventListener('scroll', updateMenuMaxHeight, true);
     };
-  }, [open, defaultMenuMaxHeight, longList]);
+  }, [open, defaultMenuMaxHeight, floatingMenu, floatingMenuMinWidth, longList]);
 
   useEffect(() => {
     if (!open) return;
     window.requestAnimationFrame(() => {
       const menu = menuRef.current;
+      const optionsContainer = menu?.querySelector('.custom-select-menu-options') as HTMLElement | null;
       const selectedElement = menu?.querySelector('[data-selected="true"]') as HTMLElement | null;
-      if (!menu || !selectedElement) {
+      if (!optionsContainer || !selectedElement) {
         return;
       }
       const selectedCenter = selectedElement.offsetTop + selectedElement.offsetHeight / 2;
-      menu.scrollTop = Math.max(0, selectedCenter - menu.clientHeight / 2);
+      optionsContainer.scrollTop = Math.max(0, selectedCenter - optionsContainer.clientHeight / 2);
     });
   }, [open]);
 
@@ -2052,6 +2089,40 @@ function CustomSelect<T extends SelectValue>({
     updateMenuMaxHeight();
     setOpen(true);
   }
+
+  const menu = open ? (
+    <div ref={menuRef} className="custom-select-menu" role="listbox" aria-label={ariaLabel}>
+      <div className="custom-select-menu-options">
+        {options.map(([label, optionValue]) => {
+          const selectedOption = optionValue === value;
+          const optionClassName = getOptionClassName?.(label, optionValue);
+          return (
+            <button
+              key={String(optionValue)}
+              type="button"
+              role="option"
+              aria-selected={selectedOption}
+              data-selected={selectedOption ? 'true' : undefined}
+              className={[selectedOption ? 'selected' : '', optionClassName].filter(Boolean).join(' ')}
+              onClick={() => choose(optionValue)}
+            >
+              <span>{renderOption?.(label, optionValue) ?? label}</span>
+              {showSelectedCheck && selectedOption && <Check size={15} />}
+            </button>
+          );
+        })}
+      </div>
+      {renderMenuFooter && (
+        <div className="custom-select-menu-footer">
+          {renderMenuFooter(() => setOpen(false))}
+        </div>
+      )}
+    </div>
+  ) : null;
+
+  const portalTarget = floatingMenu
+    ? (rootRef.current?.closest('.shell') as HTMLElement | null) ?? document.body
+    : null;
 
   return (
     <div
@@ -2080,33 +2151,17 @@ function CustomSelect<T extends SelectValue>({
         <span>{selected ? (renderValue?.(selected[0], selected[1]) ?? selected[0]) : String(value)}</span>
         <ChevronDown size={18} />
       </button>
-      {open && (
-        <div ref={menuRef} className="custom-select-menu" role="listbox" aria-label={ariaLabel}>
-          {options.map(([label, optionValue]) => {
-            const selectedOption = optionValue === value;
-            const optionClassName = getOptionClassName?.(label, optionValue);
-            return (
-              <button
-                key={String(optionValue)}
-                type="button"
-                role="option"
-                aria-selected={selectedOption}
-                data-selected={selectedOption ? 'true' : undefined}
-                className={[selectedOption ? 'selected' : '', optionClassName].filter(Boolean).join(' ')}
-                onClick={() => choose(optionValue)}
-              >
-                <span>{renderOption?.(label, optionValue) ?? label}</span>
-                {showSelectedCheck && selectedOption && <Check size={15} />}
-              </button>
-            );
-          })}
-          {renderMenuFooter && (
-            <div className="custom-select-menu-footer">
-              {renderMenuFooter(() => setOpen(false))}
-            </div>
-          )}
-        </div>
-      )}
+      {floatingMenu && portalTarget && menu
+        ? createPortal(
+          <div
+            className={`custom-select custom-select-floating-layer open menu-${menuPlacement} ${className}`}
+            style={floatingMenuStyle}
+          >
+            {menu}
+          </div>,
+          portalTarget
+        )
+        : menu}
     </div>
   );
 }
@@ -5691,8 +5746,9 @@ export function App() {
               ariaLabel={`${label} lab profile`}
               className="trigger-lab-profile-select"
               closeOnSelect={false}
+              floatingMenu
               onChange={(profileId) => setTriggerLabProfile(side, profileId)}
-              renderMenuFooter={() => {
+              renderMenuFooter={(closeMenu) => {
                 const customProfile = triggerLabProfileIsCustom(draft.profileId);
                 return (
                   <div className="trigger-lab-profile-actions">
@@ -5701,6 +5757,7 @@ export function App() {
                       aria-label="Save new trigger profile"
                       title="Save New"
                       onClick={() => {
+                        closeMenu();
                         openTriggerLabProfileDialog('save', side);
                       }}
                     >
@@ -5712,6 +5769,7 @@ export function App() {
                       title="Rename"
                       disabled={!customProfile}
                       onClick={() => {
+                        closeMenu();
                         openTriggerLabProfileDialog('rename', side);
                       }}
                     >
@@ -5723,6 +5781,7 @@ export function App() {
                       title="Delete"
                       disabled={!customProfile}
                       onClick={() => {
+                        closeMenu();
                         openTriggerLabProfileDialog('delete', side);
                       }}
                     >
@@ -8075,6 +8134,8 @@ export function App() {
                                   options={chordStarterOptions}
                                   disabled={pendingAction !== null}
                                   className="chords-inline-glyph-select chords-inline-starter-select"
+                                  floatingMenu
+                                  floatingMenuMinWidth={72}
                                   showSelectedCheck={false}
                                   ariaLabel="Chord starter"
                                   renderValue={(label, value) => <ChordStarterGlyphOption label={label} value={value} />}
@@ -8087,6 +8148,8 @@ export function App() {
                                   options={chordButtonOptionsFor(row.starter, true)}
                                   disabled={pendingAction !== null}
                                   className="chords-inline-glyph-select chords-inline-button-select"
+                                  floatingMenu
+                                  floatingMenuMinWidth={72}
                                   showSelectedCheck={false}
                                   ariaLabel="Chord button"
                                   renderValue={(label, value) => <ChordButtonGlyphOption label={label} value={value} />}
@@ -8099,6 +8162,8 @@ export function App() {
                                 value={row.functionId}
                                 options={chordFunctionOptions}
                                 disabled={pendingAction !== null}
+                                className="chords-assignment-function-select"
+                                floatingMenu
                                 ariaLabel="New chord function"
                                 renderValue={(label) => (
                                   <span className="chords-function-option">
@@ -8159,6 +8224,8 @@ export function App() {
                                 options={chordStarterOptions}
                                 disabled={pendingAction !== null}
                                 className="chords-inline-glyph-select chords-inline-starter-select"
+                                floatingMenu
+                                floatingMenuMinWidth={72}
                                 showSelectedCheck={false}
                                 ariaLabel={`${chordAssignmentLabel(assignment)} starter`}
                                 renderValue={(label, value) => <ChordStarterGlyphOption label={label} value={value} />}
@@ -8171,6 +8238,8 @@ export function App() {
                                 options={chordButtonOptionsFor(assignment.starter)}
                                 disabled={pendingAction !== null}
                                 className="chords-inline-glyph-select chords-inline-button-select"
+                                floatingMenu
+                                floatingMenuMinWidth={72}
                                 showSelectedCheck={false}
                                 ariaLabel={`${chordAssignmentLabel(assignment)} button`}
                                 renderValue={(label, value) => <ChordButtonGlyphOption label={label} value={value} />}
@@ -8183,6 +8252,8 @@ export function App() {
                               value={assignment.functionId}
                               options={chordFunctionOptions}
                               disabled={pendingAction !== null}
+                              className="chords-assignment-function-select"
+                              floatingMenu
                               ariaLabel={`${chordAssignmentLabel(assignment)} function`}
                               renderValue={(label) => (
                                 <span className="chords-function-option">

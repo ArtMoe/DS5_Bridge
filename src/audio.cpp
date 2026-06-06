@@ -316,6 +316,7 @@ static bool haptic_block_has_signal(uint8_t const *data);
 static bool copy_latest_host_usb_haptics(uint8_t *destination);
 static void store_latest_host_usb_haptics(int8_t const *data);
 static void clear_latest_host_usb_haptics();
+static void refresh_audio_haptics_replace_policy();
 static bool merge_test_haptics_overlay(int8_t *destination);
 static bool append_resampled_haptic_sample(float left, float right, float gain);
 #if DS5_AUDIO_DEBUG_ENABLED
@@ -948,6 +949,7 @@ static void enter_fallback(AudioFallbackReason reason) {
     host_runtime.fallback_reason = reason;
     host_runtime.stream_active = false;
     host_runtime.last_frame_us = 0;
+    refresh_audio_haptics_replace_policy();
     if (was_host_encoded) {
         restart_fallback_speaker_fade_in();
     } else {
@@ -1075,6 +1077,23 @@ void audio_reactive_haptics_reset() {
     audio_reactive_haptics_output_ramp = 0.0f;
 }
 
+static void refresh_audio_haptics_replace_policy() {
+    const bool previous_replace_active = controller_output_policy_audio_haptics_replace_active();
+    controller_output_policy_set_audio_haptics_replace_requested(
+        audio_reactive_haptics_suppress_classic_rumble
+    );
+    controller_output_policy_set_audio_haptics_replace_producer_active(
+        audio_reactive_haptics_config_enabled || host_runtime.stream_active
+    );
+    const bool replace_active = controller_output_policy_audio_haptics_replace_active();
+    if (previous_replace_active != replace_active) {
+        clear_latest_host_usb_haptics();
+    }
+    if (!previous_replace_active && replace_active) {
+        bt_set_classic_rumble_output(0, 0);
+    }
+}
+
 bool audio_set_reactive_haptics_config(
     bool enabled,
     uint8_t mode,
@@ -1112,14 +1131,7 @@ bool audio_set_reactive_haptics_config(
     audio_reactive_haptics_attack = attack;
     audio_reactive_haptics_release = release;
     audio_reactive_haptics_suppress_classic_rumble = suppress_classic_rumble;
-    const bool previous_replace_active = controller_output_policy_audio_haptics_replace_active();
-    controller_output_policy_set_audio_haptics_replace_active(audio_reactive_haptics_suppress_classic_rumble);
-    if (previous_replace_active != controller_output_policy_audio_haptics_replace_active()) {
-        clear_latest_host_usb_haptics();
-    }
-    if (controller_output_policy_audio_haptics_replace_active()) {
-        bt_set_classic_rumble_output(0, 0);
-    }
+    refresh_audio_haptics_replace_policy();
     if (changed) {
         audio_reactive_haptics_reset();
     }
@@ -1855,6 +1867,7 @@ void audio_host_set_requested(bool enabled) {
             host_runtime.fallback_reason = AudioFallbackNone;
         }
     }
+    refresh_audio_haptics_replace_policy();
     refresh_controller_mic_transport_state(true);
 }
 
@@ -1871,6 +1884,7 @@ void audio_host_start_stream() {
     host_runtime.request_started_us = host_runtime.stream_started_us;
     host_runtime.last_heartbeat_us = host_runtime.stream_started_us;
     host_runtime.last_frame_us = 0;
+    refresh_audio_haptics_replace_policy();
     reset_controller_audio_report_counters();
     host_frames_received = 0;
     host_frames_dropped = 0;
@@ -1896,6 +1910,7 @@ void audio_host_stop_stream(AudioFallbackReason reason) {
     host_runtime.stream_active = false;
     host_runtime.request_started_us = 0;
     host_runtime.last_frame_us = 0;
+    refresh_audio_haptics_replace_policy();
     host_pcm_iso_set_enabled(false);
     host_pcm_iso_reset_stream();
     clear_host_reassembly_history();

@@ -4848,7 +4848,12 @@ button.feature-icon {
 
 .trigger-lab-profile-select .custom-select-menu {
   top: calc(100% + 4px);
+  max-height: min(var(--custom-select-menu-max-height), 164px);
   padding: 4px;
+}
+
+.trigger-lab-profile-select .custom-select-menu-options {
+  max-height: 120px;
 }
 
 .trigger-lab-profile-select.custom-select.menu-top .custom-select-menu {
@@ -5553,6 +5558,10 @@ button.trigger-lab-chip {
 .chords-function-select .custom-select-menu {
   max-height: min(var(--custom-select-menu-max-height), 184px);
   padding: 4px;
+}
+
+.chords-function-select .custom-select-menu-options {
+  max-height: 136px;
 }
 
 .chords-function-select .custom-select-menu button {
@@ -6752,9 +6761,19 @@ button.trigger-lab-chip {
   padding: 6px;
   border: 1px solid var(--surface-border-strong);
   border-radius: var(--control-radius);
-  overflow: auto;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
   background: var(--surface-menu);
   box-shadow: var(--shadow-menu);
+  overscroll-behavior: contain;
+}
+
+.custom-select-menu-options {
+  min-height: 0;
+  flex: 1 1 auto;
+  overflow-y: auto;
+  overflow-x: hidden;
   overscroll-behavior: contain;
   scrollbar-width: thin;
   scrollbar-color: var(--scrollbar-thumb) var(--scrollbar-track);
@@ -6765,17 +6784,34 @@ button.trigger-lab-chip {
   bottom: calc(100% + 6px);
 }
 
-.custom-select-menu::-webkit-scrollbar {
+.custom-select-menu-options::-webkit-scrollbar {
   width: 8px;
 }
 
-.custom-select-menu::-webkit-scrollbar-track {
+.custom-select-menu-options::-webkit-scrollbar-track {
   background: var(--scrollbar-track);
 }
 
-.custom-select-menu::-webkit-scrollbar-thumb {
+.custom-select-menu-options::-webkit-scrollbar-thumb {
   border-radius: 999px;
   background: var(--scrollbar-thumb);
+}
+
+.custom-select-menu-footer {
+  flex: 0 0 auto;
+}
+
+.custom-select-floating-layer {
+  position: fixed;
+  z-index: 10000;
+  min-width: 0;
+  pointer-events: none;
+}
+
+.custom-select-floating-layer .custom-select-menu {
+  position: static;
+  width: 100%;
+  pointer-events: auto;
 }
 
 .custom-select-menu button {
