@@ -1112,7 +1112,9 @@ bool audio_set_reactive_haptics_config(
     audio_reactive_haptics_attack = attack;
     audio_reactive_haptics_release = release;
     audio_reactive_haptics_suppress_classic_rumble = suppress_classic_rumble;
-    controller_output_policy_set_audio_haptics_replace_active(audio_reactive_haptics_suppress_classic_rumble);
+    controller_output_policy_set_audio_haptics_replace_active(
+        audio_reactive_haptics_config_enabled && audio_reactive_haptics_suppress_classic_rumble
+    );
     if (controller_output_policy_audio_haptics_replace_active()) {
         bt_set_classic_rumble_output(0, 0);
     }
@@ -1572,6 +1574,7 @@ static bool copy_latest_host_usb_haptics(uint8_t *destination) {
     }
 
     memcpy(destination, host_usb_haptic_buf, sizeof(host_usb_haptic_buf));
+    host_usb_haptic_pending = false;
     return true;
 }
 
