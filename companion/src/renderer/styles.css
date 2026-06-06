@@ -5970,6 +5970,7 @@ button.trigger-lab-chip {
 }
 
 .chords-assignment-list:not(:has(.chords-empty-assignments)) {
+  grid-auto-rows: max-content;
   padding-top: 8px;
 }
 
@@ -5985,7 +5986,7 @@ button.trigger-lab-chip {
 
 .chords-assignment-scrollbar {
   position: absolute;
-  top: 0;
+  top: 8px;
   right: -12px;
   bottom: 0;
   width: 6px;
