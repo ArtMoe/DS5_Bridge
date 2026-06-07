@@ -7013,6 +7013,13 @@ button.trigger-lab-chip {
   background: var(--accent-selected);
 }
 
+.custom-select-menu button.selected span,
+.custom-select-menu button.selected strong,
+.custom-select-menu button.selected small,
+.custom-select-menu button.selected .host-persona-option {
+  color: inherit;
+}
+
 .custom-select-menu button.selected > svg {
   justify-self: end;
 }

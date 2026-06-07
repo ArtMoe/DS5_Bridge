@@ -698,6 +698,7 @@ const LAST_REMAP_CONTROLLER_TYPE_STORAGE_KEY = 'ds5bridge.lastRemapControllerTyp
 const TRIGGER_LAB_CUSTOM_PROFILES_STORAGE_KEY = 'ds5bridge.triggerLabProfiles';
 const TRIGGER_LAB_WORKSPACE_STORAGE_KEY = 'ds5bridge.triggerLabWorkspace';
 const UI_THEME_PRESET_STORAGE_KEY = 'ds5bridge.uiThemePreset';
+const STARTUP_TUTORIAL_COMPLETED_STORAGE_KEY = 'ds5bridge.startupTutorialCompleted.v1';
 const STARTUP_READY_HOLD_MS = 1000;
 
 function storedRemapControllerType(): KnownControllerType {
@@ -716,6 +717,14 @@ function storedUiThemePreset(): UiThemePreset {
 
 function saveUiThemePreset(preset: UiThemePreset): void {
   window.localStorage.setItem(UI_THEME_PRESET_STORAGE_KEY, preset);
+}
+
+function storedStartupTutorialStep(): StartupTutorialStep {
+  return window.localStorage.getItem(STARTUP_TUTORIAL_COMPLETED_STORAGE_KEY) === '1' ? 'done' : 'feature-toggle';
+}
+
+function saveStartupTutorialCompleted(): void {
+  window.localStorage.setItem(STARTUP_TUTORIAL_COMPLETED_STORAGE_KEY, '1');
 }
 
 type CustomSelectProps<T extends SelectValue> = {
@@ -2778,7 +2787,7 @@ export function App() {
   const [overviewSleepConfirmVisible, setOverviewSleepConfirmVisible] = useState(false);
   const [hostEncodingDisableConfirmVisible, setHostEncodingDisableConfirmVisible] = useState(false);
   const [deviceCleanupConfirmVisible, setDeviceCleanupConfirmVisible] = useState(false);
-  const [startupTutorialStep, setStartupTutorialStep] = useState<StartupTutorialStep>('feature-toggle');
+  const [startupTutorialStep, setStartupTutorialStep] = useState<StartupTutorialStep>(storedStartupTutorialStep);
   const [startupTutorialFeatureActive, setStartupTutorialFeatureActive] = useState(false);
   const [startupTutorialSupportCountdown, setStartupTutorialSupportCountdown] = useState(5);
   const [deviceCleanupMessage, setDeviceCleanupMessage] = useState<string | null>(null);
@@ -8757,7 +8766,10 @@ export function App() {
           onFeatureExampleToggle={() => setStartupTutorialFeatureActive((active) => !active)}
           onFeatureStepComplete={() => setStartupTutorialStep('support')}
           onSupport={() => void window.bridge.openExternal('https://ko-fi.com/sundaymoments')}
-          onFinish={() => setStartupTutorialStep('done')}
+          onFinish={() => {
+            saveStartupTutorialCompleted();
+            setStartupTutorialStep('done');
+          }}
         />
       )}
 

@@ -147,10 +147,15 @@ describe('companion layout CSS', () => {
 
   it('uses the cached theme and branded panel for the startup loading state', () => {
     expect(appSource).toContain("const UI_THEME_PRESET_STORAGE_KEY = 'ds5bridge.uiThemePreset';");
+    expect(appSource).toContain("const STARTUP_TUTORIAL_COMPLETED_STORAGE_KEY = 'ds5bridge.startupTutorialCompleted.v1';");
     expect(appSource).toContain('const STARTUP_READY_HOLD_MS = 1000;');
     expect(appSource).toContain('function storedUiThemePreset()');
+    expect(appSource).toContain('function storedStartupTutorialStep()');
+    expect(appSource).toContain('function saveStartupTutorialCompleted()');
     expect(appSource).toContain('function StartupScreen({ ready }: { ready: boolean })');
     expect(appSource).toContain('const startupReadyArmedRef = useRef(false);');
+    expect(appSource).toContain("const [startupTutorialStep, setStartupTutorialStep] = useState<StartupTutorialStep>(storedStartupTutorialStep);");
+    expect(appSource).toContain('saveStartupTutorialCompleted();');
     expect(appSource).toContain('}, [Boolean(snapshot), startupVisible]);');
     expect(appSource).not.toContain('}, [snapshot, startupVisible]);');
     expect(appSource).toContain('<StartupScreen ready={Boolean(snapshot)} />');
@@ -400,6 +405,10 @@ describe('companion layout CSS', () => {
     expect(cssBlock('.audio-haptics-mode-state.retry', 'background: var(--info-selected);')).toContain(
       'color: var(--info-selected-text);'
     );
+    expect(cssBlock('.custom-select-menu button.selected', 'background: var(--accent-selected);')).toContain(
+      'color: var(--accent-text);'
+    );
+    expect(cssBlock('.custom-select-menu button.selected span,', 'color: inherit;')).toContain('color: inherit;');
     expect(shellTokens).toContain(
       '--nav-active-bg: color-mix(in srgb, var(--accent) var(--nav-active-bg-weight), var(--nav-active-base));'
     );
