@@ -72,7 +72,8 @@
 #define HOST_RAW_PCM_RETURN_CHANNELS 2
 #define HOST_RAW_PCM_RETURN_PACKET_BYTES (HOST_RAW_PCM_RETURN_FRAMES * INPUT_CHANNELS * sizeof(int16_t))
 #define HOST_RAW_PCM_RETURN_LINE_BYTES (HOST_RAW_PCM_RETURN_FRAMES * HOST_RAW_PCM_RETURN_CHANNELS * sizeof(int16_t))
-#define HOST_USB_HAPTIC_LATCH_US 50000
+#define HOST_USB_HAPTIC_QUEUE_DEPTH 24
+#define HOST_USB_HAPTIC_QUEUE_MAX_AGE_US 250000
 #define AUDIO_REACTIVE_HAPTICS_MAX_GAIN_PERCENT 200
 #define AUDIO_REACTIVE_HAPTICS_GATE_THRESHOLD 98.0f
 #define AUDIO_REACTIVE_HAPTICS_ENVELOPE_ATTACK 0.40f
@@ -255,9 +256,11 @@ static float audio_reactive_haptics_env_l = 0.0f;
 static float audio_reactive_haptics_env_r = 0.0f;
 static float audio_reactive_haptics_gate = 0.0f;
 static float audio_reactive_haptics_output_ramp = 0.0f;
-static int8_t host_usb_haptic_buf[SAMPLE_SIZE]{};
-static bool host_usb_haptic_pending = false;
-static uint32_t host_usb_haptic_us = 0;
+static int8_t host_usb_haptic_queue[HOST_USB_HAPTIC_QUEUE_DEPTH][SAMPLE_SIZE]{};
+static uint32_t host_usb_haptic_queue_us[HOST_USB_HAPTIC_QUEUE_DEPTH]{};
+static uint8_t host_usb_haptic_queue_head = 0;
+static uint8_t host_usb_haptic_queue_tail = 0;
+static uint8_t host_usb_haptic_queue_count = 0;
 static HostAudioRuntimeState host_runtime;
 static uint16_t host_reassembly_generation = 0;
 static uint16_t host_reassembly_sequence = 0;
@@ -313,9 +316,8 @@ static void schedule_host_route_primer();
 static bool prime_host_audio_route_if_needed();
 static bool audio_silence_tail_active(uint32_t now);
 static uint8_t clamp_debug_u8(uint32_t value);
-static bool haptic_block_has_signal(uint8_t const *data);
-static bool copy_latest_host_usb_haptics(uint8_t *destination);
-static void store_latest_host_usb_haptics(int8_t const *data);
+static bool copy_next_host_usb_haptics(uint8_t *destination);
+static void enqueue_host_usb_haptics(int8_t const *data);
 static void clear_latest_host_usb_haptics();
 static void refresh_audio_haptics_replace_policy();
 static bool merge_test_haptics_overlay(int8_t *destination);
@@ -1332,18 +1334,21 @@ static void apply_haptics_gain_to_packet(uint8_t *data) {
     }
 }
 
-static bool haptic_block_has_signal(uint8_t const *data) {
+static void apply_host_encoded_haptics_policy(uint8_t *data) {
     if (data == nullptr) {
-        return false;
+        return;
     }
 
-    auto const *samples = reinterpret_cast<int8_t const *>(data);
-    for (uint16_t i = 0; i < SAMPLE_SIZE; i++) {
-        if (samples[i] > 1 || samples[i] < -1) {
-            return true;
-        }
+    const bool firmware_owns_haptics = audio_reactive_haptics_config_enabled
+        || !controller_output_policy_audio_haptics_replace_active();
+    bool copied_firmware_haptics = false;
+    if (firmware_owns_haptics) {
+        copied_firmware_haptics = copy_next_host_usb_haptics(data);
     }
-    return false;
+
+    if (!copied_firmware_haptics) {
+        apply_haptics_gain_to_packet(data);
+    }
 }
 
 static float audio_reactive_haptics_filter_coeff() {
@@ -1579,43 +1584,64 @@ static void process_audio_reactive_haptic_frame_for_resampler(
     out_r = static_cast<WDL_ResampleSample>(processed_r) / 32768.0f;
 }
 
-static void store_latest_host_usb_haptics(int8_t const *data) {
+static void drop_stale_host_usb_haptics(uint32_t now) {
+    while (
+        host_usb_haptic_queue_count != 0
+        && static_cast<uint32_t>(now - host_usb_haptic_queue_us[host_usb_haptic_queue_head])
+            > HOST_USB_HAPTIC_QUEUE_MAX_AGE_US
+    ) {
+        host_usb_haptic_queue_head = static_cast<uint8_t>(
+            (host_usb_haptic_queue_head + 1) % HOST_USB_HAPTIC_QUEUE_DEPTH
+        );
+        host_usb_haptic_queue_count--;
+    }
+}
+
+static void enqueue_host_usb_haptics(int8_t const *data) {
     if (data == nullptr) {
         return;
     }
-    if (!haptic_block_has_signal(reinterpret_cast<uint8_t const *>(data))) {
-        if (
-            host_usb_haptic_pending
-            && static_cast<uint32_t>(time_us_32() - host_usb_haptic_us) > HOST_USB_HAPTIC_LATCH_US
-        ) {
-            host_usb_haptic_pending = false;
-        }
-        return;
+
+    const uint32_t now = time_us_32();
+    drop_stale_host_usb_haptics(now);
+    if (host_usb_haptic_queue_count >= HOST_USB_HAPTIC_QUEUE_DEPTH) {
+        host_usb_haptic_queue_head = static_cast<uint8_t>(
+            (host_usb_haptic_queue_head + 1) % HOST_USB_HAPTIC_QUEUE_DEPTH
+        );
+        host_usb_haptic_queue_count--;
     }
 
-    memcpy(host_usb_haptic_buf, data, sizeof(host_usb_haptic_buf));
-    host_usb_haptic_pending = true;
-    host_usb_haptic_us = time_us_32();
+    memcpy(host_usb_haptic_queue[host_usb_haptic_queue_tail], data, SAMPLE_SIZE);
+    host_usb_haptic_queue_us[host_usb_haptic_queue_tail] = now;
+    host_usb_haptic_queue_tail = static_cast<uint8_t>(
+        (host_usb_haptic_queue_tail + 1) % HOST_USB_HAPTIC_QUEUE_DEPTH
+    );
+    host_usb_haptic_queue_count++;
 }
 
-static bool copy_latest_host_usb_haptics(uint8_t *destination) {
-    if (destination == nullptr || !host_usb_haptic_pending) {
-        return false;
-    }
-    if (static_cast<uint32_t>(time_us_32() - host_usb_haptic_us) > HOST_USB_HAPTIC_LATCH_US) {
-        host_usb_haptic_pending = false;
+static bool copy_next_host_usb_haptics(uint8_t *destination) {
+    if (destination == nullptr) {
         return false;
     }
 
-    memcpy(destination, host_usb_haptic_buf, sizeof(host_usb_haptic_buf));
-    host_usb_haptic_pending = false;
+    drop_stale_host_usb_haptics(time_us_32());
+    if (host_usb_haptic_queue_count == 0) {
+        return false;
+    }
+
+    memcpy(destination, host_usb_haptic_queue[host_usb_haptic_queue_head], SAMPLE_SIZE);
+    host_usb_haptic_queue_head = static_cast<uint8_t>(
+        (host_usb_haptic_queue_head + 1) % HOST_USB_HAPTIC_QUEUE_DEPTH
+    );
+    host_usb_haptic_queue_count--;
     return true;
 }
 
 static void clear_latest_host_usb_haptics() {
-    host_usb_haptic_pending = false;
-    host_usb_haptic_us = 0;
-    memset(host_usb_haptic_buf, 0, sizeof(host_usb_haptic_buf));
+    host_usb_haptic_queue_head = 0;
+    host_usb_haptic_queue_tail = 0;
+    host_usb_haptic_queue_count = 0;
+    memset(host_usb_haptic_queue_us, 0, sizeof(host_usb_haptic_queue_us));
 }
 
 static void mix_haptics_overlay(int8_t *destination, int8_t const *overlay) {
@@ -1983,7 +2009,6 @@ static bool submit_host_audio_report(uint8_t const *report, uint16_t len) {
     }
 
     uint8_t packet[HOST_AUDIO_REPORT_SIZE];
-    const bool allow_native_haptic_fallback = !controller_output_policy_audio_haptics_replace_active();
     if (len == HOST_AUDIO_COMPACT_REPORT_SIZE) {
 #ifdef ENABLE_COMPANION
         companion_note_feedback_trace_samples(
@@ -1998,10 +2023,7 @@ static bool submit_host_audio_report(uint8_t const *report, uint16_t len) {
 #endif
         build_host_audio_report_header(packet);
         memcpy(packet + 78, report, SAMPLE_SIZE);
-        if (allow_native_haptic_fallback && !haptic_block_has_signal(packet + 78)) {
-            (void)copy_latest_host_usb_haptics(packet + 78);
-        }
-        apply_haptics_gain_to_packet(packet + 78);
+        apply_host_encoded_haptics_policy(packet + 78);
         memcpy(packet + 144, report + SAMPLE_SIZE, 200);
     } else if (len == HOST_AUDIO_REPORT_SIZE && report[0] == REPORT_ID) {
 #ifdef ENABLE_COMPANION
@@ -2010,10 +2032,7 @@ static bool submit_host_audio_report(uint8_t const *report, uint16_t len) {
         memcpy(packet, report, sizeof(packet));
         copy_routed_state_data(packet + 13);
         packet[142] = (plug_headset ? 0x16 : 0x13) | (1 << 7);
-        if (allow_native_haptic_fallback && !haptic_block_has_signal(packet + 78)) {
-            (void)copy_latest_host_usb_haptics(packet + 78);
-        }
-        apply_haptics_gain_to_packet(packet + 78);
+        apply_host_encoded_haptics_policy(packet + 78);
     } else {
         host_frames_dropped++;
         enter_fallback(AudioFallbackInvalidPacket);
@@ -2538,9 +2557,10 @@ static bool process_usb_audio_raw_pcm_return_packet() {
 
     static WDL_ResampleSample out_buf[SAMPLE_SIZE];
     const int out_frames = resampler.ResampleOut(out_buf, haptic_input_frames, SAMPLE_SIZE / OUTPUT_CHANNELS, OUTPUT_CHANNELS);
+    const float haptic_gain = clamp(volume[1], 0.0f, MAX_HAPTICS_GAIN);
     for (int i = 0; i < out_frames; i++) {
-        if (append_resampled_haptic_sample(out_buf[i * OUTPUT_CHANNELS], out_buf[i * OUTPUT_CHANNELS + 1], 1.0f)) {
-            store_latest_host_usb_haptics(audio_haptic_buf);
+        if (append_resampled_haptic_sample(out_buf[i * OUTPUT_CHANNELS], out_buf[i * OUTPUT_CHANNELS + 1], haptic_gain)) {
+            enqueue_host_usb_haptics(audio_haptic_buf);
         }
     }
 
