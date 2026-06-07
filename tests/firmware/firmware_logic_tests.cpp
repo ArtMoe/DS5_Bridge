@@ -463,6 +463,29 @@ void output_state_audio_snapshot_routes_to_speaker_and_headphones_safely() {
     EXPECT_EQ(headset[kAudioControl2Offset], 0);
 }
 
+void output_state_audio_snapshot_preserves_haptic_motor_power() {
+    reset_output_state();
+    auto payload = empty_payload();
+    payload[kValidFlag0Offset] = kFlag0RightTriggerEffect | kFlag0LeftTriggerEffect;
+    payload[kValidFlag1Offset] = kFlag1MotorPowerLevelEnable;
+    payload[kTriggerPowerOffset] = 0xa5;
+    std::fill_n(payload.data() + kTriggerEffectRightOffset, kTriggerEffectSize, 0x31);
+    std::fill_n(payload.data() + kTriggerEffectLeftOffset, kTriggerEffectSize, 0x42);
+    controller_output_state_apply_host_payload(payload.data(), static_cast<uint8_t>(payload.size()));
+
+    AudioSnapshot snapshot{};
+    controller_output_state_copy_audio_snapshot(snapshot.data(), false);
+
+    EXPECT_FALSE((snapshot[kValidFlag0Offset] & kFlag0RightTriggerEffect) != 0);
+    EXPECT_FALSE((snapshot[kValidFlag0Offset] & kFlag0LeftTriggerEffect) != 0);
+    EXPECT_TRUE((snapshot[kValidFlag1Offset] & kFlag1MotorPowerLevelEnable) != 0);
+    EXPECT_EQ(snapshot[kTriggerPowerOffset], 0xa5);
+    for (uint8_t index = 0; index < kTriggerEffectSize; ++index) {
+        EXPECT_EQ(snapshot[kTriggerEffectRightOffset + index], 0);
+        EXPECT_EQ(snapshot[kTriggerEffectLeftOffset + index], 0);
+    }
+}
+
 void output_state_lightbar_override_is_scaled_and_survives_audio_snapshot() {
     reset_output_state();
     controller_output_state_set_lightbar(250, 100, 50, 40);
@@ -858,6 +881,7 @@ std::vector<TestCase> tests{
     {"lightbar override removes host led claims without mutating color bytes", lightbar_override_removes_host_led_claims_without_mutating_color_bytes},
     {"host led clear detection covers release player and lightbar paths", host_led_clear_detection_covers_release_player_and_lightbar_paths},
     {"output state audio snapshot routes to speaker and headphones safely", output_state_audio_snapshot_routes_to_speaker_and_headphones_safely},
+    {"output state audio snapshot preserves haptic motor power", output_state_audio_snapshot_preserves_haptic_motor_power},
     {"output state lightbar override is scaled and survives audio snapshot", output_state_lightbar_override_is_scaled_and_survives_audio_snapshot},
     {"output state clears zero rumble flags but preserves nonzero rumble", output_state_clears_zero_rumble_flags_but_preserves_nonzero_rumble},
     {"output state clear triggers removes effect bytes flags and power", output_state_clear_triggers_removes_effect_bytes_flags_and_power},

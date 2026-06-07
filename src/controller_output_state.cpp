@@ -76,9 +76,7 @@ void apply_player_led_policy(uint8_t *payload) {
     payload[kPlayerLedsOffset] = player_led_value();
 }
 
-} // namespace
-
-void controller_output_state_clear_triggers(uint8_t *payload) {
+void clear_adaptive_trigger_effects(uint8_t *payload) {
     if (payload == nullptr) {
         return;
     }
@@ -87,11 +85,21 @@ void controller_output_state_clear_triggers(uint8_t *payload) {
         payload[kValidFlag0Offset]
         & static_cast<uint8_t>(~(kFlag0RightTriggerEffect | kFlag0LeftTriggerEffect))
     );
+    std::memset(payload + kTriggerEffectRightOffset, 0, kTriggerEffectSize);
+    std::memset(payload + kTriggerEffectLeftOffset, 0, kTriggerEffectSize);
+}
+
+} // namespace
+
+void controller_output_state_clear_triggers(uint8_t *payload) {
+    if (payload == nullptr) {
+        return;
+    }
+
+    clear_adaptive_trigger_effects(payload);
     payload[kValidFlag1Offset] = static_cast<uint8_t>(
         payload[kValidFlag1Offset] & static_cast<uint8_t>(~kFlag1MotorPowerLevelEnable)
     );
-    std::memset(payload + kTriggerEffectRightOffset, 0, kTriggerEffectSize);
-    std::memset(payload + kTriggerEffectLeftOffset, 0, kTriggerEffectSize);
     payload[kTriggerPowerOffset] = 0;
 }
 
@@ -245,7 +253,7 @@ void controller_output_state_copy_audio_snapshot(uint8_t *destination, bool head
         destination[kSpeakerVolumeOffset] = 0x00;
         destination[kAudioControlOffset] = kAudioFlagsOutputPathHeadphones;
         destination[kAudioControl2Offset] = 0x00;
-        controller_output_state_clear_triggers(destination);
+        clear_adaptive_trigger_effects(destination);
         return;
     }
 
@@ -257,5 +265,5 @@ void controller_output_state_copy_audio_snapshot(uint8_t *destination, bool head
     destination[kSpeakerVolumeOffset] = kSpeakerVolumeMax;
     destination[kAudioControlOffset] = kAudioFlagsOutputPathSpeaker;
     destination[kAudioControl2Offset] = kAudioFlags2SpeakerPreampGain;
-    controller_output_state_clear_triggers(destination);
+    clear_adaptive_trigger_effects(destination);
 }
