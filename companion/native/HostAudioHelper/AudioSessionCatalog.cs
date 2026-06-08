@@ -1,4 +1,6 @@
 using System.Diagnostics;
+using System.Runtime.InteropServices;
+using System.Text;
 using NAudio.CoreAudioApi;
 using NAudio.CoreAudioApi.Interfaces;
 
@@ -17,6 +19,8 @@ sealed record AudioSessionInfo(
 
 static class AudioSessionCatalog
 {
+    private const int ProcessQueryLimitedInformation = 0x1000;
+
     public static AudioSessionInfo? ResolveAppSession(int? processId, string? processPath, string? executableName)
     {
         if (processId is > 0)
@@ -30,7 +34,7 @@ static class AudioSessionCatalog
                     liveProcess.ExecutableName,
                     liveProcess.ProcessPath,
                     liveProcess.PackageIconPath,
-                    liveProcess.PackageIconPath is null ? ProcessIconDataUrlResolver.TryResolve(liveProcess.ProcessPath) : null,
+                    ProcessIconDataUrlResolver.TryResolve(liveProcess.ProcessPath, liveProcess.PackageIconPath),
                     null,
                     null,
                     "running",
@@ -89,9 +93,7 @@ static class AudioSessionCatalog
                     var iconPath = FirstOptionalNonBlank(
                         process?.PackageIconPath,
                         session.IconPath);
-                    var iconDataUrl = iconPath is null
-                        ? ProcessIconDataUrlResolver.TryResolve(processPath)
-                        : null;
+                    var iconDataUrl = ProcessIconDataUrlResolver.TryResolve(processPath, iconPath);
                     var info = new AudioSessionInfo(
                         processId,
                         displayName,
@@ -191,7 +193,7 @@ static class AudioSessionCatalog
                     info.ExecutableName,
                     info.ProcessPath,
                     info.PackageIconPath,
-                    info.PackageIconPath is null ? ProcessIconDataUrlResolver.TryResolve(info.ProcessPath) : null,
+                    ProcessIconDataUrlResolver.TryResolve(info.ProcessPath, info.PackageIconPath),
                     null,
                     null,
                     "running",
@@ -244,8 +246,8 @@ static class AudioSessionCatalog
                 : TryGetProcessName(process);
             var packageMetadata = PackageAppMetadataResolver.TryResolve(process, processPath, executableName);
             var displayName = FirstNonBlank(
-                includeFileDescription ? TryGetFileDescription(process) : null,
-                process.MainWindowTitle,
+                includeFileDescription ? TryGetFileDescription(processPath) : null,
+                TryGetMainWindowTitle(process),
                 Path.GetFileNameWithoutExtension(executableName),
                 process.ProcessName,
                 $"Process {processId}");
@@ -266,12 +268,17 @@ static class AudioSessionCatalog
     {
         try
         {
-            return EmptyToNull(process.MainModule?.FileName);
+            var mainModulePath = EmptyToNull(process.MainModule?.FileName);
+            if (!string.IsNullOrWhiteSpace(mainModulePath))
+            {
+                return mainModulePath;
+            }
         }
         catch
         {
-            return null;
         }
+
+        return TryQueryFullProcessImageName(process.Id);
     }
 
     private static string? TryGetProcessName(Process process)
@@ -286,20 +293,57 @@ static class AudioSessionCatalog
         }
     }
 
-    private static string? TryGetFileDescription(Process process)
+    private static string? TryGetMainWindowTitle(Process process)
     {
         try
         {
-            var fileName = process.MainModule?.FileName;
-            if (string.IsNullOrWhiteSpace(fileName))
-            {
-                return null;
-            }
-            return EmptyToNull(FileVersionInfo.GetVersionInfo(fileName).FileDescription);
+            return EmptyToNull(process.MainWindowTitle);
         }
         catch
         {
             return null;
+        }
+    }
+
+    private static string? TryGetFileDescription(string? processPath)
+    {
+        try
+        {
+            if (string.IsNullOrWhiteSpace(processPath))
+            {
+                return null;
+            }
+            return EmptyToNull(FileVersionInfo.GetVersionInfo(processPath).FileDescription);
+        }
+        catch
+        {
+            return null;
+        }
+    }
+
+    private static string? TryQueryFullProcessImageName(int processId)
+    {
+        var processHandle = OpenProcess(ProcessQueryLimitedInformation, false, processId);
+        if (processHandle == IntPtr.Zero)
+        {
+            return null;
+        }
+
+        try
+        {
+            var capacity = 32768;
+            var builder = new StringBuilder(capacity);
+            return QueryFullProcessImageName(processHandle, 0, builder, ref capacity)
+                ? EmptyToNull(builder.ToString())
+                : null;
+        }
+        catch
+        {
+            return null;
+        }
+        finally
+        {
+            _ = CloseHandle(processHandle);
         }
     }
 
@@ -354,4 +398,17 @@ static class AudioSessionCatalog
         string? ProcessPath,
         string? PackageDisplayName,
         string? PackageIconPath);
+
+    [DllImport("kernel32.dll", SetLastError = true)]
+    private static extern IntPtr OpenProcess(int dwDesiredAccess, bool bInheritHandle, int dwProcessId);
+
+    [DllImport("kernel32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
+    private static extern bool QueryFullProcessImageName(
+        IntPtr hProcess,
+        int dwFlags,
+        StringBuilder lpExeName,
+        ref int lpdwSize);
+
+    [DllImport("kernel32.dll", SetLastError = true)]
+    private static extern bool CloseHandle(IntPtr hObject);
 }

@@ -518,7 +518,7 @@ function showBridgeNotification(toast: BridgeToast): void {
 async function addAudioHapticsSessionIcons(sessions: AudioHapticsSession[]): Promise<AudioHapticsSession[]> {
   return Promise.all(sessions.map(async (session) => ({
     ...session,
-    iconDataUrl: session.iconDataUrl ?? await audioHapticsSessionIconDataUrl(session)
+    iconDataUrl: await audioHapticsSessionIconDataUrl(session)
   })));
 }
 
@@ -546,20 +546,32 @@ function audioHapticsSessionIconCacheKey(session: AudioHapticsSession): string |
 }
 
 async function loadAudioHapticsSessionIconDataUrl(session: AudioHapticsSession): Promise<string | null> {
-  const sessionIcon = nativeImageFromPath(session.iconPath);
-  if (sessionIcon && !sessionIcon.isEmpty()) {
-    return sessionIcon.resize({ width: 32, height: 32 }).toDataURL();
+  // 1. Try loading a native image directly from the icon path (handles
+  //    UWP / packaged-app .png icons that the C# shell APIs miss).
+  for (const imagePath of audioHapticsSessionIconFileCandidates(session.iconPath)) {
+    const sessionIcon = nativeImageFromPath(imagePath);
+    if (sessionIcon && !sessionIcon.isEmpty()) {
+      return sessionIcon.resize({ width: 32, height: 32 }).toDataURL();
+    }
   }
-  const iconPath = session.processPath ?? session.iconPath;
-  if (!iconPath) {
-    return null;
+
+  // 2. Prefer the icon already resolved by the native helper via
+  //    ExtractAssociatedIcon / SHGetFileInfo (best result for regular apps).
+  if (session.iconDataUrl) {
+    return session.iconDataUrl;
   }
-  try {
-    const image = await app.getFileIcon(iconPath, { size: 'normal' });
-    return image.isEmpty() ? null : image.resize({ width: 32, height: 32 }).toDataURL();
-  } catch {
-    return null;
+
+  // 3. Fall back to Electron's shell icon extraction as a last resort.
+  for (const iconPath of audioHapticsSessionIconFileCandidates(session.processPath, session.iconPath)) {
+    try {
+      const image = await app.getFileIcon(iconPath, { size: 'normal' });
+      if (!image.isEmpty()) {
+        return image.resize({ width: 32, height: 32 }).toDataURL();
+      }
+    } catch {
+    }
   }
+  return null;
 }
 
 function nativeImageFromPath(filePath: string | null): Electron.NativeImage | null {
@@ -571,6 +583,62 @@ function nativeImageFromPath(filePath: string | null): Electron.NativeImage | nu
   } catch {
     return null;
   }
+}
+
+function audioHapticsSessionIconFileCandidates(...paths: Array<string | null | undefined>): string[] {
+  const candidates = new Set<string>();
+  for (const candidate of paths) {
+    const normalized = normalizeAudioHapticsSessionIconPath(candidate);
+    if (normalized) {
+      candidates.add(normalized);
+    }
+  }
+  // Fall back to raw trimmed paths for entries that didn't survive
+  // normalization (e.g. paths that don't pass existsSync but can still
+  // be resolved by Electron's getFileIcon).
+  for (const candidate of paths) {
+    const raw = candidate?.trim();
+    if (raw) {
+      candidates.add(raw);
+    }
+  }
+  return [...candidates];
+}
+
+function normalizeAudioHapticsSessionIconPath(filePath: string | null | undefined): string | null {
+  if (!filePath?.trim()) {
+    return null;
+  }
+  const candidates = [
+    filePath.trim(),
+    stripAudioHapticsIconResourceIndex(filePath)
+  ];
+  for (const candidate of candidates) {
+    if (!candidate?.trim()) {
+      continue;
+    }
+    const normalized = candidate.trim().replace(/^@/, '').replace(/^"|"$/g, '');
+    if (fs.existsSync(normalized)) {
+      return normalized;
+    }
+  }
+  return null;
+}
+
+function stripAudioHapticsIconResourceIndex(filePath: string): string | null {
+  let value = filePath.trim();
+  if (value.startsWith('@')) {
+    value = value.slice(1).trim();
+  }
+  if (value.startsWith('"')) {
+    const quoteEnd = value.indexOf('"', 1);
+    return quoteEnd > 1 ? value.slice(1, quoteEnd) : value.replace(/^"|"$/g, '');
+  }
+  const commaIndex = value.lastIndexOf(',');
+  if (commaIndex > 0 && /^-?\d+$/.test(value.slice(commaIndex + 1).trim())) {
+    return value.slice(0, commaIndex).trim().replace(/^"|"$/g, '');
+  }
+  return value.replace(/^"|"$/g, '');
 }
 
 function registerIpc(service: BridgeService): void {
