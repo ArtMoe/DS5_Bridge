@@ -137,6 +137,7 @@ void reset_policy_state() {
 
 void reset_output_state() {
     controller_output_state_reset_cached_triggers();
+    controller_output_state_set_player_led_enabled(true);
     Payload payload{};
     controller_output_state_apply_host_payload(payload.data(), static_cast<uint8_t>(payload.size()));
 }
@@ -494,14 +495,43 @@ void output_state_lightbar_override_is_scaled_and_survives_audio_snapshot() {
     controller_output_state_copy_audio_snapshot(snapshot.data(), false);
 
     EXPECT_TRUE((snapshot[kValidFlag1Offset] & kFlag1LightbarControlEnable) != 0);
-    EXPECT_TRUE((snapshot[kValidFlag1Offset] & kFlag1PlayerIndicatorControlEnable) != 0);
+    EXPECT_FALSE((snapshot[kValidFlag1Offset] & kFlag1PlayerIndicatorControlEnable) != 0);
     EXPECT_FALSE((snapshot[kValidFlag1Offset] & kFlag1ReleaseLeds) != 0);
     EXPECT_EQ(snapshot[kValidFlag2Offset] & kLightbarSetupControlMask, 0);
     EXPECT_EQ(snapshot[kLedBrightnessOffset], 1);
-    EXPECT_EQ(snapshot[kPlayerLedsOffset], kPlayerLed1Instant);
+    EXPECT_EQ(snapshot[kPlayerLedsOffset], 0);
     EXPECT_EQ(snapshot[kLightbarRedOffset], 100);
     EXPECT_EQ(snapshot[kLightbarGreenOffset], 40);
     EXPECT_EQ(snapshot[kLightbarBlueOffset], 20);
+}
+
+void output_state_player_led_enabled_preserves_host_indicator() {
+    reset_output_state();
+    auto payload = empty_payload();
+    payload[kValidFlag1Offset] = kFlag1PlayerIndicatorControlEnable;
+    payload[kPlayerLedsOffset] = 0x2f;
+    controller_output_state_apply_host_payload(payload.data(), static_cast<uint8_t>(payload.size()));
+
+    AudioSnapshot snapshot{};
+    controller_output_state_copy_audio_snapshot(snapshot.data(), false);
+
+    EXPECT_TRUE((snapshot[kValidFlag1Offset] & kFlag1PlayerIndicatorControlEnable) != 0);
+    EXPECT_EQ(snapshot[kPlayerLedsOffset], 0x2f);
+}
+
+void output_state_player_led_disabled_suppresses_host_indicator() {
+    reset_output_state();
+    auto payload = empty_payload();
+    payload[kValidFlag1Offset] = kFlag1PlayerIndicatorControlEnable;
+    payload[kPlayerLedsOffset] = 0x2f;
+    controller_output_state_apply_host_payload(payload.data(), static_cast<uint8_t>(payload.size()));
+    controller_output_state_set_player_led_enabled(false);
+
+    AudioSnapshot snapshot{};
+    controller_output_state_copy_audio_snapshot(snapshot.data(), false);
+
+    EXPECT_TRUE((snapshot[kValidFlag1Offset] & kFlag1PlayerIndicatorControlEnable) != 0);
+    EXPECT_EQ(snapshot[kPlayerLedsOffset], 0);
 }
 
 void output_state_clears_zero_rumble_flags_but_preserves_nonzero_rumble() {
@@ -883,6 +913,8 @@ std::vector<TestCase> tests{
     {"output state audio snapshot routes to speaker and headphones safely", output_state_audio_snapshot_routes_to_speaker_and_headphones_safely},
     {"output state audio snapshot preserves haptic motor power", output_state_audio_snapshot_preserves_haptic_motor_power},
     {"output state lightbar override is scaled and survives audio snapshot", output_state_lightbar_override_is_scaled_and_survives_audio_snapshot},
+    {"output state player led enabled preserves host indicator", output_state_player_led_enabled_preserves_host_indicator},
+    {"output state player led disabled suppresses host indicator", output_state_player_led_disabled_suppresses_host_indicator},
     {"output state clears zero rumble flags but preserves nonzero rumble", output_state_clears_zero_rumble_flags_but_preserves_nonzero_rumble},
     {"output state clear triggers removes effect bytes flags and power", output_state_clear_triggers_removes_effect_bytes_flags_and_power},
     {"haptics test signal matches original main packet flip pattern", haptics_test_signal_matches_original_main_packet_flip_pattern},

@@ -64,16 +64,25 @@ uint8_t scale_lightbar_channel(uint8_t channel, uint8_t brightness_percent) {
     return scaled_percent(channel, brightness_percent);
 }
 
-uint8_t player_led_value() {
-    return player_led_enabled ? kPlayerLed1Instant : 0;
-}
-
 void apply_player_led_policy(uint8_t *payload) {
     if (payload == nullptr) {
         return;
     }
+    if (player_led_enabled) {
+        return;
+    }
     payload[kValidFlag1Offset] |= kFlag1PlayerIndicatorControlEnable;
-    payload[kPlayerLedsOffset] = player_led_value();
+    payload[kPlayerLedsOffset] = 0;
+}
+
+void release_player_led_policy(uint8_t *payload) {
+    if (payload == nullptr) {
+        return;
+    }
+    payload[kValidFlag1Offset] = static_cast<uint8_t>(
+        payload[kValidFlag1Offset] & static_cast<uint8_t>(~kFlag1PlayerIndicatorControlEnable)
+    );
+    payload[kPlayerLedsOffset] = 0;
 }
 
 void clear_adaptive_trigger_effects(uint8_t *payload) {
@@ -215,21 +224,31 @@ void controller_output_state_set_lightbar(uint8_t red, uint8_t green, uint8_t bl
             & static_cast<uint8_t>(~kFlag1ReleaseLeds)
         )
         | kFlag1LightbarControlEnable
-        | kFlag1PlayerIndicatorControlEnable
     );
+    if (player_led_enabled) {
+        release_player_led_policy(state_data);
+    } else {
+        apply_player_led_policy(state_data);
+    }
     state_data[kValidFlag2Offset] = static_cast<uint8_t>(
         state_data[kValidFlag2Offset] & static_cast<uint8_t>(~kLightbarSetupControlMask)
     );
     state_data[kLedBrightnessOffset] = 0x01;
-    state_data[kPlayerLedsOffset] = player_led_value();
     state_data[kLightbarRedOffset] = scale_lightbar_channel(red, brightness);
     state_data[kLightbarGreenOffset] = scale_lightbar_channel(green, brightness);
     state_data[kLightbarBlueOffset] = scale_lightbar_channel(blue, brightness);
 }
 
 void controller_output_state_set_player_led_enabled(bool enabled) {
+    const bool was_enabled = player_led_enabled;
     player_led_enabled = enabled;
-    apply_player_led_policy(state_data);
+    if (enabled) {
+        if (!was_enabled) {
+            release_player_led_policy(state_data);
+        }
+    } else {
+        apply_player_led_policy(state_data);
+    }
 }
 
 void controller_output_state_copy_audio_snapshot(uint8_t *destination, bool headset_plugged) {

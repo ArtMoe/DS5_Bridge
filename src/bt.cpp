@@ -66,7 +66,6 @@
 #define DS_OUTPUT_MIC_VOLUME_MAX 0x40
 #define DS_OUTPUT_AUDIO_FLAGS2_SPEAKER_PREAMP_GAIN 0x07
 #define DS_OUTPUT_LIGHTBAR_SETUP_LIGHT_OUT 0x02
-#define DS_PLAYER_LED_1_INSTANT 0x24
 #define DS_TRIGGER_EFFECT_SIZE 11
 #define DS_TRIGGER_EFFECT_RIGHT_OFFSET 10
 #define DS_TRIGGER_EFFECT_LEFT_OFFSET 21
@@ -878,9 +877,11 @@ void bt_set_lightbar_color(uint8_t red, uint8_t green, uint8_t blue, uint8_t bri
 
     uint8_t report[DS_OUTPUT_REPORT_BT_SIZE];
     init_state_report(report);
-    report[3 + 1] = DS_OUTPUT_VALID_FLAG1_LIGHTBAR_CONTROL_ENABLE
-        | DS_OUTPUT_VALID_FLAG1_PLAYER_INDICATOR_CONTROL_ENABLE;
-    report[3 + 43] = player_led_enabled ? DS_PLAYER_LED_1_INSTANT : 0;
+    report[3 + 1] = DS_OUTPUT_VALID_FLAG1_LIGHTBAR_CONTROL_ENABLE;
+    if (!player_led_enabled) {
+        report[3 + 1] |= DS_OUTPUT_VALID_FLAG1_PLAYER_INDICATOR_CONTROL_ENABLE;
+        report[3 + 43] = 0;
+    }
     report[3 + 44] = scale_lightbar_channel(saved_lightbar_red, saved_lightbar_brightness);
     report[3 + 45] = scale_lightbar_channel(saved_lightbar_green, saved_lightbar_brightness);
     report[3 + 46] = scale_lightbar_channel(saved_lightbar_blue, saved_lightbar_brightness);
@@ -891,14 +892,14 @@ void bt_set_player_led_enabled(bool enabled) {
     player_led_enabled = enabled;
     controller_output_state_set_player_led_enabled(enabled);
 
-    if (hid_interrupt_cid == 0) {
+    if (enabled || hid_interrupt_cid == 0) {
         return;
     }
 
     uint8_t report[DS_OUTPUT_REPORT_BT_SIZE];
     init_state_report(report);
     report[3 + OUTPUT_PAYLOAD_VALID_FLAG1_OFFSET] = DS_OUTPUT_VALID_FLAG1_PLAYER_INDICATOR_CONTROL_ENABLE;
-    report[3 + OUTPUT_PAYLOAD_PLAYER_LEDS_OFFSET] = enabled ? DS_PLAYER_LED_1_INSTANT : 0;
+    report[3 + OUTPUT_PAYLOAD_PLAYER_LEDS_OFFSET] = 0;
     bt_write(report, sizeof(report));
 }
 
