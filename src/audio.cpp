@@ -2398,14 +2398,17 @@ static bool process_usb_audio_packet() {
     WDL_ResampleSample *in_buf;
     const int requested_haptic_frames = resampler.ResamplePrepare(frames, OUTPUT_CHANNELS, &in_buf);
     const int haptic_input_frames = std::min(frames, requested_haptic_frames);
+    const float speaker_gain = usb_host_mute[0] ? 0.0f : clamp(volume[0], 0.0f, 1.0f);
     const float haptic_gain = clamp(volume[1], 0.0f, MAX_HAPTICS_GAIN);
+    const float host_compensation_gain = host_render_volume_compensation_gain();
     for (int i = 0; i < frames; i++) {
-        const int16_t speaker_l = raw[i * INPUT_CHANNELS];
-        const int16_t speaker_r = raw[i * INPUT_CHANNELS + 1];
-        const int16_t haptic_l = raw[i * INPUT_CHANNELS + 2];
-        const int16_t haptic_r = raw[i * INPUT_CHANNELS + 3];
-        audio_buf[audio_buf_pos++] = static_cast<float>(speaker_l) / 32768.0f;
-        audio_buf[audio_buf_pos++] = static_cast<float>(speaker_r) / 32768.0f;
+        const int16_t speaker_l = compensate_host_render_sample(raw[i * INPUT_CHANNELS], host_compensation_gain);
+        const int16_t speaker_r = compensate_host_render_sample(raw[i * INPUT_CHANNELS + 1], host_compensation_gain);
+        const int16_t haptic_l = compensate_host_render_sample(raw[i * INPUT_CHANNELS + 2], host_compensation_gain);
+        const int16_t haptic_r = compensate_host_render_sample(raw[i * INPUT_CHANNELS + 3], host_compensation_gain);
+        const float transition_gain = next_fallback_speaker_gain();
+        audio_buf[audio_buf_pos++] = static_cast<float>(speaker_l) / 32768.0f * speaker_gain * transition_gain;
+        audio_buf[audio_buf_pos++] = static_cast<float>(speaker_r) / 32768.0f * speaker_gain * transition_gain;
         if (audio_buf_pos == 512 * 2) {
             static audio_raw_element element{};
             memcpy(element.data,audio_buf,512 * 2 * 4);
@@ -2708,7 +2711,19 @@ static bool write_mic_usb_pending_frame() {
     }
 
     const uint8_t *data = reinterpret_cast<uint8_t const *>(mic_usb_pending.data) + mic_usb_pending_offset;
-    const uint16_t written = tud_audio_n_write(0, data, target_len);
+    alignas(2) uint8_t scaled_data[HOST_MIC_USB_PACKET_BYTES]{};
+    uint8_t const *write_data = data;
+    const uint8_t output_percent = mic_output_muted ? 0 : mic_output_volume_percent;
+    if (output_percent < 100) {
+        const int16_t *samples = reinterpret_cast<int16_t const *>(data);
+        int16_t *scaled_samples = reinterpret_cast<int16_t *>(scaled_data);
+        const uint16_t sample_count = target_len / sizeof(int16_t);
+        for (uint16_t i = 0; i < sample_count; i++) {
+            scaled_samples[i] = static_cast<int16_t>((static_cast<int32_t>(samples[i]) * output_percent) / 100);
+        }
+        write_data = scaled_data;
+    }
+    const uint16_t written = tud_audio_n_write(0, write_data, target_len);
     mic_last_written_bytes = written;
     if (written > 0) {
         mic_usb_playout_started = true;
