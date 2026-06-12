@@ -1520,7 +1520,7 @@ describe('BridgeService', () => {
     expect(snapshot.personaTransition?.to).toBe('ds4');
   });
 
-  it('restores controller default output after a host persona transition settles', async () => {
+  it('restores controller default output after a host persona transition reconnects', async () => {
     const service = serviceFixture();
     const device = new MockHidDevice();
     device.status = statusReport({
@@ -1557,12 +1557,12 @@ describe('BridgeService', () => {
       });
       nowSpy.mockReturnValue(1_000_050);
       await poll(service);
-      expect(setDefaultRenderBridgeEndpoint).not.toHaveBeenCalled();
+      expect(setDefaultRenderBridgeEndpoint).toHaveBeenCalledOnce();
+      expect(setDefaultRenderBridgeEndpoint).toHaveBeenCalledWith('ds4');
 
       nowSpy.mockReturnValue(1_001_251);
       await poll(service);
       expect(setDefaultRenderBridgeEndpoint).toHaveBeenCalledOnce();
-      expect(setDefaultRenderBridgeEndpoint).toHaveBeenCalledWith('ds4');
     } finally {
       nowSpy.mockRestore();
     }
@@ -1644,7 +1644,7 @@ describe('BridgeService', () => {
     hidMock.state.devicesList = [companionDeviceInfo('xbox-path')];
     await poll(service);
 
-    expect(winUsbTransportMock.open).toHaveBeenLastCalledWith({ retryTimeoutMs: 1000 });
+    expect(winUsbTransportMock.open).toHaveBeenLastCalledWith({ retryTimeoutMs: 250 });
     expect(service.getSnapshot().state).toBe('transitioning');
   });
 
@@ -1709,8 +1709,8 @@ describe('BridgeService', () => {
       nowSpy.mockReturnValue(1_000_500);
       await poll(service);
 
-      expect(service.getSnapshot().state).toBe('transitioning');
-      expect(service.getSnapshot().message).toBe('Switching to Xbox Controller mode');
+      expect(service.getSnapshot().state).toBe('connected');
+      expect(service.getSnapshot().message).toBe('Companion firmware connected');
 
       nowSpy.mockReturnValue(1_001_701);
       await poll(service);

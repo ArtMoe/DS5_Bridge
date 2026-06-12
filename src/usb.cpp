@@ -40,8 +40,8 @@ uint8_t usb_hid_polling_interval_ms_value = 1;
 #define UAC1_ENTITY_MIC_FEATURE_UNIT    0x05
 #define UAC1_ENTITY_LINE_FEATURE_UNIT   0x08
 #define HID_OUTPUT_ACTIVE_US            500000
-#define USB_RECONNECT_DELAY_US          250000
-#define USB_RECONNECT_HOLD_US           150000
+#define USB_RECONNECT_DELAY_US          50000
+#define USB_RECONNECT_HOLD_US           100000
 
 enum UsbAudioDebugKind : uint8_t {
     UsbAudioDebugSetInterface = 1,

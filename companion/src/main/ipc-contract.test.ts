@@ -4,18 +4,34 @@ import { describe, expect, it } from 'vitest';
 const preloadSource = readFileSync(new URL('../preload.ts', import.meta.url), 'utf8');
 const mainSource = readFileSync(new URL('./main.ts', import.meta.url), 'utf8');
 
-function uniqueMatches(source: string, pattern: RegExp): string[] {
-  return [...new Set([...source.matchAll(pattern)].map((match) => match[1] ?? ''))].sort();
+function matches(source: string, pattern: RegExp): string[] {
+  return [...source.matchAll(pattern)].map((match) => match[1] ?? '');
+}
+
+function uniqueSorted(values: string[]): string[] {
+  return [...new Set(values)].sort();
+}
+
+function duplicateValues(values: string[]): string[] {
+  const seen = new Set<string>();
+  const duplicates = new Set<string>();
+  for (const value of values) {
+    if (seen.has(value)) {
+      duplicates.add(value);
+    }
+    seen.add(value);
+  }
+  return [...duplicates].sort();
 }
 
 describe('IPC contract', () => {
   it('keeps every preload invoke channel backed by exactly one main handler', () => {
-    const preloadChannels = uniqueMatches(preloadSource, /ipcRenderer\.invoke\('([^']+)'/g);
-    const mainChannels = uniqueMatches(mainSource, /ipcMain\.handle\('([^']+)'/g);
+    const preloadChannels = matches(preloadSource, /ipcRenderer\.invoke\('([^']+)'/g);
+    const mainChannels = matches(mainSource, /ipcMain\.handle\('([^']+)'/g);
 
-    expect(preloadChannels).toHaveLength(71);
-    expect(mainChannels).toHaveLength(71);
-    expect(preloadChannels).toEqual(mainChannels);
+    expect(duplicateValues(preloadChannels)).toEqual([]);
+    expect(duplicateValues(mainChannels)).toEqual([]);
+    expect(uniqueSorted(preloadChannels)).toEqual(uniqueSorted(mainChannels));
   });
 
   it('returns unsubscribe functions for renderer event subscriptions', () => {

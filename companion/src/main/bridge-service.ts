@@ -126,9 +126,9 @@ const FEEDBACK_TRACE_MAX_READS_PER_POLL = 32;
 const STARTUP_REAPPLY_MIN_SETTLE_MS = 0;
 const STARTUP_REAPPLY_RETRY_DELAYS_MS = [250, 650, 1300] as const;
 const HOST_PERSONA_TRANSITION_TIMEOUT_MS = 8000;
-const HOST_PERSONA_TRANSITION_SETTLE_MS = 1200;
-const HOST_PERSONA_TRANSITION_REDISCOVERY_POLL_MS = 100;
-const HOST_PERSONA_TRANSITION_OPEN_RETRY_MS = 1000;
+const HOST_PERSONA_TRANSITION_SETTLE_MS = 0;
+const HOST_PERSONA_TRANSITION_REDISCOVERY_POLL_MS = 50;
+const HOST_PERSONA_TRANSITION_OPEN_RETRY_MS = 250;
 const HOST_PERSONA_RECONNECT_GRACE_MS = 5000;
 const HOST_PERSONA_DEFAULT_RENDER_RESTORE_RETRY_MS = 500;
 const HOST_PERSONA_DEFAULT_RENDER_RESTORE_GRACE_MS = 4000;
@@ -3781,6 +3781,9 @@ export class BridgeService extends EventEmitter {
       personaTransition: transition
     };
     this.emitSnapshot();
+    if (transition) {
+      this.scheduleHostPersonaTransitionPoll();
+    }
     await this.restoreHostPersonaDefaultRenderIfReady(status);
     await this.updateMicKeepaliveEngine(status.controllerConnected);
     await this.syncControllerPowerSavingState(settings);
