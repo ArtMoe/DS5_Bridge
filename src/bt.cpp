@@ -78,6 +78,7 @@
 #define DS_TRIGGER_TARGET_LEFT 1
 #define DS_TRIGGER_TARGET_RIGHT 2
 #define AUDIO_SEND_QUEUE_MAX_DEPTH 4
+#define URGENT_SEND_QUEUE_MAX_DEPTH 16
 #define OUTPUT_AUDIO_MAX_AGE_US 3000
 #define OUTPUT_MAX_CONSECUTIVE_NON_AUDIO_SENDS 1
 #define CONTROL_SEND_QUEUE_MAX_DEPTH 8
@@ -125,8 +126,9 @@ using std::vector;
 using std::queue;
 
 enum OutputPacketClass : uint8_t {
-    OutputPacketAudio = 1,
-    OutputPacketState = 2,
+    OutputPacketUrgent = 1,
+    OutputPacketAudio = 2,
+    OutputPacketState = 3,
 };
 
 enum OutputClassificationReason : uint8_t {
@@ -210,6 +212,7 @@ struct output_scheduler_counters {
 static void hci_packet_handler(uint8_t packet_type, uint16_t channel, uint8_t *packet, uint16_t size);
 static void l2cap_packet_handler(uint8_t packet_type, uint16_t channel, uint8_t *packet, uint16_t size);
 static bool build_interrupt_output_packet(uint8_t *data, uint16_t len, vector<uint8_t> &packet);
+static bool enqueue_urgent_output(uint8_t *data, uint16_t len, uint8_t reason);
 static bool enqueue_state_output(uint8_t *data, uint16_t len, uint8_t reason);
 static bool enqueue_feedback_state_output(uint8_t *data, uint16_t len, uint8_t reason);
 static bool enqueue_control_packet(uint8_t const *data, uint16_t len, bool coalescible);
@@ -247,6 +250,7 @@ static bool bt_rssi_request_pending = false;
 static uint32_t bt_rssi_last_request_us = 0;
 unordered_map<uint8_t, vector<uint8_t> > feature_data;
 static bool feature_prefetch_active = false;
+static queue<output_packet> urgent_queue;
 static queue<output_packet> audio_queue;
 static vector<control_packet> control_queue;
 static uint8_t state_pending_report[DS_OUTPUT_REPORT_BT_SIZE];
@@ -291,6 +295,7 @@ static bool control_pending_locked() {
 }
 
 static void clear_output_queues_locked() {
+    clear_packet_queue(urgent_queue);
     clear_packet_queue(audio_queue);
     control_queue.clear();
     state_pending = false;
@@ -314,7 +319,7 @@ static void reset_controller_output_session_locked() {
 }
 
 static bool output_pending_locked() {
-    return !audio_queue.empty() || state_pending;
+    return !urgent_queue.empty() || !audio_queue.empty() || state_pending;
 }
 
 static void power_down_cyw43_for_reboot() {
@@ -422,7 +427,7 @@ static void output_trace_queue_details_locked(
     uint8_t &audio_depth,
     uint8_t &route_flags
 ) {
-    critical_depth = 0;
+    critical_depth = clamp_output_trace_u8(static_cast<uint32_t>(urgent_queue.size()));
     audio_depth = clamp_output_trace_u8(static_cast<uint32_t>(audio_queue.size()));
     route_flags = output_trace_route_flags_locked();
 }
@@ -859,6 +864,7 @@ void bt_set_lightbar_color(uint8_t red, uint8_t green, uint8_t blue, uint8_t bri
         report[3 + 1] |= DS_OUTPUT_VALID_FLAG1_PLAYER_INDICATOR_CONTROL_ENABLE;
         report[3 + 43] = 0;
     }
+    report[3 + OUTPUT_PAYLOAD_LED_BRIGHTNESS_OFFSET] = 0x01;
     report[3 + 44] = scale_lightbar_channel(saved_lightbar_red, saved_lightbar_brightness);
     report[3 + 45] = scale_lightbar_channel(saved_lightbar_green, saved_lightbar_brightness);
     report[3 + 46] = scale_lightbar_channel(saved_lightbar_blue, saved_lightbar_brightness);
@@ -1501,45 +1507,50 @@ static bool select_next_output_packet_locked(output_packet &packet, uint32_t now
     uint8_t trace_route_flags = 0;
     output_trace_queue_details_locked(trace_critical_depth, trace_audio_depth, trace_route_flags);
 
-    const bool audio_available = !audio_queue.empty();
-    const uint32_t audio_age_us = audio_available
-        ? packet_age_us(now, audio_queue.front().enqueue_time_us)
-        : 0;
-    const OutputSchedulerInputs scheduler_inputs{
-        audio_available,
-        state_pending,
-        audio_age_us,
-        static_cast<uint32_t>(audio_queue.size()),
-        consecutive_non_audio_sends
-    };
-    constexpr OutputSchedulerConfig scheduler_config{
-        OUTPUT_AUDIO_MAX_AGE_US,
-        OUTPUT_MAX_CONSECUTIVE_NON_AUDIO_SENDS
-    };
-
-    const OutputSchedulerChoice choice = output_scheduler_choose_interrupt_packet(
-        scheduler_inputs,
-        scheduler_config
-    );
-
-    if (choice == OutputSchedulerChoice::AudioStream) {
-        packet = std::move(audio_queue.front());
-        audio_queue.pop();
-    } else if (choice == OutputSchedulerChoice::CoalescedState) {
-        uint8_t report[DS_OUTPUT_REPORT_BT_SIZE];
-        memcpy(report, state_pending_report, sizeof(report));
-        if (!build_interrupt_output_packet(report, sizeof(report), packet.data)) {
-            state_pending = false;
-            update_queue_depth_counters_locked();
-            return select_next_output_packet_locked(packet, now);
-        }
-        packet.enqueue_time_us = state_pending_since_us;
-        packet.packet_class = OutputPacketState;
-        packet.report_id = DS_OUTPUT_REPORT_BT;
-        packet.reason = state_pending_reason;
-        state_pending = false;
+    if (!urgent_queue.empty()) {
+        packet = std::move(urgent_queue.front());
+        urgent_queue.pop();
     } else {
-        return false;
+        const bool audio_available = !audio_queue.empty();
+        const uint32_t audio_age_us = audio_available
+            ? packet_age_us(now, audio_queue.front().enqueue_time_us)
+            : 0;
+        const OutputSchedulerInputs scheduler_inputs{
+            audio_available,
+            state_pending,
+            audio_age_us,
+            static_cast<uint32_t>(audio_queue.size()),
+            consecutive_non_audio_sends
+        };
+        constexpr OutputSchedulerConfig scheduler_config{
+            OUTPUT_AUDIO_MAX_AGE_US,
+            OUTPUT_MAX_CONSECUTIVE_NON_AUDIO_SENDS
+        };
+
+        const OutputSchedulerChoice choice = output_scheduler_choose_interrupt_packet(
+            scheduler_inputs,
+            scheduler_config
+        );
+
+        if (choice == OutputSchedulerChoice::AudioStream) {
+            packet = std::move(audio_queue.front());
+            audio_queue.pop();
+        } else if (choice == OutputSchedulerChoice::CoalescedState) {
+            uint8_t report[DS_OUTPUT_REPORT_BT_SIZE];
+            memcpy(report, state_pending_report, sizeof(report));
+            if (!build_interrupt_output_packet(report, sizeof(report), packet.data)) {
+                state_pending = false;
+                update_queue_depth_counters_locked();
+                return select_next_output_packet_locked(packet, now);
+            }
+            packet.enqueue_time_us = state_pending_since_us;
+            packet.packet_class = OutputPacketState;
+            packet.report_id = DS_OUTPUT_REPORT_BT;
+            packet.reason = state_pending_reason;
+            state_pending = false;
+        } else {
+            return false;
+        }
     }
 
     set_output_trace_details_locked(
@@ -1877,6 +1888,24 @@ static bool make_output_packet(
     packet.packet_class = packet_class;
     packet.report_id = len > 0 ? data[0] : 0;
     packet.reason = reason;
+    return true;
+}
+
+static bool enqueue_urgent_output(uint8_t *data, uint16_t len, uint8_t reason) {
+    output_packet packet{};
+    if (!make_output_packet(data, len, OutputPacketUrgent, reason, packet)) {
+        return false;
+    }
+
+    bool should_request_send = false;
+    critical_section_enter_blocking(&queue_lock);
+    should_request_send = !output_pending_locked();
+    while (urgent_queue.size() >= URGENT_SEND_QUEUE_MAX_DEPTH) {
+        urgent_queue.pop();
+    }
+    urgent_queue.push(std::move(packet));
+    critical_section_exit(&queue_lock);
+    request_can_send_if_needed(should_request_send);
     return true;
 }
 
@@ -2462,7 +2491,7 @@ static bool enqueue_feedback_state_output(uint8_t *data, uint16_t len, uint8_t r
 }
 
 void bt_write(uint8_t *data, uint16_t len) {
-    (void)enqueue_state_output(data, len, OutputReasonStateOnly);
+    (void)enqueue_urgent_output(data, len, OutputReasonCriticalDirect);
 }
 
 bool bt_write_classified_output(uint8_t *data, uint16_t len) {
