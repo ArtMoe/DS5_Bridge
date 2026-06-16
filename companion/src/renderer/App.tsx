@@ -4297,7 +4297,7 @@ export function App() {
         if (volumeChanged) {
           await delay(TEST_SPEAKER_VOLUME_SETTLE_MS);
         }
-        const next = await playSpeakerToneFile().then(() => window.bridge.getStatus());
+        const next = await window.bridge.testSpeaker();
         setSnapshot(next);
         setSpeakerVolumeValue(snapSpeakerVolume(next.settings.speakerVolumePercent));
         setSpeakerOutputAvailable(true);
