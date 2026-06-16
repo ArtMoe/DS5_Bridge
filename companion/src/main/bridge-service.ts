@@ -273,6 +273,7 @@ function parseHexColor(color: string): { hex: string; red: number; green: number
 function muteButtonModeValue(mode: MuteButtonMode): number {
   if (mode === 'keyboard') return 1;
   if (mode === 'quiet') return 2;
+  if (mode === 'chord') return 3;
   return 0;
 }
 

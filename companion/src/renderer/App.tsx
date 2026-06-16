@@ -33,6 +33,7 @@ import {
   IconLink as LinkIcon,
   IconLinkOff as LinkOffIcon,
   IconMicrophone as Mic,
+  IconMicrophoneOff as MicOff,
   IconMinus as Minus,
   IconMoon as Moon,
   IconPalette as Palette,
@@ -87,6 +88,7 @@ import {
   CHORD_CONTROLLER_SETTING_STEP_DEFAULT,
   CHORD_CONTROLLER_SETTING_STEP_MAX,
   CHORD_CONTROLLER_SETTING_STEP_MIN,
+  CHORD_MUTE_STARTER_ID,
   DEFAULT_BUTTON_REMAP_PROFILE_ID,
   DEFAULT_CONTROLLER_PROFILE_ID,
   MAX_CHORD_ASSIGNMENTS,
@@ -139,6 +141,7 @@ type ChordStarterDefinition = {
   label: string;
   glyphUrl?: string;
   textGlyph?: string;
+  Icon?: TablerIcon;
 };
 type DualSenseEdgeRemapButtonId = Extract<RemapButtonId, 'lb' | 'rb' | 'lfn' | 'rfn'>;
 type StandardRemapButtonId = Exclude<RemapButtonId, DualSenseEdgeRemapButtonId>;
@@ -360,7 +363,8 @@ const TRIGGER_LAB_AUTO_CUSTOM_PROFILE_NAME = 'Custom';
 const MUTE_BUTTON_MODE_OPTIONS: Array<[string, MuteButtonMode]> = [
   ['Normal', 'normal'],
   ['Keyboard Key', 'keyboard'],
-  ['Quiet Toggle', 'quiet']
+  ['Quiet Toggle', 'quiet'],
+  ['Chord', 'chord']
 ];
 const MUTE_KEYBOARD_BEHAVIOR_OPTIONS: Array<[string, MuteKeyboardBehavior]> = [
   ['Tap Once', 'tap'],
@@ -489,12 +493,14 @@ const REMAP_TARGET_OPTIONS: Array<[string, StandardRemapButtonId]> = [
 const CHORD_STARTERS: Record<ChordStarterId, ChordStarterDefinition> = {
   ps: { id: 'ps', label: 'PS Button', glyphUrl: psHomeGlyphUrl },
   lfn: { id: 'lfn', label: 'LFN', textGlyph: 'LFN' },
-  rfn: { id: 'rfn', label: 'RFN', textGlyph: 'RFN' }
+  rfn: { id: 'rfn', label: 'RFN', textGlyph: 'RFN' },
+  mute: { id: CHORD_MUTE_STARTER_ID, label: 'Mute Button', Icon: MicOff }
 };
 const CHORD_STARTER_OPTIONS: Array<[string, ChordStarterId]> = [
   [CHORD_STARTERS.ps.label, 'ps'],
   [CHORD_STARTERS.lfn.label, 'lfn'],
-  [CHORD_STARTERS.rfn.label, 'rfn']
+  [CHORD_STARTERS.rfn.label, 'rfn'],
+  [CHORD_STARTERS.mute.label, CHORD_MUTE_STARTER_ID]
 ];
 const CHORD_FUNCTION_TYPE_OPTIONS: Array<[string, ChordFunctionType]> = [
   ['Keyboard Shortcut', 'keyboard'],
@@ -2329,8 +2335,13 @@ function RemapSourceGlyph({ button }: { button: RemapButtonDefinition }) {
 
 function ChordStarterGlyph({ starter, label = CHORD_STARTERS[starter].label }: { starter: ChordStarterId; label?: string }) {
   const button = CHORD_STARTERS[starter];
+  const Icon = button.Icon;
 
-  return button.glyphUrl ? (
+  return Icon ? (
+    <span className="chords-unassigned-glyph chords-starter-icon-glyph" title={label} aria-label={label}>
+      <Icon size={18} />
+    </span>
+  ) : button.glyphUrl ? (
     <img src={button.glyphUrl} alt={label} title={label} />
   ) : (
     <span className="remap-text-glyph remap-text-glyph-source" title={label}>
@@ -2853,6 +2864,7 @@ export function App() {
   const remappingLayoutAsset = showDualSenseEdgeRemapButtons ? REMAP_EDGE_LAYOUT_ASSET : REMAP_STANDARD_LAYOUT_ASSET;
   const chordFunctions = snapshot?.settings.chordFunctions ?? [];
   const chordAssignments = snapshot?.settings.chordAssignments ?? [];
+  const muteButtonModeIsChord = snapshot?.settings.muteButtonMode === 'chord';
   const selectedChordFunction = chordFunctions.find((func) => func.id === selectedChordFunctionId) ?? chordFunctions[0] ?? null;
   const chordFunctionDialogFunction = chordFunctionDialog
     ? chordFunctions.find((func) => func.id === chordFunctionDialog.functionId) ?? null
@@ -2885,10 +2897,15 @@ export function App() {
         conflictKeys.add(key);
         conflictCount += 1;
       }
+      if (assignment.starter === CHORD_MUTE_STARTER_ID && !muteButtonModeIsChord) {
+        conflictKeys.add(key);
+        conflictCount += 1;
+      }
     }
     return { conflictKeys, conflictCount };
   }, [
     chordAssignments,
+    muteButtonModeIsChord,
     snapshot?.settings.sleepKeybindEnabled,
     snapshot?.settings.speakerVolumeShortcutEnabled
   ]);
@@ -2902,15 +2919,27 @@ export function App() {
   ), [chordFunctions]);
   const defaultChordFunctionId = selectedChordFunction?.id ?? chordFunctions[0]?.id ?? '';
   const chordStarterOptions = useMemo<Array<[string, ChordStarterId]>>(() => (
-    showDualSenseEdgeRemapButtons
-      ? CHORD_STARTER_OPTIONS
-      : CHORD_STARTER_OPTIONS.filter(([, starter]) => starter === 'ps')
-  ), [showDualSenseEdgeRemapButtons]);
+    CHORD_STARTER_OPTIONS.filter(([, starter]) => {
+      if (starter === CHORD_MUTE_STARTER_ID) {
+        return muteButtonModeIsChord;
+      }
+      return starter === 'ps' || showDualSenseEdgeRemapButtons;
+    })
+  ), [muteButtonModeIsChord, showDualSenseEdgeRemapButtons]);
   const chordAssignableButtonIds = useMemo<readonly ChordAssignableButtonId[]>(() => (
     (showDualSenseEdgeRemapButtons
       ? CHORD_BUTTON_MENU_IDS
       : REMAP_TARGET_BUTTON_IDS) as readonly ChordAssignableButtonId[]
   ), [showDualSenseEdgeRemapButtons]);
+  function chordStarterOptionsFor(currentStarter?: ChordStarterId): Array<[string, ChordStarterId]> {
+    return currentStarter === CHORD_MUTE_STARTER_ID
+      && !chordStarterOptions.some(([, starter]) => starter === CHORD_MUTE_STARTER_ID)
+      ? [...chordStarterOptions, [CHORD_STARTERS.mute.label, CHORD_MUTE_STARTER_ID]]
+      : chordStarterOptions;
+  }
+  function muteChordStarterIsInactive(starter: ChordStarterId): boolean {
+    return starter === CHORD_MUTE_STARTER_ID && !muteButtonModeIsChord;
+  }
   function chordButtonOptionsFor(
     starter: ChordStarterId,
     includeUnassigned = false
@@ -2918,7 +2947,7 @@ export function App() {
     const ids = chordAssignableButtonIds;
     const options = ids
       .filter((id) => isChordBindingAllowed(starter, id))
-      .map((id): [string, ChordButtonSelectValue] => [REMAP_BUTTONS[id].label, id]);
+      .map((id): [string, ChordButtonSelectValue] => [chordButtonLabel(id), id]);
     return includeUnassigned
       ? [['Choose Button', CHORD_UNASSIGNED_BUTTON], ...options]
       : options;
@@ -2928,9 +2957,9 @@ export function App() {
   }
   const canAddChordDraft = Boolean(defaultChordFunctionId)
     && chordAssignments.length + chordAssignmentDraftRows.length < MAX_CHORD_ASSIGNMENTS;
-  const chordAssignmentsSubtitle = showDualSenseEdgeRemapButtons
-    ? 'Pair PS, LFN, or RFN with a button.'
-    : 'Pair PS with a button.';
+  const chordAssignmentsSubtitle = muteButtonModeIsChord
+    ? (showDualSenseEdgeRemapButtons ? 'Pair PS, LFN, RFN, or Mute with a button.' : 'Pair PS or Mute with a button.')
+    : (showDualSenseEdgeRemapButtons ? 'Pair PS, LFN, or RFN with a button.' : 'Pair PS with a button.');
 
   useEffect(() => {
     const list = chordAssignmentListRef.current;
@@ -2974,7 +3003,8 @@ export function App() {
   useEffect(() => {
     setChordAssignmentDraftRows((rows) => rows
       .map((row) => {
-        const starter = chordStarterOptions.some(([, option]) => option === row.starter) ? row.starter : 'ps';
+        const rowStarterOptions = chordStarterOptionsFor(row.starter);
+        const starter = rowStarterOptions.some(([, option]) => option === row.starter) ? row.starter : 'ps';
         const functionId = chordFunctions.some((func) => func.id === row.functionId)
           ? row.functionId
           : defaultChordFunctionId;
@@ -8035,7 +8065,7 @@ export function App() {
                       <p>{chordAssignmentsSubtitle}</p>
                     </div>
                     {chordAssignmentConflictState.conflictCount > 0 ? (
-                      <span className="chords-conflict-badge" title="Duplicate or shortcut-shadowed chord bindings">
+                      <span className="chords-conflict-badge" title="Duplicate, inactive, or shortcut-shadowed chord bindings">
                         <strong>{chordAssignmentConflictState.conflictCount}x</strong>
                         {chordAssignmentConflictState.conflictCount === 1 ? 'Conflict' : 'Conflicts'}
                       </span>
@@ -8065,16 +8095,25 @@ export function App() {
                         <>
                         {chordAssignmentDraftRows.map((row) => {
                           const func = chordFunctions.find((candidate) => candidate.id === row.functionId);
+                          const starterOptions = chordStarterOptionsFor(row.starter);
+                          const isInactiveMuteChord = muteChordStarterIsInactive(row.starter);
                           return (
-                            <div className="chords-assignment-row draft" key={row.id}>
+                            <div
+                              className={[
+                                'chords-assignment-row',
+                                'draft',
+                                isInactiveMuteChord ? 'mute-starter-inactive' : ''
+                              ].filter(Boolean).join(' ')}
+                              key={row.id}
+                            >
                               <div
                                 className="chords-assignment-binding"
                                 aria-label="New chord"
                                 title="New chord"
                               >
-                                <CustomSelect
+                                  <CustomSelect
                                   value={row.starter}
-                                  options={chordStarterOptions}
+                                  options={starterOptions}
                                   disabled={pendingAction !== null}
                                   className="chords-inline-glyph-select chords-inline-starter-select"
                                   floatingMenu
@@ -8140,6 +8179,8 @@ export function App() {
                         {chordAssignments.map((assignment, assignmentIndex) => {
                         const func = chordFunctions.find((candidate) => candidate.id === assignment.functionId);
                         const hasConflict = chordAssignmentConflictState.conflictKeys.has(chordAssignmentKey(assignment));
+                        const starterOptions = chordStarterOptionsFor(assignment.starter);
+                        const isInactiveMuteChord = muteChordStarterIsInactive(assignment.starter);
                         const dropPlacement = chordAssignmentDropHint?.targetId === assignment.id
                           ? chordAssignmentDropHint.placement
                           : null;
@@ -8148,6 +8189,7 @@ export function App() {
                             className={[
                               'chords-assignment-row',
                               hasConflict ? 'conflict' : '',
+                              isInactiveMuteChord ? 'mute-starter-inactive' : '',
                               draggedChordAssignmentId === assignment.id ? 'dragging' : '',
                               dropPlacement === 'before' ? 'drop-before' : '',
                               dropPlacement === 'after' ? 'drop-after' : '',
@@ -8162,9 +8204,9 @@ export function App() {
                               aria-label={chordAssignmentLabel(assignment)}
                               title={chordAssignmentLabel(assignment)}
                             >
-                              <CustomSelect
+                                <CustomSelect
                                 value={assignment.starter}
-                                options={chordStarterOptions}
+                                options={starterOptions}
                                 disabled={pendingAction !== null}
                                 className="chords-inline-glyph-select chords-inline-starter-select"
                                 floatingMenu
@@ -8298,7 +8340,7 @@ export function App() {
               <div className="feature-card-grid">
                 <section className="system-card mute-card">
                   <div className="feature-card-title system-card-heading">
-                    <span className="feature-icon system-icon icon-wide"><VolumeX size={20} /></span>
+                    <span className="feature-icon system-icon icon-wide"><MicOff size={20} /></span>
                     <div className="title-copy">
                       <h3>Mute Button</h3>
                       <p>Set controller mute behavior.</p>

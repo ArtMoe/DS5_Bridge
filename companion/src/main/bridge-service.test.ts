@@ -872,6 +872,22 @@ describe('BridgeService', () => {
     expect(snapshot.settings.muteKeyboardBehavior).toBe('hold');
   });
 
+  it('sends and stores mute button chord mode', async () => {
+    const service = serviceFixture();
+    const device = new MockHidDevice();
+    device.status = statusReport({ controllerConnected: false, firmwareFlags: 0x21 });
+    hidMock.state.devicesList = [companionDeviceInfo()];
+    hidMock.state.openDevices.set('companion-path', device);
+
+    await poll(service);
+    const snapshot = await service.setMuteButtonAction('chord', 0x68, 0, 'tap');
+
+    const command = device.sentReports.at(-1);
+    expect(command?.[7]).toBe(COMMAND_ID.SET_MUTE_BUTTON_ACTION);
+    expect(command?.[9]).toBe(3);
+    expect(snapshot.settings.muteButtonMode).toBe('chord');
+  });
+
   it('sends and stores haptics buffer length', async () => {
     const service = serviceFixture();
     const device = new MockHidDevice();

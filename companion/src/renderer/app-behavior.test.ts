@@ -4,6 +4,7 @@ import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
 
 const appSource = readFileSync(path.join(path.dirname(fileURLToPath(import.meta.url)), 'App.tsx'), 'utf8');
+const stylesSource = readFileSync(path.join(path.dirname(fileURLToPath(import.meta.url)), 'styles.css'), 'utf8');
 
 function extractFunction(name: string): string {
   const start = appSource.indexOf(`function ${name}`);
@@ -149,5 +150,22 @@ describe('renderer behavior guards', () => {
     expect(displaySource).toContain('snapshot.settings.hapticsGainPercent');
     expect(displaySource).toContain('snapshot.settings.lightbarBrightnessPercent');
     expect(displaySource).toContain('snapshot.settings.triggerEffectIntensityPercent');
+  });
+
+  it('shows mute as a chord starter only when mute behavior is chord', () => {
+    expect(appSource).toContain("mute: { id: CHORD_MUTE_STARTER_ID, label: 'Mute Button', Icon: MicOff }");
+    expect(appSource).toContain('[CHORD_STARTERS.mute.label, CHORD_MUTE_STARTER_ID]');
+    expect(appSource).toContain('chords-starter-icon-glyph');
+    expect(appSource).toContain('<Icon size={18} />');
+    expect(appSource).toContain('function chordStarterOptionsFor(currentStarter?: ChordStarterId)');
+    expect(appSource).toContain("currentStarter === CHORD_MUTE_STARTER_ID");
+    expect(appSource).toContain('mute-starter-inactive');
+    expect(appSource).toContain("assignment.starter === CHORD_MUTE_STARTER_ID && !muteButtonModeIsChord");
+    expect(appSource).toContain('Duplicate, inactive, or shortcut-shadowed chord bindings');
+    expect(stylesSource).toContain('.chords-assignment-row.mute-starter-inactive .remap-glyph-option img');
+    expect(stylesSource).toContain('opacity: var(--disabled-opacity);');
+    expect(appSource).toContain("starter === CHORD_MUTE_STARTER_ID");
+    expect(appSource).toContain("muteButtonModeIsChord");
+    expect(appSource).toContain('Pair PS, LFN, RFN, or Mute with a button.');
   });
 });

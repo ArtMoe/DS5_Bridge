@@ -20,7 +20,7 @@ namespace {
 
 constexpr uint8_t kMagic[] = {'D', 'S', '5', 'B'};
 constexpr uint8_t kProtocolMajor = 1;
-constexpr uint8_t kProtocolMinor = 11;
+constexpr uint8_t kProtocolMinor = 12;
 constexpr uint8_t kProtocolMinSupportedMinor = 7;
 constexpr uint8_t kFirmwareMajor = 1;
 constexpr uint8_t kFirmwareMinor = 6;
@@ -148,6 +148,7 @@ enum MuteButtonMode : uint8_t {
     MuteButtonNormal = 0,
     MuteButtonKeyboard = 1,
     MuteButtonQuiet = 2,
+    MuteButtonChord = 3,
 };
 
 enum ShortcutEvent : uint8_t {
@@ -217,6 +218,7 @@ constexpr uint8_t kDynamicChordBindingMax = 16;
 constexpr uint8_t kChordStarterHome = 1;
 constexpr uint8_t kChordStarterLfn = 2;
 constexpr uint8_t kChordStarterRfn = 3;
+constexpr uint8_t kChordStarterMute = 4;
 
 struct DynamicChordBinding {
     uint8_t event;
@@ -795,7 +797,7 @@ uint8_t supported_host_persona_mask() {
 }
 
 bool valid_mute_button_action(uint16_t mode, uint8_t usage) {
-    if (mode > MuteButtonQuiet) {
+    if (mode > MuteButtonChord) {
         return false;
     }
     if (mode == MuteButtonKeyboard && (usage == 0 || usage > 0x73)) {
@@ -1127,7 +1129,7 @@ bool valid_button_remap_payload(uint8_t const *payload, uint16_t len) {
 }
 
 bool valid_chord_starter(uint8_t starter) {
-    return starter >= kChordStarterHome && starter <= kChordStarterRfn;
+    return starter >= kChordStarterHome && starter <= kChordStarterMute;
 }
 
 bool valid_chord_button(uint8_t button) {
@@ -2472,6 +2474,8 @@ bool chord_starter_pressed(uint8_t const *report, uint16_t len, uint8_t starter)
             return (report[9] & kLeftFunctionButtonBit) != 0;
         case kChordStarterRfn:
             return (report[9] & kRightFunctionButtonBit) != 0;
+        case kChordStarterMute:
+            return mute_button_mode == MuteButtonChord && (report[9] & kMuteButtonBit) != 0;
         default:
             return false;
     }
@@ -2490,6 +2494,9 @@ void suppress_chord_starter(uint8_t *report, uint16_t len, uint8_t starter) {
             break;
         case kChordStarterRfn:
             report[9] &= static_cast<uint8_t>(~kRightFunctionButtonBit);
+            break;
+        case kChordStarterMute:
+            report[9] &= static_cast<uint8_t>(~kMuteButtonBit);
             break;
         default:
             break;

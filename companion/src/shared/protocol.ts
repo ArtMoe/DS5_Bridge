@@ -4,7 +4,7 @@ export const REPORT_LENGTH = 64;
 export const PAYLOAD_LENGTH = 63;
 export const MAGIC = 'DS5B';
 export const PROTOCOL_MAJOR = 1;
-export const PROTOCOL_MINOR = 11;
+export const PROTOCOL_MINOR = 12;
 
 export const REPORT_ID = {
   STATUS: 0x01,
@@ -101,7 +101,7 @@ export const ACK_RESULT = {
 
 export type AckResultCode = typeof ACK_RESULT[keyof typeof ACK_RESULT];
 export type ShortcutEvent = typeof SHORTCUT_EVENT[keyof typeof SHORTCUT_EVENT];
-export type MuteButtonMode = 'normal' | 'keyboard' | 'quiet';
+export type MuteButtonMode = 'normal' | 'keyboard' | 'quiet' | 'chord';
 export type MuteKeyboardBehavior = 'tap' | 'hold';
 export type TriggerTestMode = 'feedback' | 'weapon' | 'vibration';
 export type TriggerTestTarget = 'both' | 'l2' | 'r2';
@@ -180,10 +180,12 @@ export const REMAP_BUTTON_IDS = [
   'rfn'
 ] as const;
 export type RemapButtonId = typeof REMAP_BUTTON_IDS[number];
-export const CHORD_STARTER_IDS = ['ps', 'lfn', 'rfn'] as const;
+export const CHORD_MUTE_STARTER_ID = 'mute' as const;
+export const CHORD_STARTER_IDS = ['ps', 'lfn', 'rfn', CHORD_MUTE_STARTER_ID] as const;
 export type ChordStarterId = typeof CHORD_STARTER_IDS[number];
-export type ChordAssignableButtonId = Exclude<RemapButtonId, 'lfn' | 'rfn'>;
-export const CHORD_ASSIGNABLE_BUTTON_IDS = REMAP_BUTTON_IDS.filter((id) => id !== 'lfn' && id !== 'rfn') as ChordAssignableButtonId[];
+export type ChordRemapButtonId = Exclude<RemapButtonId, 'lfn' | 'rfn'>;
+export type ChordAssignableButtonId = ChordRemapButtonId;
+export const CHORD_ASSIGNABLE_BUTTON_IDS = REMAP_BUTTON_IDS.filter((id): id is ChordRemapButtonId => id !== 'lfn' && id !== 'rfn');
 export const CHORD_EDGE_RESERVED_FACE_BUTTON_IDS = ['triangle', 'circle', 'cross', 'square'] as const;
 export type ChordFunctionId = string;
 export type ChordFunctionType = 'keyboard' | 'media' | 'controller-setting';
@@ -361,6 +363,8 @@ export function chordStarterIdValue(starter: ChordStarterId): number {
       return 0x02;
     case 'rfn':
       return 0x03;
+    case 'mute':
+      return 0x04;
   }
 }
 
@@ -611,6 +615,7 @@ function controllerType(value: number): BridgeStatusPayload['controllerType'] {
 function muteButtonMode(value: number): MuteButtonMode {
   if (value === 1) return 'keyboard';
   if (value === 2) return 'quiet';
+  if (value === 3) return 'chord';
   return 'normal';
 }
 

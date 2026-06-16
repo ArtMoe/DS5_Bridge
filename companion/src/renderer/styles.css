@@ -6186,6 +6186,10 @@ button.trigger-lab-chip {
   color: var(--text-muted);
 }
 
+.chords-starter-icon-glyph {
+  color: var(--text-control);
+}
+
 .chords-assignment-scroll-region {
   position: relative;
   display: grid;
@@ -6286,6 +6290,35 @@ button.trigger-lab-chip {
 
 .chords-assignment-row.conflict .custom-select-button {
   border-color: var(--warning-border-strong);
+}
+
+.chords-assignment-row.mute-starter-inactive {
+  border-color: var(--surface-border);
+  background: var(--surface-control-muted);
+}
+
+.chords-assignment-row.mute-starter-inactive .custom-select-button,
+.chords-assignment-row.mute-starter-inactive .heading-icon-action {
+  border-color: var(--surface-border);
+  color: var(--text-muted);
+  background: var(--surface-control-muted);
+}
+
+.chords-assignment-row.mute-starter-inactive .chords-binding-connector,
+.chords-assignment-row.mute-starter-inactive .chords-function-connector::before,
+.chords-assignment-row.mute-starter-inactive .chords-function-connector::after {
+  background: var(--surface-border-strong);
+}
+
+.chords-assignment-row.mute-starter-inactive .chords-starter-icon-glyph,
+.chords-assignment-row.mute-starter-inactive .remap-text-glyph,
+.chords-assignment-row.mute-starter-inactive .chords-function-option strong,
+.chords-assignment-row.mute-starter-inactive .chords-function-option small {
+  color: var(--text-muted);
+}
+
+.chords-assignment-row.mute-starter-inactive .remap-glyph-option img {
+  opacity: var(--disabled-opacity);
 }
 
 .chords-assignment-row.dragging {
@@ -6484,6 +6517,10 @@ button.trigger-lab-chip {
   min-height: 46px;
   border-color: var(--accent-border-strong);
   box-shadow: none;
+}
+
+.chords-assignment-row.mute-starter-inactive .custom-select-button {
+  border-color: var(--surface-border);
 }
 
 .chords-assignment-row > .heading-icon-action {

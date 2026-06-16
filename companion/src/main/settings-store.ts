@@ -425,7 +425,10 @@ function normalizeControllerProfileSettings(value: unknown): ControllerProfileSe
     lightbarOverrideEnabled: typeof candidate.lightbarOverrideEnabled === 'boolean'
       ? candidate.lightbarOverrideEnabled
       : DEFAULT_CONTROLLER_PROFILE_SETTINGS.lightbarOverrideEnabled,
-    muteButtonMode: candidate.muteButtonMode === 'keyboard' || candidate.muteButtonMode === 'quiet' || candidate.muteButtonMode === 'normal'
+    muteButtonMode: candidate.muteButtonMode === 'keyboard'
+      || candidate.muteButtonMode === 'quiet'
+      || candidate.muteButtonMode === 'chord'
+      || candidate.muteButtonMode === 'normal'
       ? candidate.muteButtonMode
       : DEFAULT_CONTROLLER_PROFILE_SETTINGS.muteButtonMode,
     muteKeyboardUsage: Number.isFinite(candidate.muteKeyboardUsage)
@@ -901,7 +904,10 @@ function normalizeSettings(value: Partial<CompanionSettings> | null | undefined)
     lightbarOverrideEnabled: typeof value?.lightbarOverrideEnabled === 'boolean'
       ? value.lightbarOverrideEnabled
       : DEFAULT_SETTINGS.lightbarOverrideEnabled,
-    muteButtonMode: value?.muteButtonMode === 'keyboard' || value?.muteButtonMode === 'quiet' || value?.muteButtonMode === 'normal'
+    muteButtonMode: value?.muteButtonMode === 'keyboard'
+      || value?.muteButtonMode === 'quiet'
+      || value?.muteButtonMode === 'chord'
+      || value?.muteButtonMode === 'normal'
       ? value.muteButtonMode
       : DEFAULT_SETTINGS.muteButtonMode,
     muteKeyboardUsage: Number.isFinite(value?.muteKeyboardUsage)

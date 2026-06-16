@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import {
   ACK_RESULT,
   AUDIO_DEBUG_EVENT,
+  CHORD_MUTE_STARTER_ID,
   COMMAND_ID,
   DEFAULT_BUTTON_REMAP_PROFILE,
   MAGIC,
@@ -157,6 +158,14 @@ describe('companion protocol', () => {
     expect(status.firmwareFlags.hostPersonaControl).toBe(true);
     expect(status.hostPersonaMode).toBe('ds4');
     expect(status.supportedHostPersonaModes).toEqual(['dualsense', 'xbox', 'ds4']);
+  });
+
+  it('parses chord mute button mode', () => {
+    const report = baseReport(REPORT_ID.STATUS);
+    report[60] = 3;
+
+    const status = parseStatusReport(report);
+    expect(status.muteButtonMode).toBe('chord');
   });
 
   it('encodes host persona command values', () => {
@@ -410,12 +419,18 @@ describe('companion protocol', () => {
       starter: 'lfn',
       button: 'options',
       functionId: 'open-task-manager'
+    }, {
+      id: 'chord-mute-options',
+      kind: 'chord',
+      starter: CHORD_MUTE_STARTER_ID,
+      button: 'options',
+      functionId: 'mute-action'
     }]);
-    const report = buildCommandReport(COMMAND_ID.SET_CHORD_BINDINGS, 8, 2, payload);
+    const report = buildCommandReport(COMMAND_ID.SET_CHORD_BINDINGS, 8, 3, payload);
 
-    expect(payload).toEqual([0x20, 0x01, 11, 0x21, 0x02, 10]);
+    expect(payload).toEqual([0x20, 0x01, 11, 0x21, 0x02, 10, 0x22, 0x04, 10]);
     expect(report[7]).toBe(COMMAND_ID.SET_CHORD_BINDINGS);
-    expect(report.slice(11, 17)).toEqual(payload);
+    expect(report.slice(11, 20)).toEqual(payload);
   });
 
   it('marks Edge Fn face-button chord combos as reserved', () => {
