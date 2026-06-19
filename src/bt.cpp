@@ -1395,6 +1395,7 @@ static void hci_packet_handler(uint8_t packet_type, uint16_t channel, uint8_t *p
         }
 
         case HCI_EVENT_DISCONNECTION_COMPLETE: {
+            const bool host_suspended = usb_host_suspended_active();
             usb_handle_controller_transport_disconnect();
             reset_controller_input_report_cache();
             gap_connectable_control(1);
@@ -1422,6 +1423,10 @@ static void hci_packet_handler(uint8_t packet_type, uint16_t channel, uint8_t *p
             reset_controller_output_session_locked();
             critical_section_exit(&queue_lock);
             cyw43_arch_gpio_put(CYW43_WL_GPIO_LED_PIN, false);
+            if (host_suspended) {
+                DS5_LOG("[HCI] Disconnected reason=0x%02X while USB host suspended; keeping USB on bus\n", reason);
+                break;
+            }
             DS5_LOG("[HCI] Disconnected reason=0x%02X, power-cycle CYW43 then reboot Pico\n", reason);
             power_down_cyw43_for_reboot();
             watchdog_reboot(0, 0, CONTROLLER_DISCONNECT_REBOOT_DELAY_MS);

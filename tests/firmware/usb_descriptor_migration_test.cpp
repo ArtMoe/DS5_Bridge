@@ -318,6 +318,96 @@ void assert_persona_switch_quiets_input_only(std::filesystem::path const &root) 
     }
 }
 
+void assert_usb_suspend_poweroff_is_debounced(std::filesystem::path const &root) {
+    const auto bt_cpp = read_text(root / "src" / "bt.cpp");
+    const auto usb_cpp = read_text(root / "src" / "usb.cpp");
+    const auto usb_h = read_text(root / "src" / "usb.h");
+
+    if (
+        usb_cpp.find("#define USB_SUSPEND_POWEROFF_DEBOUNCE_US 3000000") == std::string::npos
+        || usb_cpp.find("#define USB_RECONNECT_GRACE_US          5000000") == std::string::npos
+    ) {
+        throw std::runtime_error("USB suspend power-off must retain the hub debounce and reconnect grace windows");
+    }
+
+    const std::string suspend_callback = extract_between(
+        usb_cpp,
+        "extern \"C\" void tud_suspend_cb(bool remote_wakeup_en) {",
+        "\n}\n\nextern \"C\" void tud_resume_cb(void) {"
+    );
+    if (
+        suspend_callback.find("reconnect_grace_active(now)") == std::string::npos
+        || suspend_callback.find("usb_suspend_at_us = now;") == std::string::npos
+        || suspend_callback.find("bt_power_off_controller") != std::string::npos
+    ) {
+        throw std::runtime_error("USB suspend must arm a debounced power-off, not power off the controller immediately");
+    }
+
+    const std::string pm_poll = extract_between(
+        usb_cpp,
+        "void usb_pm_poll() {",
+        "\n}\n\nstatic UsbAudioVolumeRange"
+    );
+    if (
+        pm_poll.find("USB_SUSPEND_POWEROFF_DEBOUNCE_US") == std::string::npos
+        || pm_poll.find("bt_power_off_controller();") == std::string::npos
+        || pm_poll.find("usb_note_reconnect_disconnect(now);") == std::string::npos
+        || pm_poll.find("if (usb_bus_suspended())") == std::string::npos
+    ) {
+        throw std::runtime_error("USB PM poll must commit debounced power-off and defer reconnect work while suspended");
+    }
+
+    const std::string disconnect_block = extract_between(
+        usb_cpp,
+        "void usb_handle_controller_transport_disconnect() {",
+        "\n}\n\nvoid usb_handle_controller_transport_ready()"
+    );
+    const auto disconnect_suspend = disconnect_block.find("usb_bus_suspended()");
+    const auto disconnect_deinit = disconnect_block.find("usb_deinit_device_stack();");
+    if (
+        disconnect_suspend == std::string::npos
+        || disconnect_deinit == std::string::npos
+        || disconnect_deinit < disconnect_suspend
+    ) {
+        throw std::runtime_error("Controller disconnect must defer USB deinit while the host is suspended");
+    }
+
+    const std::string ready_block = extract_between(
+        usb_cpp,
+        "void usb_handle_controller_transport_ready() {",
+        "\n}\n\nextern \"C\" void tud_mount_cb(void) {"
+    );
+    const auto ready_suspend = ready_block.find("usb_bus_suspended()");
+    const auto ready_connect = ready_block.find("usb_connect_controller_transport");
+    if (
+        ready_suspend == std::string::npos
+        || ready_connect == std::string::npos
+        || ready_connect < ready_suspend
+    ) {
+        throw std::runtime_error("Controller reconnect must not re-enumerate USB while the host is suspended");
+    }
+
+    if (usb_h.find("bool usb_host_suspended_active();") == std::string::npos) {
+        throw std::runtime_error("BT disconnect handling must be able to query suspended USB host state");
+    }
+
+    const std::string hci_disconnect = extract_between(
+        bt_cpp,
+        "case HCI_EVENT_DISCONNECTION_COMPLETE: {",
+        "\n        }\n\n        case GAP_EVENT_RSSI_MEASUREMENT:"
+    );
+    const auto suspended_query = hci_disconnect.find("usb_host_suspended_active()");
+    const auto watchdog = hci_disconnect.find("watchdog_reboot");
+    if (
+        suspended_query == std::string::npos
+        || hci_disconnect.find("keeping USB on bus") == std::string::npos
+        || watchdog == std::string::npos
+        || watchdog < suspended_query
+    ) {
+        throw std::runtime_error("BT disconnect must avoid rebooting while the USB host is suspended");
+    }
+}
+
 } // namespace
 
 int main() {
@@ -330,6 +420,7 @@ int main() {
         assert_xusb_persona_strings_are_xbox_facing(source);
         assert_ds4_persona_identity_is_ds4_facing(source);
         assert_persona_switch_quiets_input_only(source_root);
+        assert_usb_suspend_poweroff_is_debounced(source_root);
 
         if (bcd_device != kExpectedUsbDeviceRevision) {
             std::cerr << "USB bcdDevice changed unexpectedly. Expected 0x" << std::hex
