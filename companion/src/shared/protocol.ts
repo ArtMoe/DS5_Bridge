@@ -4,7 +4,7 @@ export const REPORT_LENGTH = 64;
 export const PAYLOAD_LENGTH = 63;
 export const MAGIC = 'DS5B';
 export const PROTOCOL_MAJOR = 1;
-export const PROTOCOL_MINOR = 12;
+export const PROTOCOL_MINOR = 13;
 
 export const REPORT_ID = {
   STATUS: 0x01,
@@ -280,6 +280,7 @@ export interface ControllerProfileSettings {
   muteKeyboardUsage: number;
   muteKeyboardModifiers: number;
   muteKeyboardBehavior: MuteKeyboardBehavior;
+  muteKeyboardChordStarterEnabled: boolean;
   sleepKeybindEnabled: boolean;
   speakerVolumeShortcutEnabled: boolean;
   pollingRateMode: PollingRateMode;
@@ -385,6 +386,7 @@ export function buildChordBindingsPayload(assignments: ChordAssignment[]): numbe
   });
 }
 export const MUTE_KEYBOARD_HOLD_FLAG = 0x80;
+export const MUTE_KEYBOARD_CHORD_STARTER_FLAG = 0x10;
 export const MUTE_KEYBOARD_MODIFIER_MASK = 0x0f;
 
 export interface BridgeStatusPayload {
@@ -408,6 +410,7 @@ export interface BridgeStatusPayload {
   muteKeyboardUsage: number;
   muteKeyboardModifiers: number;
   muteKeyboardBehavior: MuteKeyboardBehavior;
+  muteKeyboardChordStarterEnabled: boolean;
   quietModeEnabled: boolean;
   audioDebug: {
     usbHostSpeakerVolumePercent: number;
@@ -681,6 +684,7 @@ export function parseStatusReport(report: ArrayLike<number>): BridgeStatusPayloa
     muteKeyboardUsage: report[61],
     muteKeyboardModifiers: report[62] & MUTE_KEYBOARD_MODIFIER_MASK,
     muteKeyboardBehavior: (report[62] & MUTE_KEYBOARD_HOLD_FLAG) !== 0 ? 'hold' : 'tap',
+    muteKeyboardChordStarterEnabled: (report[62] & MUTE_KEYBOARD_CHORD_STARTER_FLAG) !== 0,
     quietModeEnabled: report[63] === 1,
     audioDebug: {
       usbHostSpeakerVolumePercent: report[35],

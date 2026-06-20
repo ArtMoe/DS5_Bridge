@@ -859,17 +859,18 @@ describe('BridgeService', () => {
     hidMock.state.openDevices.set('companion-path', device);
 
     await poll(service);
-    const snapshot = await service.setMuteButtonAction('keyboard', 0x68, 0x02, 'hold');
+    const snapshot = await service.setMuteButtonAction('keyboard', 0x68, 0x02, 'hold', true);
 
     const command = device.sentReports.at(-1);
     expect(command?.[7]).toBe(COMMAND_ID.SET_MUTE_BUTTON_ACTION);
     expect(command?.[9]).toBe(1);
     expect(command?.[11]).toBe(0x68);
-    expect(command?.[12]).toBe(0x82);
+    expect(command?.[12]).toBe(0x92);
     expect(snapshot.settings.muteButtonMode).toBe('keyboard');
     expect(snapshot.settings.muteKeyboardUsage).toBe(0x68);
     expect(snapshot.settings.muteKeyboardModifiers).toBe(0x02);
     expect(snapshot.settings.muteKeyboardBehavior).toBe('hold');
+    expect(snapshot.settings.muteKeyboardChordStarterEnabled).toBe(true);
   });
 
   it('sends and stores mute button chord mode', async () => {
@@ -885,7 +886,9 @@ describe('BridgeService', () => {
     const command = device.sentReports.at(-1);
     expect(command?.[7]).toBe(COMMAND_ID.SET_MUTE_BUTTON_ACTION);
     expect(command?.[9]).toBe(3);
+    expect(command?.[12]).toBe(0);
     expect(snapshot.settings.muteButtonMode).toBe('chord');
+    expect(snapshot.settings.muteKeyboardChordStarterEnabled).toBe(false);
   });
 
   it('sends and stores haptics buffer length', async () => {

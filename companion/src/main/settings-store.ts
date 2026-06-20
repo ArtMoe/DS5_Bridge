@@ -68,6 +68,7 @@ const DEFAULT_CONTROLLER_PROFILE_SETTINGS: ControllerProfileSettings = {
   muteKeyboardUsage: 0x68,
   muteKeyboardModifiers: 0,
   muteKeyboardBehavior: 'tap',
+  muteKeyboardChordStarterEnabled: false,
   sleepKeybindEnabled: false,
   speakerVolumeShortcutEnabled: false,
   pollingRateMode: '1000',
@@ -124,6 +125,7 @@ const CONTROLLER_PROFILE_SETTING_KEYS = new Set<keyof ControllerProfileSettings>
   'muteKeyboardUsage',
   'muteKeyboardModifiers',
   'muteKeyboardBehavior',
+  'muteKeyboardChordStarterEnabled',
   'sleepKeybindEnabled',
   'speakerVolumeShortcutEnabled',
   'pollingRateMode',
@@ -166,6 +168,7 @@ export const DEFAULT_SETTINGS: CompanionSettings = {
   muteKeyboardUsage: DEFAULT_CONTROLLER_PROFILE_SETTINGS.muteKeyboardUsage,
   muteKeyboardModifiers: DEFAULT_CONTROLLER_PROFILE_SETTINGS.muteKeyboardModifiers,
   muteKeyboardBehavior: DEFAULT_CONTROLLER_PROFILE_SETTINGS.muteKeyboardBehavior,
+  muteKeyboardChordStarterEnabled: DEFAULT_CONTROLLER_PROFILE_SETTINGS.muteKeyboardChordStarterEnabled,
   ledEnabled: true,
   playerLedEnabled: true,
   idleDisconnectEnabled: true,
@@ -357,6 +360,7 @@ export function controllerProfileSettingsFrom(settings: CompanionSettings): Cont
     muteKeyboardUsage: settings.muteKeyboardUsage,
     muteKeyboardModifiers: settings.muteKeyboardModifiers,
     muteKeyboardBehavior: settings.muteKeyboardBehavior,
+    muteKeyboardChordStarterEnabled: settings.muteKeyboardChordStarterEnabled,
     sleepKeybindEnabled: settings.sleepKeybindEnabled,
     speakerVolumeShortcutEnabled: settings.speakerVolumeShortcutEnabled,
     pollingRateMode: settings.pollingRateMode,
@@ -440,6 +444,9 @@ function normalizeControllerProfileSettings(value: unknown): ControllerProfileSe
     muteKeyboardBehavior: candidate.muteKeyboardBehavior === 'hold' || candidate.muteKeyboardBehavior === 'tap'
       ? candidate.muteKeyboardBehavior
       : DEFAULT_CONTROLLER_PROFILE_SETTINGS.muteKeyboardBehavior,
+    muteKeyboardChordStarterEnabled: typeof candidate.muteKeyboardChordStarterEnabled === 'boolean'
+      ? candidate.muteKeyboardChordStarterEnabled
+      : DEFAULT_CONTROLLER_PROFILE_SETTINGS.muteKeyboardChordStarterEnabled,
     sleepKeybindEnabled: typeof candidate.sleepKeybindEnabled === 'boolean'
       ? candidate.sleepKeybindEnabled
       : DEFAULT_CONTROLLER_PROFILE_SETTINGS.sleepKeybindEnabled,
@@ -919,6 +926,9 @@ function normalizeSettings(value: Partial<CompanionSettings> | null | undefined)
     muteKeyboardBehavior: value?.muteKeyboardBehavior === 'hold' || value?.muteKeyboardBehavior === 'tap'
       ? value.muteKeyboardBehavior
       : DEFAULT_SETTINGS.muteKeyboardBehavior,
+    muteKeyboardChordStarterEnabled: typeof value?.muteKeyboardChordStarterEnabled === 'boolean'
+      ? value.muteKeyboardChordStarterEnabled
+      : DEFAULT_SETTINGS.muteKeyboardChordStarterEnabled,
     ledEnabled: typeof value?.ledEnabled === 'boolean' ? value.ledEnabled : DEFAULT_SETTINGS.ledEnabled,
     playerLedEnabled: typeof value?.playerLedEnabled === 'boolean'
       ? value.playerLedEnabled

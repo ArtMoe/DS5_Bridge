@@ -1900,6 +1900,22 @@ button {
   transform: translate(-50%, 0);
 }
 
+.chord-starter-label {
+  cursor: help;
+}
+
+.chord-starter-label .chord-starter-tooltip {
+  left: 0;
+  width: 260px;
+  max-width: min(260px, calc(100vw - 64px));
+  transform: translateY(-4px);
+}
+
+.chord-starter-label:hover .chord-starter-tooltip,
+.chord-starter-label:focus-within .chord-starter-tooltip {
+  transform: translateY(0);
+}
+
 .shortcut-glyph-tooltip {
   display: flex;
   align-items: center;
@@ -5586,7 +5602,7 @@ button.trigger-lab-chip {
 
 .system-card {
   --system-label-column: 118px;
-  --system-row-height: 50px;
+  --system-row-height: 47px;
   min-width: 0;
   padding: var(--card-padding);
   border-color: var(--surface-border);
@@ -6592,7 +6608,13 @@ button.trigger-lab-chip {
 }
 
 .system-card-heading {
-  margin-bottom: 16px;
+  margin-bottom: 14px;
+}
+
+.system-page .system-card .feature-card-title {
+  min-height: 62px;
+  padding-top: 9px;
+  padding-bottom: 9px;
 }
 
 .system-card-heading + .system-fields,
@@ -6630,7 +6652,7 @@ button.trigger-lab-chip {
 .modifier-block {
   display: grid;
   gap: 0;
-  padding: 4px 0 5px;
+  padding: 3px 0 4px;
   border-bottom: 1px solid var(--surface-divider);
 }
 
@@ -7305,7 +7327,7 @@ input[type="color"]::-webkit-color-swatch {
 }
 
 .modifier-grid button {
-  min-height: 40px;
+  min-height: 38px;
   padding: 0 10px;
 }
 

@@ -1418,6 +1418,7 @@ function controllerProfileSettingsFromSnapshot(snapshot: BridgeSnapshot): Contro
     muteKeyboardUsage: snapshot.settings.muteKeyboardUsage,
     muteKeyboardModifiers: snapshot.settings.muteKeyboardModifiers,
     muteKeyboardBehavior: snapshot.settings.muteKeyboardBehavior,
+    muteKeyboardChordStarterEnabled: snapshot.settings.muteKeyboardChordStarterEnabled,
     sleepKeybindEnabled: snapshot.settings.sleepKeybindEnabled,
     speakerVolumeShortcutEnabled: snapshot.settings.speakerVolumeShortcutEnabled,
     pollingRateMode: snapshot.settings.pollingRateMode,
@@ -1462,7 +1463,10 @@ function muteButtonSummary(settings: ControllerProfileSettings): string {
   const modifiers = MUTE_MODIFIER_OPTIONS
     .filter(([, bit]) => (settings.muteKeyboardModifiers & bit) !== 0)
     .map(([label]) => label);
-  return [...modifiers, key].join(' + ');
+  const chordStarter = settings.muteButtonMode === 'keyboard' && settings.muteKeyboardChordStarterEnabled
+    ? ['Chord Starter']
+    : [];
+  return [...modifiers, key, ...chordStarter].join(' + ');
 }
 
 function SystemProfileSummary({
@@ -2864,7 +2868,11 @@ export function App() {
   const remappingLayoutAsset = showDualSenseEdgeRemapButtons ? REMAP_EDGE_LAYOUT_ASSET : REMAP_STANDARD_LAYOUT_ASSET;
   const chordFunctions = snapshot?.settings.chordFunctions ?? [];
   const chordAssignments = snapshot?.settings.chordAssignments ?? [];
-  const muteButtonModeIsChord = snapshot?.settings.muteButtonMode === 'chord';
+  const muteButtonChordStarterActive = snapshot?.settings.muteButtonMode === 'chord'
+    || (
+      snapshot?.settings.muteButtonMode === 'keyboard'
+      && snapshot.settings.muteKeyboardChordStarterEnabled
+    );
   const selectedChordFunction = chordFunctions.find((func) => func.id === selectedChordFunctionId) ?? chordFunctions[0] ?? null;
   const chordFunctionDialogFunction = chordFunctionDialog
     ? chordFunctions.find((func) => func.id === chordFunctionDialog.functionId) ?? null
@@ -2897,7 +2905,7 @@ export function App() {
         conflictKeys.add(key);
         conflictCount += 1;
       }
-      if (assignment.starter === CHORD_MUTE_STARTER_ID && !muteButtonModeIsChord) {
+      if (assignment.starter === CHORD_MUTE_STARTER_ID && !muteButtonChordStarterActive) {
         conflictKeys.add(key);
         conflictCount += 1;
       }
@@ -2905,7 +2913,7 @@ export function App() {
     return { conflictKeys, conflictCount };
   }, [
     chordAssignments,
-    muteButtonModeIsChord,
+    muteButtonChordStarterActive,
     snapshot?.settings.sleepKeybindEnabled,
     snapshot?.settings.speakerVolumeShortcutEnabled
   ]);
@@ -2921,11 +2929,11 @@ export function App() {
   const chordStarterOptions = useMemo<Array<[string, ChordStarterId]>>(() => (
     CHORD_STARTER_OPTIONS.filter(([, starter]) => {
       if (starter === CHORD_MUTE_STARTER_ID) {
-        return muteButtonModeIsChord;
+        return muteButtonChordStarterActive;
       }
       return starter === 'ps' || showDualSenseEdgeRemapButtons;
     })
-  ), [muteButtonModeIsChord, showDualSenseEdgeRemapButtons]);
+  ), [muteButtonChordStarterActive, showDualSenseEdgeRemapButtons]);
   const chordAssignableButtonIds = useMemo<readonly ChordAssignableButtonId[]>(() => (
     (showDualSenseEdgeRemapButtons
       ? CHORD_BUTTON_MENU_IDS
@@ -2938,7 +2946,7 @@ export function App() {
       : chordStarterOptions;
   }
   function muteChordStarterIsInactive(starter: ChordStarterId): boolean {
-    return starter === CHORD_MUTE_STARTER_ID && !muteButtonModeIsChord;
+    return starter === CHORD_MUTE_STARTER_ID && !muteButtonChordStarterActive;
   }
   function chordButtonOptionsFor(
     starter: ChordStarterId,
@@ -2957,7 +2965,7 @@ export function App() {
   }
   const canAddChordDraft = Boolean(defaultChordFunctionId)
     && chordAssignments.length + chordAssignmentDraftRows.length < MAX_CHORD_ASSIGNMENTS;
-  const chordAssignmentsSubtitle = muteButtonModeIsChord
+  const chordAssignmentsSubtitle = muteButtonChordStarterActive
     ? (showDualSenseEdgeRemapButtons ? 'Pair PS, LFN, RFN, or Mute with a button.' : 'Pair PS or Mute with a button.')
     : (showDualSenseEdgeRemapButtons ? 'Pair PS, LFN, or RFN with a button.' : 'Pair PS with a button.');
 
@@ -5603,7 +5611,8 @@ export function App() {
     mode: MuteButtonMode,
     usage?: number,
     modifiers?: number,
-    behavior?: MuteKeyboardBehavior
+    behavior?: MuteKeyboardBehavior,
+    chordStarterEnabled?: boolean
   ) {
     if (!snapshot) {
       return;
@@ -5611,7 +5620,10 @@ export function App() {
     const keyUsage = usage ?? snapshot.settings.muteKeyboardUsage;
     const keyModifiers = modifiers ?? snapshot.settings.muteKeyboardModifiers;
     const keyBehavior = behavior ?? snapshot.settings.muteKeyboardBehavior;
-    void runAction('mute-button', () => window.bridge.setMuteButtonAction(mode, keyUsage, keyModifiers, keyBehavior));
+    const keyChordStarterEnabled = chordStarterEnabled ?? snapshot.settings.muteKeyboardChordStarterEnabled;
+    void runAction('mute-button', () => (
+      window.bridge.setMuteButtonAction(mode, keyUsage, keyModifiers, keyBehavior, keyChordStarterEnabled)
+    ));
   }
 
   function setMuteModifier(bit: number, enabled: boolean) {
@@ -5625,7 +5637,8 @@ export function App() {
       snapshot.settings.muteButtonMode,
       snapshot.settings.muteKeyboardUsage,
       nextModifiers,
-      snapshot.settings.muteKeyboardBehavior
+      snapshot.settings.muteKeyboardBehavior,
+      snapshot.settings.muteKeyboardChordStarterEnabled
     );
   }
 
@@ -8397,6 +8410,38 @@ export function App() {
                               );
                             })}
                           </div>
+                        </div>
+                        <div className="select-row">
+                          <span
+                            className="settings-menu-copy-tooltip chord-starter-label"
+                            tabIndex={0}
+                            aria-describedby="mute-chord-starter-tooltip"
+                          >
+                            Chord Starter
+                            <span
+                              id="mute-chord-starter-tooltip"
+                              className="settings-shortcut-tooltip chord-starter-tooltip"
+                              role="tooltip"
+                            >
+                              Lets Mute start a chord. When enabled, the keyboard key waits 250ms so a chord can be detected first.
+                            </span>
+                          </span>
+                          <button
+                            type="button"
+                            role="switch"
+                            aria-checked={snapshot.settings.muteKeyboardChordStarterEnabled}
+                            className={`switch ${snapshot.settings.muteKeyboardChordStarterEnabled ? 'on' : ''}`}
+                            disabled={!connected || !muteButtonActionsSupported || pendingAction !== null}
+                            onClick={() => setMuteButtonAction(
+                              'keyboard',
+                              undefined,
+                              undefined,
+                              undefined,
+                              !snapshot.settings.muteKeyboardChordStarterEnabled
+                            )}
+                          >
+                            <span />
+                          </button>
                         </div>
                       </>
                     )}

@@ -11,6 +11,7 @@ import {
   REPORT_LENGTH,
   CHORD_FUNCTION_EVENT_BASE,
   MAX_CHORD_ASSIGNMENTS,
+  MUTE_KEYBOARD_CHORD_STARTER_FLAG,
   MUTE_KEYBOARD_HOLD_FLAG,
   MUTE_KEYBOARD_MODIFIER_MASK,
   ProtocolError,
@@ -277,9 +278,15 @@ function muteButtonModeValue(mode: MuteButtonMode): number {
   return 0;
 }
 
-function encodeMuteKeyboardOptions(modifiers: number, behavior: MuteKeyboardBehavior): number {
+function encodeMuteKeyboardOptions(
+  modifiers: number,
+  behavior: MuteKeyboardBehavior,
+  chordStarterEnabled = false
+): number {
   const modifierBits = Math.max(0, Math.min(MUTE_KEYBOARD_MODIFIER_MASK, Math.round(modifiers)));
-  return behavior === 'hold' ? modifierBits | MUTE_KEYBOARD_HOLD_FLAG : modifierBits;
+  return modifierBits
+    | (behavior === 'hold' ? MUTE_KEYBOARD_HOLD_FLAG : 0)
+    | (chordStarterEnabled ? MUTE_KEYBOARD_CHORD_STARTER_FLAG : 0);
 }
 
 function triggerTestModeValue(mode: TriggerTestMode): number {
@@ -2311,11 +2318,13 @@ export class BridgeService extends EventEmitter {
     mode: MuteButtonMode,
     usage: number,
     modifiers: number,
-    behavior: MuteKeyboardBehavior
+    behavior: MuteKeyboardBehavior,
+    chordStarterEnabled = false
   ): Promise<BridgeSnapshot> {
     const keyUsage = Math.max(1, Math.min(0x73, Math.round(usage)));
     const keyModifiers = Math.max(0, Math.min(MUTE_KEYBOARD_MODIFIER_MASK, Math.round(modifiers)));
-    const keyOptions = encodeMuteKeyboardOptions(keyModifiers, behavior);
+    const keyChordStarterEnabled = mode === 'keyboard' && chordStarterEnabled;
+    const keyOptions = encodeMuteKeyboardOptions(keyModifiers, behavior, keyChordStarterEnabled);
     const ack = await this.sendCommand(COMMAND_ID.SET_MUTE_BUTTON_ACTION, muteButtonModeValue(mode), {
       expectSettingsRevisionChange: true,
       extraPayload: [keyUsage, keyOptions]
@@ -2325,13 +2334,15 @@ export class BridgeService extends EventEmitter {
         muteButtonMode: mode,
         muteKeyboardUsage: keyUsage,
         muteKeyboardModifiers: keyModifiers,
-        muteKeyboardBehavior: behavior
+        muteKeyboardBehavior: behavior,
+        muteKeyboardChordStarterEnabled: keyChordStarterEnabled
       }));
       if (this.snapshot.status) {
         this.snapshot.status.muteButtonMode = mode;
         this.snapshot.status.muteKeyboardUsage = keyUsage;
         this.snapshot.status.muteKeyboardModifiers = keyModifiers;
         this.snapshot.status.muteKeyboardBehavior = behavior;
+        this.snapshot.status.muteKeyboardChordStarterEnabled = keyChordStarterEnabled;
       }
       this.emitSnapshot();
     }
@@ -3398,7 +3409,11 @@ export class BridgeService extends EventEmitter {
       expectSettingsRevisionChange,
       extraPayload: [
         settings.muteKeyboardUsage,
-        encodeMuteKeyboardOptions(settings.muteKeyboardModifiers, settings.muteKeyboardBehavior)
+        encodeMuteKeyboardOptions(
+          settings.muteKeyboardModifiers,
+          settings.muteKeyboardBehavior,
+          settings.muteButtonMode === 'keyboard' && settings.muteKeyboardChordStarterEnabled
+        )
       ]
     });
     await this.sendCommand(COMMAND_ID.SET_HAPTICS_GAIN, this.effectiveHapticsGain(settings), {

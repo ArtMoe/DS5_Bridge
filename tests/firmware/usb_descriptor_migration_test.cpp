@@ -408,6 +408,95 @@ void assert_usb_suspend_poweroff_is_debounced(std::filesystem::path const &root)
     }
 }
 
+void assert_mute_keyboard_chord_starter_is_deferred(std::filesystem::path const &root) {
+    const auto companion_cpp = read_text(root / "src" / "companion.cpp");
+
+    if (
+        companion_cpp.find("constexpr uint8_t kMuteKeyboardChordStarterFlag = 0x10;") == std::string::npos
+        || companion_cpp.find("constexpr uint32_t kMuteKeyboardChordWindowUs = 250000;") == std::string::npos
+    ) {
+        throw std::runtime_error("Mute keyboard chord starter must use the reserved option bit and 250ms window");
+    }
+
+    const std::string helper_block = extract_between(
+        companion_cpp,
+        "bool mute_keyboard_chord_starter_enabled() {",
+        "\n}\n\nvoid begin_mute_keyboard_chord_window"
+    );
+    if (
+        helper_block.find("mute_button_mode == MuteButtonKeyboard") == std::string::npos
+        || helper_block.find("mute_keyboard_modifiers & kMuteKeyboardChordStarterFlag") == std::string::npos
+    ) {
+        throw std::runtime_error("Mute keyboard chord starter must only be active for keyboard mode with the option bit");
+    }
+
+    const std::string starter_block = extract_between(
+        companion_cpp,
+        "case kChordStarterMute:",
+        "\n        default:"
+    );
+    if (
+        starter_block.find("mute_button_mode == MuteButtonChord") == std::string::npos
+        || starter_block.find("mute_keyboard_chord_starter_enabled() && mute_keyboard_chord_pending") == std::string::npos
+    ) {
+        throw std::runtime_error("Mute starter must be accepted in chord mode or during the keyboard chord window");
+    }
+
+    const std::string dynamic_block = extract_between(
+        companion_cpp,
+        "bool process_dynamic_chord_bindings(uint8_t *report, uint16_t len) {",
+        "\n}\n\nvoid apply_button_remap"
+    );
+    if (
+        dynamic_block.find("bool mute_chord_pressed = false;") == std::string::npos
+        || dynamic_block.find("mute_chord_pressed = mute_chord_pressed || binding.starter == kChordStarterMute;")
+            == std::string::npos
+        || dynamic_block.find("return mute_chord_pressed;") == std::string::npos
+    ) {
+        throw std::runtime_error("Dynamic chord processing must report when Mute consumed the pending keyboard action");
+    }
+
+    const std::string process_block = extract_between(
+        companion_cpp,
+        "void companion_process_controller_report(uint8_t *report, uint16_t len) {",
+        "\n}\n\nvoid companion_update_controller_report"
+    );
+    const auto begin_pos = process_block.find("begin_mute_keyboard_chord_window(now);");
+    const auto dynamic_pos = process_block.find("const bool mute_chord_pressed = process_dynamic_chord_bindings(report, len);");
+    const auto cancel_pos = process_block.find("cancel_mute_keyboard_chord_window();");
+    const auto immediate_guard_pos = process_block.find("if (!mute_keyboard_chord_starter_enabled())");
+    const auto immediate_queue_pos = process_block.find("queue_mute_keyboard_press(mute_keyboard_hold_enabled());", immediate_guard_pos);
+    const auto release_commit_pos = process_block.find("commit_mute_keyboard_chord_window(false);");
+    if (
+        begin_pos == std::string::npos
+        || dynamic_pos == std::string::npos
+        || cancel_pos == std::string::npos
+        || immediate_guard_pos == std::string::npos
+        || immediate_queue_pos == std::string::npos
+        || release_commit_pos == std::string::npos
+        || begin_pos > dynamic_pos
+        || dynamic_pos > cancel_pos
+        || immediate_guard_pos > immediate_queue_pos
+    ) {
+        throw std::runtime_error("Mute keyboard mode must defer only while waiting for an enabled chord starter");
+    }
+
+    const std::string loop_block = extract_between(
+        companion_cpp,
+        "void companion_loop() {",
+        "\n}\n\nvoid companion_process_controller_report"
+    );
+    const auto window_loop = loop_block.find("mute_keyboard_chord_window_loop();");
+    const auto keyboard_loop = loop_block.find("mute_keyboard_loop();");
+    if (
+        window_loop == std::string::npos
+        || keyboard_loop == std::string::npos
+        || keyboard_loop < window_loop
+    ) {
+        throw std::runtime_error("Mute chord window must be committed before keyboard reports are flushed");
+    }
+}
+
 } // namespace
 
 int main() {
@@ -421,6 +510,7 @@ int main() {
         assert_ds4_persona_identity_is_ds4_facing(source);
         assert_persona_switch_quiets_input_only(source_root);
         assert_usb_suspend_poweroff_is_debounced(source_root);
+        assert_mute_keyboard_chord_starter_is_deferred(source_root);
 
         if (bcd_device != kExpectedUsbDeviceRevision) {
             std::cerr << "USB bcdDevice changed unexpectedly. Expected 0x" << std::hex

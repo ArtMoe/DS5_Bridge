@@ -87,9 +87,10 @@ const api = {
     mode: MuteButtonMode,
     usage: number,
     modifiers: number,
-    behavior: MuteKeyboardBehavior
+    behavior: MuteKeyboardBehavior,
+    chordStarterEnabled?: boolean
   ): Promise<BridgeSnapshot> => (
-    ipcRenderer.invoke('bridge:setMuteButtonAction', mode, usage, modifiers, behavior)
+    ipcRenderer.invoke('bridge:setMuteButtonAction', mode, usage, modifiers, behavior, chordStarterEnabled)
   ),
   setLedEnabled: (value: boolean): Promise<BridgeSnapshot> => ipcRenderer.invoke('bridge:setLedEnabled', value),
   setPlayerLedEnabled: (value: boolean): Promise<BridgeSnapshot> => (

@@ -699,9 +699,10 @@ function registerIpc(service: BridgeService): void {
     mode: MuteButtonMode,
     usage: number,
     modifiers: number,
-    behavior: MuteKeyboardBehavior
+    behavior: MuteKeyboardBehavior,
+    chordStarterEnabled?: boolean
   ) => (
-    service.setMuteButtonAction(mode, usage, modifiers, behavior)
+    service.setMuteButtonAction(mode, usage, modifiers, behavior, chordStarterEnabled)
   ));
   ipcMain.handle('bridge:setLedEnabled', (_event, value: boolean) => service.setLedEnabled(value));
   ipcMain.handle('bridge:setPlayerLedEnabled', (_event, value: boolean) => service.setPlayerLedEnabled(value));

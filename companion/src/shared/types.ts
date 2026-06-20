@@ -59,6 +59,7 @@ export interface CompanionSettings {
   muteKeyboardUsage: number;
   muteKeyboardModifiers: number;
   muteKeyboardBehavior: MuteKeyboardBehavior;
+  muteKeyboardChordStarterEnabled: boolean;
   ledEnabled: boolean;
   playerLedEnabled: boolean;
   idleDisconnectEnabled: boolean;

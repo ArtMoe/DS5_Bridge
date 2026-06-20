@@ -152,7 +152,7 @@ describe('renderer behavior guards', () => {
     expect(displaySource).toContain('snapshot.settings.triggerEffectIntensityPercent');
   });
 
-  it('shows mute as a chord starter only when mute behavior is chord', () => {
+  it('shows mute as a chord starter when chord mode or keyboard chord starter is active', () => {
     expect(appSource).toContain("mute: { id: CHORD_MUTE_STARTER_ID, label: 'Mute Button', Icon: MicOff }");
     expect(appSource).toContain('[CHORD_STARTERS.mute.label, CHORD_MUTE_STARTER_ID]');
     expect(appSource).toContain('chords-starter-icon-glyph');
@@ -160,12 +160,17 @@ describe('renderer behavior guards', () => {
     expect(appSource).toContain('function chordStarterOptionsFor(currentStarter?: ChordStarterId)');
     expect(appSource).toContain("currentStarter === CHORD_MUTE_STARTER_ID");
     expect(appSource).toContain('mute-starter-inactive');
-    expect(appSource).toContain("assignment.starter === CHORD_MUTE_STARTER_ID && !muteButtonModeIsChord");
+    expect(appSource).toContain('muteButtonChordStarterActive');
+    expect(appSource).toContain("snapshot?.settings.muteButtonMode === 'chord'");
+    expect(appSource).toContain("snapshot?.settings.muteButtonMode === 'keyboard'");
+    expect(appSource).toContain('snapshot.settings.muteKeyboardChordStarterEnabled');
+    expect(appSource).toContain("assignment.starter === CHORD_MUTE_STARTER_ID && !muteButtonChordStarterActive");
     expect(appSource).toContain('Duplicate, inactive, or shortcut-shadowed chord bindings');
     expect(stylesSource).toContain('.chords-assignment-row.mute-starter-inactive .remap-glyph-option img');
     expect(stylesSource).toContain('opacity: var(--disabled-opacity);');
     expect(appSource).toContain("starter === CHORD_MUTE_STARTER_ID");
-    expect(appSource).toContain("muteButtonModeIsChord");
+    expect(appSource).toContain('Chord Starter');
+    expect(appSource).toContain("window.bridge.setMuteButtonAction(mode, keyUsage, keyModifiers, keyBehavior, keyChordStarterEnabled)");
     expect(appSource).toContain('Pair PS, LFN, RFN, or Mute with a button.');
   });
 });

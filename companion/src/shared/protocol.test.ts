@@ -6,6 +6,8 @@ import {
   COMMAND_ID,
   DEFAULT_BUTTON_REMAP_PROFILE,
   MAGIC,
+  MUTE_KEYBOARD_CHORD_STARTER_FLAG,
+  MUTE_KEYBOARD_HOLD_FLAG,
   PROTOCOL_MAJOR,
   PROTOCOL_MINOR,
   ProtocolError,
@@ -126,7 +128,7 @@ describe('companion protocol', () => {
     report[51] = 1;
     report[60] = 1;
     report[61] = 0x68;
-    report[62] = 0x82;
+    report[62] = MUTE_KEYBOARD_HOLD_FLAG | MUTE_KEYBOARD_CHORD_STARTER_FLAG | 0x02;
     report[63] = 1;
 
     const status = parseStatusReport(report);
@@ -154,6 +156,7 @@ describe('companion protocol', () => {
     expect(status.muteKeyboardUsage).toBe(0x68);
     expect(status.muteKeyboardModifiers).toBe(0x02);
     expect(status.muteKeyboardBehavior).toBe('hold');
+    expect(status.muteKeyboardChordStarterEnabled).toBe(true);
     expect(status.quietModeEnabled).toBe(true);
     expect(status.firmwareFlags.hostPersonaControl).toBe(true);
     expect(status.hostPersonaMode).toBe('ds4');

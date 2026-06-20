@@ -20,7 +20,7 @@ namespace {
 
 constexpr uint8_t kMagic[] = {'D', 'S', '5', 'B'};
 constexpr uint8_t kProtocolMajor = 1;
-constexpr uint8_t kProtocolMinor = 12;
+constexpr uint8_t kProtocolMinor = 13;
 constexpr uint8_t kProtocolMinSupportedMinor = 7;
 constexpr uint8_t kFirmwareMajor = 1;
 constexpr uint8_t kFirmwareMinor = 6;
@@ -62,8 +62,10 @@ constexpr uint8_t kDpadNeutral = 0x08;
 constexpr uint32_t kShortcutRepeatUs = 180000;
 constexpr uint8_t kDefaultMuteKeyboardUsage = 0x68; // F13
 constexpr uint8_t kMuteKeyboardModifierMask = 0x0F;
+constexpr uint8_t kMuteKeyboardChordStarterFlag = 0x10;
 constexpr uint8_t kMuteKeyboardHoldFlag = 0x80;
 constexpr uint32_t kKeyboardPressDurationUs = 40000;
+constexpr uint32_t kMuteKeyboardChordWindowUs = 250000;
 constexpr uint32_t kMuteLedFlashDurationUs = 120000;
 constexpr uint32_t kClassicRumbleTestDurationUs = 650000;
 constexpr uint8_t kClassicRumbleTestAmplitude = 160;
@@ -309,6 +311,8 @@ uint8_t shortcut_event_count = 0;
 bool mute_keyboard_pending = false;
 bool mute_keyboard_pressed = false;
 uint32_t mute_keyboard_release_at_us = 0;
+bool mute_keyboard_chord_pending = false;
+uint32_t mute_keyboard_chord_until_us = 0;
 bool mute_led_flash_pending = false;
 uint32_t mute_led_flash_until_us = 0;
 bool classic_rumble_test_active = false;
@@ -726,6 +730,7 @@ void restore_defaults() {
     clear_shortcut_events();
     mute_keyboard_pending = false;
     mute_keyboard_pressed = false;
+    mute_keyboard_chord_pending = false;
     mute_led_flash_pending = false;
     audio_set_quiet_mode(false);
     audio_set_duplex_requested(false);
@@ -842,6 +847,7 @@ void set_mute_button_action(uint8_t mode, uint8_t usage, uint8_t modifiers) {
     mute_button_last_pressed = false;
     mute_keyboard_pending = false;
     mute_keyboard_pressed = false;
+    mute_keyboard_chord_pending = false;
     mute_led_flash_pending = false;
 
     if (mute_button_mode != MuteButtonQuiet) {
@@ -852,6 +858,20 @@ void set_mute_button_action(uint8_t mode, uint8_t usage, uint8_t modifiers) {
 
 bool mute_keyboard_hold_enabled() {
     return (mute_keyboard_modifiers & kMuteKeyboardHoldFlag) != 0;
+}
+
+bool mute_keyboard_chord_starter_enabled() {
+    return mute_button_mode == MuteButtonKeyboard
+        && (mute_keyboard_modifiers & kMuteKeyboardChordStarterFlag) != 0;
+}
+
+void begin_mute_keyboard_chord_window(uint32_t now) {
+    mute_keyboard_chord_pending = true;
+    mute_keyboard_chord_until_us = now + kMuteKeyboardChordWindowUs;
+}
+
+void cancel_mute_keyboard_chord_window() {
+    mute_keyboard_chord_pending = false;
 }
 
 void queue_mute_keyboard_press(bool hold) {
@@ -872,6 +892,23 @@ void queue_mute_keyboard_release() {
     mute_keyboard_release_at_us = time_us_32();
     mute_led_flash_pending = false;
     refresh_mute_led_policy();
+}
+
+void commit_mute_keyboard_chord_window(bool hold) {
+    if (!mute_keyboard_chord_pending) {
+        return;
+    }
+    mute_keyboard_chord_pending = false;
+    queue_mute_keyboard_press(hold);
+}
+
+void mute_keyboard_chord_window_loop() {
+    if (
+        mute_keyboard_chord_pending
+        && static_cast<int32_t>(time_us_32() - mute_keyboard_chord_until_us) >= 0
+    ) {
+        commit_mute_keyboard_chord_window(mute_button_last_pressed && mute_keyboard_hold_enabled());
+    }
 }
 
 void toggle_quiet_mode() {
@@ -2475,7 +2512,10 @@ bool chord_starter_pressed(uint8_t const *report, uint16_t len, uint8_t starter)
         case kChordStarterRfn:
             return (report[9] & kRightFunctionButtonBit) != 0;
         case kChordStarterMute:
-            return mute_button_mode == MuteButtonChord && (report[9] & kMuteButtonBit) != 0;
+            return (
+                mute_button_mode == MuteButtonChord
+                || (mute_keyboard_chord_starter_enabled() && mute_keyboard_chord_pending)
+            ) && (report[9] & kMuteButtonBit) != 0;
         default:
             return false;
     }
@@ -2503,14 +2543,15 @@ void suppress_chord_starter(uint8_t *report, uint16_t len, uint8_t starter) {
     }
 }
 
-void process_dynamic_chord_bindings(uint8_t *report, uint16_t len) {
+bool process_dynamic_chord_bindings(uint8_t *report, uint16_t len) {
     if (report == nullptr || len <= 9 || dynamic_chord_binding_count == 0) {
-        return;
+        return false;
     }
 
     uint8_t source_report[63]{};
     const uint16_t source_len = std::min<uint16_t>(len, sizeof(source_report));
     memcpy(source_report, report, source_len);
+    bool mute_chord_pressed = false;
 
     for (uint8_t i = 0; i < dynamic_chord_binding_count; i++) {
         DynamicChordBinding &binding = dynamic_chord_bindings[i];
@@ -2521,12 +2562,14 @@ void process_dynamic_chord_bindings(uint8_t *report, uint16_t len) {
         if (pressed) {
             suppress_remap_button(report, len, binding.button);
             suppress_chord_starter(report, len, binding.starter);
+            mute_chord_pressed = mute_chord_pressed || binding.starter == kChordStarterMute;
             if (!binding.last_pressed) {
                 queue_shortcut_event(binding.event);
             }
         }
         binding.last_pressed = pressed;
     }
+    return mute_chord_pressed;
 }
 
 void apply_button_remap(uint8_t *report, uint16_t len) {
@@ -2622,6 +2665,7 @@ void companion_init() {
 void companion_loop() {
     audio_test_haptics_loop();
     classic_rumble_test_loop();
+    mute_keyboard_chord_window_loop();
     mute_keyboard_loop();
     adaptive_trigger_test_loop();
     apply_persistent_trigger_effect();
@@ -2635,28 +2679,41 @@ void companion_process_controller_report(uint8_t *report, uint16_t len) {
     const bool home_pressed = (report[9] & kHomeButtonBit) != 0;
     const uint8_t dpad_direction = report[7] & kDpadMask;
     const bool dpad_pressed = dpad_direction <= 0x07;
-    process_dynamic_chord_bindings(report, len);
+    const bool mute_pressed = (report[9] & kMuteButtonBit) != 0;
+    const uint32_t now = time_us_32();
+    if (mute_pressed && !mute_button_last_pressed && mute_keyboard_chord_starter_enabled()) {
+        begin_mute_keyboard_chord_window(now);
+    }
+    const bool mute_chord_pressed = process_dynamic_chord_bindings(report, len);
+    if (mute_chord_pressed) {
+        cancel_mute_keyboard_chord_window();
+    }
     process_shortcut_bindings(report);
     if (home_pressed && dpad_pressed) {
         report[9] &= static_cast<uint8_t>(~kHomeButtonBit);
     }
 
-    const bool pressed = (report[9] & kMuteButtonBit) != 0;
     report[9] &= static_cast<uint8_t>(~kMuteButtonBit);
 
-    if (pressed && !mute_button_last_pressed) {
+    if (mute_pressed && !mute_button_last_pressed) {
         if (mute_button_mode == MuteButtonNormal) {
             toggle_companion_mic_mute();
         } else if (mute_button_mode == MuteButtonKeyboard) {
-            queue_mute_keyboard_press(mute_keyboard_hold_enabled());
+            if (!mute_keyboard_chord_starter_enabled()) {
+                queue_mute_keyboard_press(mute_keyboard_hold_enabled());
+            }
         } else if (mute_button_mode == MuteButtonQuiet) {
             toggle_quiet_mode();
         }
-    } else if (!pressed && mute_button_last_pressed && mute_button_mode == MuteButtonKeyboard && mute_keyboard_hold_enabled()) {
-        queue_mute_keyboard_release();
+    } else if (!mute_pressed && mute_button_last_pressed && mute_button_mode == MuteButtonKeyboard) {
+        if (mute_keyboard_chord_pending) {
+            commit_mute_keyboard_chord_window(false);
+        } else if (mute_keyboard_hold_enabled()) {
+            queue_mute_keyboard_release();
+        }
     }
 
-    mute_button_last_pressed = pressed;
+    mute_button_last_pressed = mute_pressed;
     apply_button_remap(report, len);
 }
 
