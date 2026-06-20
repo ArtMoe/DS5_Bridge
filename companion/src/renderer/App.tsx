@@ -143,8 +143,10 @@ type ChordStarterDefinition = {
   textGlyph?: string;
   Icon?: TablerIcon;
 };
-type DualSenseEdgeRemapButtonId = Extract<RemapButtonId, 'lb' | 'rb' | 'lfn' | 'rfn'>;
-type StandardRemapButtonId = Exclude<RemapButtonId, DualSenseEdgeRemapButtonId>;
+type TargetOnlyRemapButtonId = Extract<RemapButtonId, 'ps'>;
+type SourceRemapButtonId = Exclude<RemapButtonId, TargetOnlyRemapButtonId>;
+type DualSenseEdgeRemapButtonId = Extract<SourceRemapButtonId, 'lb' | 'rb' | 'lfn' | 'rfn'>;
+type StandardRemapButtonId = Exclude<SourceRemapButtonId, DualSenseEdgeRemapButtonId>;
 type RemapProfileDialogMode = 'save' | 'rename' | 'delete';
 type ControllerProfileDialogMode = 'save' | 'rename' | 'delete';
 type ChordFunctionDraft = {
@@ -449,7 +451,8 @@ const REMAP_BUTTONS: Record<RemapButtonId, RemapButtonDefinition> = {
   lb: { id: 'lb', label: 'Left Back Button', textGlyph: 'LB' },
   rb: { id: 'rb', label: 'Right Back Button', textGlyph: 'RB' },
   lfn: { id: 'lfn', label: 'Left Function Button', textGlyph: 'LFN' },
-  rfn: { id: 'rfn', label: 'Right Function Button', textGlyph: 'RFN' }
+  rfn: { id: 'rfn', label: 'Right Function Button', textGlyph: 'RFN' },
+  ps: { id: 'ps', label: 'PS Button', glyphUrl: psHomeGlyphUrl }
 };
 const REMAP_LEFT_BUTTON_IDS: StandardRemapButtonId[] = ['l2', 'l1', 'create', 'dpad-up', 'dpad-right', 'dpad-down', 'dpad-left', 'l3'];
 const REMAP_RIGHT_BUTTON_IDS: StandardRemapButtonId[] = ['r2', 'r1', 'options', 'triangle', 'circle', 'cross', 'r3', 'square'];
@@ -463,7 +466,7 @@ const REMAP_EDGE_BUTTON_IDS: DualSenseEdgeRemapButtonId[] = [
   ...REMAP_EDGE_TOP_BUTTON_IDS,
   ...REMAP_EDGE_BOTTOM_BUTTON_IDS
 ];
-const REMAP_TARGET_BUTTON_IDS: StandardRemapButtonId[] = [
+const REMAP_STANDARD_TARGET_BUTTON_IDS: StandardRemapButtonId[] = [
   'triangle',
   'circle',
   'cross',
@@ -481,13 +484,17 @@ const REMAP_TARGET_BUTTON_IDS: StandardRemapButtonId[] = [
   'create',
   'options'
 ];
+const REMAP_TARGET_BUTTON_IDS: RemapButtonId[] = [
+  ...REMAP_STANDARD_TARGET_BUTTON_IDS,
+  'ps'
+];
 const CHORD_BUTTON_MENU_IDS: ChordAssignableButtonId[] = [
-  ...REMAP_TARGET_BUTTON_IDS,
+  ...REMAP_STANDARD_TARGET_BUTTON_IDS,
   'lb',
   'rb'
 ];
 const REMAP_ALL_BUTTON_IDS = [...REMAP_BUTTON_IDS] as RemapButtonId[];
-const REMAP_TARGET_OPTIONS: Array<[string, StandardRemapButtonId]> = [
+const REMAP_TARGET_OPTIONS: Array<[string, RemapButtonId]> = [
   ...REMAP_TARGET_BUTTON_IDS
 ].map((id) => [REMAP_BUTTONS[id].label, id]);
 const CHORD_STARTERS: Record<ChordStarterId, ChordStarterDefinition> = {
@@ -562,7 +569,8 @@ const CHORD_KEYBOARD_KEY_OPTIONS: Array<[string, string]> = [
   ['Menu', 'Menu'],
   ...Array.from({ length: 24 }, (_, index): [string, string] => [`F${index + 1}`, `F${index + 1}`]),
   ...'ABCDEFGHIJKLMNOPQRSTUVWXYZ'.split('').map((letter): [string, string] => [letter, letter]),
-  ...'1234567890'.split('').map((digit): [string, string] => [digit, digit])
+  ...'1234567890'.split('').map((digit): [string, string] => [digit, digit]),
+  ...'0123456789'.split('').map((digit): [string, string] => [`Numpad ${digit}`, `Numpad${digit}`])
 ];
 const CHORD_KEYBOARD_KEY_MAX_LABEL_LENGTH = Math.max(
   ...CHORD_KEYBOARD_KEY_OPTIONS.map(([label]) => label.length)
@@ -2944,7 +2952,7 @@ export function App() {
   const chordAssignableButtonIds = useMemo<readonly ChordAssignableButtonId[]>(() => (
     (showDualSenseEdgeRemapButtons
       ? CHORD_BUTTON_MENU_IDS
-      : REMAP_TARGET_BUTTON_IDS) as readonly ChordAssignableButtonId[]
+      : REMAP_STANDARD_TARGET_BUTTON_IDS) as readonly ChordAssignableButtonId[]
   ), [showDualSenseEdgeRemapButtons]);
   function chordStarterOptionsFor(currentStarter?: ChordStarterId): Array<[string, ChordStarterId]> {
     return currentStarter === CHORD_MUTE_STARTER_ID

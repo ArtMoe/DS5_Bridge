@@ -629,6 +629,7 @@ for (let index = 0; index < 26; index += 1) {
 }
 for (let index = 0; index <= 9; index += 1) {
   VIRTUAL_KEY_CODES[String(index)] = 0x30 + index;
+  VIRTUAL_KEY_CODES[`NUMPAD${index}`] = 0x60 + index;
 }
 for (let index = 1; index <= 24; index += 1) {
   VIRTUAL_KEY_CODES[`F${index}`] = 0x6f + index;

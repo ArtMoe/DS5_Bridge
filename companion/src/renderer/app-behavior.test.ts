@@ -174,7 +174,7 @@ describe('renderer behavior guards', () => {
     expect(appSource).toContain('Pair PS, LFN, RFN, or Mute with a button.');
   });
 
-  it('offers Print Screen as a chord keyboard shortcut key', () => {
+  it('offers Print Screen and numpad numerals as chord keyboard shortcut keys', () => {
     const optionsStart = appSource.indexOf('const CHORD_KEYBOARD_KEY_OPTIONS');
     expect(optionsStart).toBeGreaterThanOrEqual(0);
     const optionsEnd = appSource.indexOf('const CHORD_KEYBOARD_KEY_MAX_LABEL_LENGTH', optionsStart);
@@ -182,6 +182,8 @@ describe('renderer behavior guards', () => {
     const optionsSource = appSource.slice(optionsStart, optionsEnd);
 
     expect(optionsSource).toContain("['Print Screen', 'Print Screen']");
+    expect(optionsSource).toContain('`Numpad ${digit}`');
+    expect(optionsSource).toContain('`Numpad${digit}`');
 
     const normalizeSource = extractFunction('normalizeChordKeyLabel');
     expect(normalizeSource).toContain("case 'print screen':");

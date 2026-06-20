@@ -44,7 +44,7 @@ describe('IPC contract', () => {
     expect(mainSource).toContain("mainWindow.webContents.send('window:maximizedChanged', mainWindow.isMaximized())");
   });
 
-  it('maps Print Screen chord keyboard shortcuts to VK_SNAPSHOT', () => {
+  it('maps chord keyboard shortcuts to Windows virtual-key codes', () => {
     const keyCodeStart = bridgeServiceSource.indexOf('const VIRTUAL_KEY_CODES');
     expect(keyCodeStart).toBeGreaterThanOrEqual(0);
     const keyCodeEnd = bridgeServiceSource.indexOf('const MEDIA_ACTION_KEY_CODES', keyCodeStart);
@@ -54,6 +54,7 @@ describe('IPC contract', () => {
     expect(keyCodeSource).toContain('PRINTSCREEN: 0x2c');
     expect(keyCodeSource).toContain('PRTSC: 0x2c');
     expect(keyCodeSource).toContain('PRTSCN: 0x2c');
+    expect(keyCodeSource).toContain('VIRTUAL_KEY_CODES[`NUMPAD${index}`] = 0x60 + index');
     expect(bridgeServiceSource).toContain('function normalizeVirtualKeyName');
   });
 });

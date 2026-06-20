@@ -11,6 +11,7 @@ import {
   PROTOCOL_MAJOR,
   PROTOCOL_MINOR,
   ProtocolError,
+  REMAP_BUTTON_IDS,
   REPORT_ID,
   buildButtonRemapPayload,
   buildChordBindingsPayload,
@@ -24,7 +25,8 @@ import {
   parseAckReport,
   parseFeedbackTraceReport,
   parseTriggerTraceReport,
-  parseStatusReport
+  parseStatusReport,
+  remapButtonIdValue
 } from './protocol';
 
 function baseReport(reportId: number): number[] {
@@ -400,13 +402,15 @@ describe('companion protocol', () => {
     const payload = buildButtonRemapPayload({
       ...DEFAULT_BUTTON_REMAP_PROFILE.mappings,
       cross: 'circle',
-      lb: 'square'
+      lb: 'square',
+      rfn: 'ps'
     });
     const report = buildCommandReport(COMMAND_ID.SET_BUTTON_REMAP, 7, 0, payload);
-    expect(payload).toHaveLength(20);
+    expect(payload).toHaveLength(REMAP_BUTTON_IDS.length);
     expect(report[7]).toBe(COMMAND_ID.SET_BUTTON_REMAP);
-    expect(report[11 + 13]).toBe(12);
-    expect(report[11 + 16]).toBe(14);
+    expect(report[11 + remapButtonIdValue('cross')]).toBe(remapButtonIdValue('circle'));
+    expect(report[11 + remapButtonIdValue('lb')]).toBe(remapButtonIdValue('square'));
+    expect(report[11 + remapButtonIdValue('rfn')]).toBe(remapButtonIdValue('ps'));
   });
 
   it('builds chord binding command payloads', () => {

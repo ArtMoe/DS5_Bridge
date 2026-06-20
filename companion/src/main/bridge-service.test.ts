@@ -2169,15 +2169,18 @@ describe('BridgeService', () => {
 
     await poll(service);
     await service.setButtonRemap('lb', 'square');
-    const snapshot = await service.setButtonRemap('cross', 'circle');
+    await service.setButtonRemap('cross', 'circle');
+    const snapshot = await service.setButtonRemap('rfn', 'ps');
 
     const command = device.sentReports.filter((report) => report[7] === COMMAND_ID.SET_BUTTON_REMAP).at(-1);
     expect(command?.[7]).toBe(COMMAND_ID.SET_BUTTON_REMAP);
     expect(command?.[9]).toBe(0);
     expect(command?.[11 + 13]).toBe(12);
     expect(command?.[11 + 16]).toBe(14);
+    expect(command?.[11 + 19]).toBe(20);
     expect(snapshot.settings.buttonRemappingDraft.cross).toBe('circle');
     expect(snapshot.settings.buttonRemappingDraft.lb).toBe('square');
+    expect(snapshot.settings.buttonRemappingDraft.rfn).toBe('ps');
   });
 
   it('sends adaptive trigger test commands without rejecting busy ACKs', async () => {
