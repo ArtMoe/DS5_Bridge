@@ -883,6 +883,7 @@ void audio_handle_controller_disconnect() {
     test_haptics_packets_remaining = 0;
     test_haptics_neutral_packets_remaining = 0;
     controller_output_state_reset_cached_triggers();
+    controller_output_state_reset_cached_player_leds();
     plug_headset = false;
     controller_state_ready = false;
     host_route_primer_toggle_pending = false;

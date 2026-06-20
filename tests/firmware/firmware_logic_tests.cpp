@@ -136,6 +136,7 @@ void reset_policy_state() {
 
 void reset_output_state() {
     controller_output_state_reset_cached_triggers();
+    controller_output_state_reset_cached_player_leds();
     controller_output_state_set_player_led_enabled(true);
     Payload payload{};
     controller_output_state_apply_host_payload(payload.data(), static_cast<uint8_t>(payload.size()));
@@ -497,6 +498,49 @@ void output_state_player_led_disabled_suppresses_host_indicator() {
     EXPECT_EQ(snapshot[kPlayerLedsOffset], 0);
 }
 
+void output_state_player_led_reenabled_restores_host_indicator() {
+    reset_output_state();
+    auto payload = empty_payload();
+    payload[kValidFlag1Offset] = kFlag1PlayerIndicatorControlEnable;
+    payload[kPlayerLedsOffset] = 0x2f;
+    controller_output_state_apply_host_payload(payload.data(), static_cast<uint8_t>(payload.size()));
+    controller_output_state_set_player_led_enabled(false);
+    controller_output_state_set_player_led_enabled(true);
+
+    AudioSnapshot snapshot{};
+    controller_output_state_copy_audio_snapshot(snapshot.data(), false);
+
+    EXPECT_TRUE((snapshot[kValidFlag1Offset] & kFlag1PlayerIndicatorControlEnable) != 0);
+    EXPECT_EQ(snapshot[kPlayerLedsOffset], 0x2f);
+
+    Payload report{};
+    EXPECT_TRUE(controller_output_state_copy_player_led_report(report.data(), static_cast<uint16_t>(report.size())));
+    EXPECT_TRUE((report[kValidFlag1Offset] & kFlag1PlayerIndicatorControlEnable) != 0);
+    EXPECT_EQ(report[kPlayerLedsOffset], 0x2f);
+}
+
+void output_state_player_led_release_invalidates_cached_indicator() {
+    reset_output_state();
+    auto payload = empty_payload();
+    payload[kValidFlag1Offset] = kFlag1PlayerIndicatorControlEnable;
+    payload[kPlayerLedsOffset] = 0x2f;
+    controller_output_state_apply_host_payload(payload.data(), static_cast<uint8_t>(payload.size()));
+
+    auto release_payload = empty_payload();
+    release_payload[kValidFlag1Offset] = kFlag1ReleaseLeds;
+    controller_output_state_apply_host_payload(release_payload.data(), static_cast<uint8_t>(release_payload.size()));
+
+    AudioSnapshot snapshot{};
+    controller_output_state_copy_audio_snapshot(snapshot.data(), false);
+
+    EXPECT_TRUE((snapshot[kValidFlag1Offset] & kFlag1ReleaseLeds) != 0);
+    EXPECT_FALSE((snapshot[kValidFlag1Offset] & kFlag1PlayerIndicatorControlEnable) != 0);
+    EXPECT_EQ(snapshot[kPlayerLedsOffset], 0);
+
+    Payload report{};
+    EXPECT_FALSE(controller_output_state_copy_player_led_report(report.data(), static_cast<uint16_t>(report.size())));
+}
+
 void output_state_clears_zero_rumble_flags_but_preserves_nonzero_rumble() {
     auto payload = empty_payload();
     payload[kValidFlag0Offset] = kFlag0CompatibleVibration | kFlag0HapticsSelect;
@@ -799,6 +843,8 @@ std::vector<TestCase> tests{
     {"output state lightbar override is scaled and survives audio snapshot", output_state_lightbar_override_is_scaled_and_survives_audio_snapshot},
     {"output state player led enabled preserves host indicator", output_state_player_led_enabled_preserves_host_indicator},
     {"output state player led disabled suppresses host indicator", output_state_player_led_disabled_suppresses_host_indicator},
+    {"output state player led reenabled restores host indicator", output_state_player_led_reenabled_restores_host_indicator},
+    {"output state player led release invalidates cached indicator", output_state_player_led_release_invalidates_cached_indicator},
     {"output state clears zero rumble flags but preserves nonzero rumble", output_state_clears_zero_rumble_flags_but_preserves_nonzero_rumble},
     {"output state clear triggers removes effect bytes flags and power", output_state_clear_triggers_removes_effect_bytes_flags_and_power},
     {"haptics test signal matches original main packet flip pattern", haptics_test_signal_matches_original_main_packet_flip_pattern},

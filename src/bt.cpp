@@ -875,14 +875,16 @@ void bt_set_player_led_enabled(bool enabled) {
     player_led_enabled = enabled;
     controller_output_state_set_player_led_enabled(enabled);
 
-    if (enabled || hid_interrupt_cid == 0) {
+    if (hid_interrupt_cid == 0) {
         return;
     }
 
     uint8_t report[DS_OUTPUT_REPORT_BT_SIZE];
     init_state_report(report);
-    report[3 + OUTPUT_PAYLOAD_VALID_FLAG1_OFFSET] = DS_OUTPUT_VALID_FLAG1_PLAYER_INDICATOR_CONTROL_ENABLE;
-    report[3 + OUTPUT_PAYLOAD_PLAYER_LEDS_OFFSET] = 0;
+    if (!controller_output_state_copy_player_led_report(report + 3, DS_OUTPUT_REPORT_COMMON_SIZE)) {
+        return;
+    }
+    enqueue_feedback_state_output(report, sizeof(report), OutputReasonStateOnly);
     bt_write(report, sizeof(report));
 }
 

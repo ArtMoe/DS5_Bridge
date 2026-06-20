@@ -4,6 +4,7 @@
 #include <cstdint>
 
 void controller_output_state_reset_cached_triggers();
+void controller_output_state_reset_cached_player_leds();
 void controller_output_state_apply_host_payload(uint8_t const *data, uint8_t len);
 void controller_output_state_set_adaptive_trigger(
     uint8_t const *right_trigger,
@@ -15,6 +16,7 @@ void controller_output_state_set_adaptive_trigger(
 );
 void controller_output_state_set_lightbar(uint8_t red, uint8_t green, uint8_t blue, uint8_t brightness_percent);
 void controller_output_state_set_player_led_enabled(bool enabled);
+bool controller_output_state_copy_player_led_report(uint8_t *destination, uint16_t len);
 void controller_output_state_copy_audio_snapshot(uint8_t *destination, bool headset_plugged);
 void controller_output_state_clear_zero_rumble(uint8_t *payload);
 void controller_output_state_clear_triggers(uint8_t *payload);
