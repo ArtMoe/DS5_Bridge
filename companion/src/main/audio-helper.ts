@@ -13,12 +13,6 @@ import type {
 } from '../shared/protocol';
 import type { AudioHapticsSession } from '../shared/types';
 
-export type AudioHapticsFramePayload = {
-  frame: number[];
-  sequence: number;
-  encodedBytes: number;
-};
-
 export type SystemAudioHapticsConfig = {
   source: AudioReactiveHapticsSource;
   gainPercent: number;
@@ -26,7 +20,6 @@ export type SystemAudioHapticsConfig = {
   response: AudioReactiveHapticsResponse;
   attack: AudioReactiveHapticsAttack;
   release: AudioReactiveHapticsRelease;
-  directFrames?: boolean;
 };
 
 export type DefaultRenderEndpointStatus = {
@@ -54,8 +47,6 @@ class AudioHelperStartError extends Error {
   }
 }
 
-const FRAME_RECORD_PREFIX_BYTES = 2;
-const HELPER_FRAME_BYTES = 264;
 const HELPER_RECORDING_STARTED_MESSAGE = 'status: recording-started';
 const HELPER_CAPTURE_UNAVAILABLE_PREFIX = 'status: capture-unavailable';
 const HELPER_START_TIMEOUT_MS = 8000;
@@ -92,19 +83,13 @@ export class SystemAudioHapticsEngine extends EventEmitter {
     bassFocus: 'balanced',
     response: 'balanced',
     attack: 'balanced',
-    release: 'balanced',
-    directFrames: false
+    release: 'balanced'
   };
-  private stdoutBuffer = Buffer.alloc(0);
-  private sequence = 0;
 
   async start(config: SystemAudioHapticsConfig): Promise<void> {
     const nextConfig = normalizeSystemAudioHapticsConfig(config);
     if (this.process) {
-      if (
-        audioReactiveHapticsSourceKey(this.activeConfig.source) !== audioReactiveHapticsSourceKey(nextConfig.source)
-        || Boolean(this.activeConfig.directFrames) !== Boolean(nextConfig.directFrames)
-      ) {
+      if (audioReactiveHapticsSourceKey(this.activeConfig.source) !== audioReactiveHapticsSourceKey(nextConfig.source)) {
         await this.stop();
         return this.start(nextConfig);
       }
@@ -154,8 +139,6 @@ export class SystemAudioHapticsEngine extends EventEmitter {
   async stop(): Promise<void> {
     const helper = this.process;
     this.process = null;
-    this.stdoutBuffer = Buffer.alloc(0);
-    this.sequence = 0;
     if (!helper) {
       return;
     }
@@ -202,9 +185,6 @@ export class SystemAudioHapticsEngine extends EventEmitter {
       '--haptics-release',
       config.release
     ];
-    if (config.directFrames) {
-      args.push('--stdout-only');
-    }
     const appSource = audioReactiveHapticsAppSource(config.source);
     if (appSource) {
       if (Number.isFinite(appSource.processId) && appSource.processId > 0) {
@@ -230,11 +210,7 @@ export class SystemAudioHapticsEngine extends EventEmitter {
         this.emit('error', error);
       }
     });
-    if (config.directFrames) {
-      helper.stdout.on('data', (chunk: Buffer) => this.processStdout(chunk));
-    } else {
-      helper.stdout.resume();
-    }
+    helper.stdout.resume();
     helper.on('error', (error) => this.emit('error', error));
     helper.on('exit', (code, signal) => {
       if (this.process === helper) {
@@ -244,32 +220,6 @@ export class SystemAudioHapticsEngine extends EventEmitter {
     });
 
     await waitForHelperRecordingStarted(helper, (line) => this.emit('status', line));
-  }
-
-  private processStdout(chunk: Buffer): void {
-    this.stdoutBuffer = Buffer.concat([this.stdoutBuffer, chunk]);
-    while (this.stdoutBuffer.length >= FRAME_RECORD_PREFIX_BYTES) {
-      const frameLength = this.stdoutBuffer.readUInt16LE(0);
-      if (frameLength !== HELPER_FRAME_BYTES) {
-        this.stdoutBuffer = Buffer.alloc(0);
-        this.emit('error', new Error(`Unexpected system audio haptics frame length ${frameLength}`));
-        return;
-      }
-      const recordLength = FRAME_RECORD_PREFIX_BYTES + frameLength;
-      if (this.stdoutBuffer.length < recordLength) {
-        return;
-      }
-
-      const frame = this.stdoutBuffer.subarray(FRAME_RECORD_PREFIX_BYTES, recordLength);
-      this.stdoutBuffer = this.stdoutBuffer.subarray(recordLength);
-
-      this.emit('frame', {
-        frame: [...frame],
-        sequence: this.sequence,
-        encodedBytes: Math.max(0, frame.length - 64)
-      } satisfies AudioHapticsFramePayload);
-      this.sequence = (this.sequence + 1) & 0xffff;
-    }
   }
 }
 
@@ -477,8 +427,7 @@ function normalizeSystemAudioHapticsConfig(config: SystemAudioHapticsConfig): Sy
       : 'balanced',
     release: config.release === 'tight' || config.release === 'smooth' || config.release === 'long'
       ? config.release
-      : 'balanced',
-    directFrames: Boolean(config.directFrames)
+      : 'balanced'
   };
 }
 

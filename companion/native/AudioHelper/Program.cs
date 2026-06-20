@@ -262,6 +262,7 @@ sealed class AudioHelper : IDisposable
     private bool disposed;
 
     private bool HapticsFrameOutput => options.HapticsOnly && options.StdoutOnly;
+    private int WriterPrebufferReports => HapticsFrameOutput ? 1 : AudioConstants.WriterPrebufferReports;
 
     public AudioHelper(HelperOptions options)
     {
@@ -527,11 +528,15 @@ sealed class AudioHelper : IDisposable
         }
     }
 
-    private void TryOpenCompanionOutput()
+    private bool TryOpenCompanionOutput()
     {
         if (options.StdoutOnly)
         {
-            return;
+            return false;
+        }
+        if (bridgeTransport is not null || hidStream is not null)
+        {
+            return true;
         }
         bridgeTransport = WinUsbBridgeTransport.TryOpen();
         if (bridgeTransport is not null)
@@ -540,21 +545,28 @@ sealed class AudioHelper : IDisposable
             {
                 Console.Error.WriteLine($"status: WinUSB bridge direct output active path='{bridgeTransport.DevicePath}'");
             }
-            return;
+            return true;
         }
         hidStream = PicoTransport.TryOpenDirectHid(options.HidPath);
+        return hidStream is not null;
     }
 
     private void StartSystemAudioHapticsMirror(MMDeviceEnumerator enumerator)
     {
         var sourceDevice = EndpointManager.SelectDefaultRenderEndpoint(enumerator);
-        var targetDevice = EndpointManager.SelectRenderEndpoint(enumerator, options.DeviceName ?? "DS5 Bridge");
         var sourceName = sourceDevice.FriendlyName;
-        var targetName = targetDevice.FriendlyName;
+        var targetDevice = HapticsFrameOutput
+            ? null
+            : EndpointManager.SelectRenderEndpoint(enumerator, options.DeviceName ?? "DS5 Bridge");
+        var targetName = targetDevice?.FriendlyName ?? options.DeviceName ?? "frame haptics";
 
         if (
-            string.Equals(sourceDevice.ID, targetDevice.ID, StringComparison.OrdinalIgnoreCase)
-            || EndpointManager.IsKnownBridgeEndpoint(sourceDevice)
+            !HapticsFrameOutput
+            && (
+                (targetDevice is not null
+                    && string.Equals(sourceDevice.ID, targetDevice.ID, StringComparison.OrdinalIgnoreCase))
+                || EndpointManager.IsKnownBridgeEndpoint(sourceDevice)
+            )
         )
         {
             Console.Error.WriteLine(
@@ -571,19 +583,27 @@ sealed class AudioHelper : IDisposable
 
         RegisterDefaultRenderNotification(enumerator);
 
-        capture = new WasapiLoopbackCapture(sourceDevice);
-        SetWasapiBufferMilliseconds(capture, AudioConstants.WasapiBufferMilliseconds);
-        capture.DataAvailable += OnDataAvailable;
-        capture.RecordingStopped += (_, eventArgs) =>
-        {
-            WriteWasapiStopFailure(eventArgs.Exception);
-            stopped.Set();
-        };
-
+        directCaptureAudioClient = sourceDevice.AudioClient;
+        var captureFormat = directCaptureAudioClient.MixFormat;
+        var bufferDuration = AudioConstants.WasapiBufferMilliseconds * 10000L;
+        directCaptureAudioClient.Initialize(
+            AudioClientShareMode.Shared,
+            AudioClientStreamFlags.Loopback | AudioClientStreamFlags.EventCallback,
+            bufferDuration,
+            0,
+            captureFormat,
+            Guid.Empty
+        );
+        directCaptureEvent = new EventWaitHandle(false, EventResetMode.AutoReset);
+        directCaptureAudioClient.SetEventHandle(directCaptureEvent.SafeWaitHandle.DangerousGetHandle());
+        directCaptureClient = directCaptureAudioClient.AudioCaptureClient;
         Console.Error.WriteLine(
-            $"status: audio-capture-format source=system-haptics-mirror device='{EscapeStatusValue(sourceName)}' target='{EscapeStatusValue(targetName)}' sampleRate={capture.WaveFormat.SampleRate} channels={capture.WaveFormat.Channels} bits={capture.WaveFormat.BitsPerSample} encoding={capture.WaveFormat.Encoding} targetRate={targetFormat.SampleRate} targetChannels={targetFormat.Channels} targetBits={targetFormat.BitsPerSample} targetEncoding={targetFormat.Encoding}");
-        StartRawCaptureDump(capture.WaveFormat);
-        capture.StartRecording();
+            $"status: audio-capture-format source=system-haptics-mirror device='{EscapeStatusValue(sourceName)}' target='{EscapeStatusValue(targetName)}' sampleRate={captureFormat.SampleRate} channels={captureFormat.Channels} bits={captureFormat.BitsPerSample} encoding={captureFormat.Encoding} targetRate={targetFormat.SampleRate} targetChannels={targetFormat.Channels} targetBits={targetFormat.BitsPerSample} targetEncoding={targetFormat.Encoding} bufferMs={AudioConstants.WasapiBufferMilliseconds} engineBufferFrames={directCaptureAudioClient.BufferSize}");
+        StartRawCaptureDump(captureFormat);
+
+        pcmEncoderTask = Task.Run(ProcessQueuedPcm);
+        directCaptureTask = Task.Run(() => RunDirectRawPcmCapture(captureFormat));
+        directCaptureAudioClient.Start();
         Console.Error.WriteLine("status: recording-started");
     }
 
@@ -601,8 +621,10 @@ sealed class AudioHelper : IDisposable
             return;
         }
 
-        var targetDevice = EndpointManager.SelectRenderEndpoint(enumerator, options.DeviceName ?? "DS5 Bridge");
-        var targetName = targetDevice.FriendlyName;
+        var targetDevice = HapticsFrameOutput
+            ? null
+            : EndpointManager.SelectRenderEndpoint(enumerator, options.DeviceName ?? "DS5 Bridge");
+        var targetName = targetDevice?.FriendlyName ?? options.DeviceName ?? "frame haptics";
         var targetFormat = TryStartHapticsMirrorOutput(targetDevice, targetName);
         if (targetFormat is null)
         {
@@ -662,7 +684,7 @@ sealed class AudioHelper : IDisposable
         }
     }
 
-    private WaveFormat? TryStartHapticsMirrorOutput(MMDevice targetDevice, string targetName)
+    private WaveFormat? TryStartHapticsMirrorOutput(MMDevice? targetDevice, string targetName)
     {
         if (HapticsFrameOutput)
         {
@@ -672,8 +694,15 @@ sealed class AudioHelper : IDisposable
             hapticsMirrorBuffer = null;
             hapticsMirrorOutput = null;
             Console.Error.WriteLine(
-                $"status: haptics-direct-output target='{EscapeStatusValue(targetName)}'");
+                $"status: haptics-frame-output target='{EscapeStatusValue(targetName)}'");
             return new WaveFormat(AudioConstants.TargetSampleRate, 16, 4);
+        }
+        if (targetDevice is null)
+        {
+            Console.Error.WriteLine(
+                $"status: capture-unavailable reason=target-unavailable device='{EscapeStatusValue(targetName)}'");
+            stopped.Set();
+            return null;
         }
 
         var targetFormat = targetDevice.AudioClient.MixFormat;
@@ -2177,9 +2206,10 @@ sealed class AudioHelper : IDisposable
 
     private bool WaitForReportPrebuffer()
     {
+        var prebufferReports = WriterPrebufferReports;
         while (!reportQueue.IsCompleted)
         {
-            if (reportQueue.Count >= AudioConstants.WriterPrebufferReports)
+            if (reportQueue.Count >= prebufferReports)
             {
                 return true;
             }

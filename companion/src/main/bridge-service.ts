@@ -78,7 +78,6 @@ import {
   getDefaultRenderEndpointStatus,
   setDefaultRenderBridgeEndpoint,
   type DefaultRenderEndpointStatus,
-  type AudioHapticsFramePayload,
   type SystemAudioHapticsConfig
 } from './audio-helper';
 import { CompanionDebugConfig } from './debug-config';
@@ -99,8 +98,6 @@ const FEEDBACK_TRACE_DIAGNOSTICS_ENABLED = CompanionDebugConfig.feedbackTraceDia
 const MIC_KEEPALIVE_ENABLED = CompanionDebugConfig.micKeepaliveEnabled;
 const SYSTEM_AUDIO_HAPTICS_RETRY_MS = 5000;
 const SYSTEM_AUDIO_HAPTICS_BYPASS_RETRY_MS = 2000;
-const SYSTEM_AUDIO_HAPTICS_DIRECT_FRAME_BYTES = 64;
-const SYSTEM_AUDIO_HAPTICS_DIRECT_FRAME_TTL_MS = 35;
 const AUDIO_HAPTICS_SESSION_CACHE_MS = 2500;
 const LOW_BATTERY_PERCENT = 20;
 const MIN_SUPPORTED_FIRMWARE_VERSION = '1.5.5';
@@ -492,7 +489,9 @@ function normalizeAudioReactiveHapticsConfig(
     enabled: typeof config.enabled === 'boolean' ? config.enabled : settings.audioReactiveHapticsEnabled,
     source: normalizeAudioReactiveHapticsSource(config.source ?? settings.audioReactiveHapticsSource),
     mode: normalizeAudioReactiveHapticsMode(config.mode ?? settings.audioReactiveHapticsMode),
-    gainPercent: AUDIO_REACTIVE_HAPTICS_FIXED_GAIN_PERCENT,
+    gainPercent: Number.isFinite(config.gainPercent ?? settings.audioReactiveHapticsGainPercent)
+      ? Math.max(0, Math.min(200, Math.round(config.gainPercent ?? settings.audioReactiveHapticsGainPercent)))
+      : AUDIO_REACTIVE_HAPTICS_FIXED_GAIN_PERCENT,
     bassFocus: normalizeAudioReactiveHapticsBassFocus(config.bassFocus ?? settings.audioReactiveHapticsBassFocus),
     response: normalizeAudioReactiveHapticsResponse(config.response ?? settings.audioReactiveHapticsResponse),
     attack: normalizeAudioReactiveHapticsAttack(config.attack ?? settings.audioReactiveHapticsAttack),
@@ -1188,7 +1187,6 @@ export class BridgeService extends EventEmitter {
   private systemAudioHapticsRetryAt = 0;
   private systemAudioHapticsPassthroughActive = false;
   private commandQueue: Promise<unknown> = Promise.resolve();
-  private latestSystemAudioHapticsFrame: { haptics: number[]; expiresAt: number } | null = null;
   private lastAudioStatusReadAt = 0;
   private lastAudioDebugReadAt = 0;
   private lastTriggerTraceReadAt = 0;
@@ -1221,9 +1219,6 @@ export class BridgeService extends EventEmitter {
     this.systemAudioHapticsEngine.on('error', (error: Error) => {
       this.appendAudioDebugLines([`[SystemHaptics] error: ${error.message}`]);
       this.emitSnapshot();
-    });
-    this.systemAudioHapticsEngine.on('frame', (frame: AudioHapticsFramePayload) => {
-      this.captureSystemAudioHapticsFrame(frame);
     });
     this.systemAudioHapticsEngine.on('status', (line: string) => {
       if (line) {
@@ -1929,11 +1924,6 @@ export class BridgeService extends EventEmitter {
       && settings.audioReactiveHapticsMode === 'replace';
   }
 
-  private directSystemAudioHapticsFrames(settings: CompanionSettings): boolean {
-    void settings;
-    return false;
-  }
-
   private audioReactiveHapticsSupported(): boolean {
     return Boolean(this.snapshot.status?.firmwareFlags.audioReactiveHapticsControl);
   }
@@ -1950,17 +1940,16 @@ export class BridgeService extends EventEmitter {
   private systemAudioHapticsConfig(settings: CompanionSettings): SystemAudioHapticsConfig {
     return {
       source: settings.audioReactiveHapticsSource,
-      gainPercent: AUDIO_REACTIVE_HAPTICS_FIXED_GAIN_PERCENT,
+      gainPercent: settings.audioReactiveHapticsGainPercent,
       bassFocus: settings.audioReactiveHapticsBassFocus,
       response: settings.audioReactiveHapticsResponse,
       attack: settings.audioReactiveHapticsAttack,
-      release: settings.audioReactiveHapticsRelease,
-      directFrames: this.directSystemAudioHapticsFrames(settings)
+      release: settings.audioReactiveHapticsRelease
     };
   }
 
   private audioReactiveHapticsCommandPayload(settings: CompanionSettings): number[] {
-    const gain = AUDIO_REACTIVE_HAPTICS_FIXED_GAIN_PERCENT;
+    const gain = Math.max(0, Math.min(200, Math.round(settings.audioReactiveHapticsGainPercent)));
     const mode = audioReactiveHapticsModeValue(settings.audioReactiveHapticsMode)
       | (this.audioReactiveHapticsSuppressesClassicRumble(settings)
         ? AUDIO_REACTIVE_HAPTICS_SUPPRESS_CLASSIC_RUMBLE_MODE_FLAG
@@ -2997,23 +2986,8 @@ export class BridgeService extends EventEmitter {
     });
   }
 
-  private captureSystemAudioHapticsFrame(payload: AudioHapticsFramePayload): void {
-    const settings = this.settingsStore.get();
-    if (!this.directSystemAudioHapticsFrames(settings)) {
-      return;
-    }
-
-    this.latestSystemAudioHapticsFrame = {
-      haptics: payload.frame.slice(0, SYSTEM_AUDIO_HAPTICS_DIRECT_FRAME_BYTES),
-      expiresAt: Date.now() + SYSTEM_AUDIO_HAPTICS_DIRECT_FRAME_TTL_MS
-    };
-  }
-
   private async updateSystemAudioHapticsEngine(): Promise<void> {
     const settings = this.settingsStore.get();
-    if (!this.directSystemAudioHapticsFrames(settings)) {
-      this.latestSystemAudioHapticsFrame = null;
-    }
     if (
       !this.systemAudioHapticsDesired(settings)
       || !this.device
@@ -3023,7 +2997,6 @@ export class BridgeService extends EventEmitter {
       const wasPassthroughActive = this.systemAudioHapticsPassthroughActive;
       this.systemAudioHapticsPassthroughActive = false;
       this.systemAudioHapticsRetryAt = 0;
-      this.latestSystemAudioHapticsFrame = null;
       await this.systemAudioHapticsEngine.stop();
       if (wasPassthroughActive && this.device && this.audioReactiveHapticsSupported()) {
         await this.applyAudioReactiveHapticsSettings(settings, false);
@@ -3032,7 +3005,6 @@ export class BridgeService extends EventEmitter {
     }
 
     if (Date.now() < this.systemAudioHapticsRetryAt) {
-      this.latestSystemAudioHapticsFrame = null;
       await this.systemAudioHapticsEngine.stop();
       return;
     }
@@ -3046,7 +3018,6 @@ export class BridgeService extends EventEmitter {
       this.systemAudioHapticsRetryAt = 0;
     } catch (error) {
       await this.systemAudioHapticsEngine.stop();
-      this.latestSystemAudioHapticsFrame = null;
       if (this.systemAudioHapticsPassthroughActive) {
         this.systemAudioHapticsRetryAt = Date.now() + SYSTEM_AUDIO_HAPTICS_BYPASS_RETRY_MS;
         await this.applyAudioReactiveHapticsSettings(settings, false);

@@ -1,4 +1,3 @@
-import { Buffer } from 'node:buffer';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 const childProcessMock = vi.hoisted(() => {
@@ -54,11 +53,8 @@ vi.mock('node:fs', () => ({
 
 import {
   AudioHapticsSessionMonitor,
-  SystemAudioHapticsEngine,
-  type AudioHapticsFramePayload
+  SystemAudioHapticsEngine
 } from './audio-helper';
-
-const FRAME_LENGTH = 264;
 
 beforeEach(() => {
   childProcessMock.processes.length = 0;
@@ -66,15 +62,6 @@ beforeEach(() => {
   fsMock.existsSync.mockClear();
   fsMock.existsSync.mockReturnValue(true);
 });
-
-function frameRecord(seed: number): Buffer {
-  const record = Buffer.alloc(2 + FRAME_LENGTH);
-  record.writeUInt16LE(FRAME_LENGTH, 0);
-  for (let index = 0; index < FRAME_LENGTH; index += 1) {
-    record[2 + index] = (seed + index) & 0xff;
-  }
-  return record;
-}
 
 describe('SystemAudioHapticsEngine app source', () => {
   it('passes selected app session identity to the helper', async () => {
@@ -111,34 +98,6 @@ describe('SystemAudioHapticsEngine app source', () => {
     await engine.stop();
   });
 
-  it('parses direct haptics frames from stdout', async () => {
-    const engine = new SystemAudioHapticsEngine();
-    const frames: AudioHapticsFramePayload[] = [];
-    engine.on('frame', (frame) => frames.push(frame));
-
-    const start = engine.start({
-      source: 'system-audio',
-      gainPercent: 100,
-      bassFocus: 'balanced',
-      response: 'balanced',
-      attack: 'balanced',
-      release: 'balanced',
-      directFrames: true
-    });
-    const helper = childProcessMock.processes[0]!;
-    helper.stderr.emit('data', Buffer.from('status: recording-started\n'));
-    await start;
-
-    helper.stdout.emit('data', frameRecord(42));
-
-    const args = childProcessMock.spawn.mock.calls[0]![1] as string[];
-    expect(args).toContain('--stdout-only');
-    expect(frames).toHaveLength(1);
-    expect(frames[0]!.sequence).toBe(0);
-    expect(frames[0]!.frame.slice(0, 4)).toEqual([42, 43, 44, 45]);
-
-    await engine.stop();
-  });
 });
 
 describe('audio haptics session listing', () => {
