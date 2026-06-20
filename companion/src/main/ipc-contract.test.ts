@@ -3,6 +3,7 @@ import { describe, expect, it } from 'vitest';
 
 const preloadSource = readFileSync(new URL('../preload.ts', import.meta.url), 'utf8');
 const mainSource = readFileSync(new URL('./main.ts', import.meta.url), 'utf8');
+const bridgeServiceSource = readFileSync(new URL('./bridge-service.ts', import.meta.url), 'utf8');
 
 function matches(source: string, pattern: RegExp): string[] {
   return [...source.matchAll(pattern)].map((match) => match[1] ?? '');
@@ -41,5 +42,18 @@ describe('IPC contract', () => {
     expect(preloadSource).toContain("ipcRenderer.removeListener('bridge:snapshot', listener)");
     expect(mainSource).toContain("sendToMainWindow('bridge:snapshot', snapshot)");
     expect(mainSource).toContain("mainWindow.webContents.send('window:maximizedChanged', mainWindow.isMaximized())");
+  });
+
+  it('maps Print Screen chord keyboard shortcuts to VK_SNAPSHOT', () => {
+    const keyCodeStart = bridgeServiceSource.indexOf('const VIRTUAL_KEY_CODES');
+    expect(keyCodeStart).toBeGreaterThanOrEqual(0);
+    const keyCodeEnd = bridgeServiceSource.indexOf('const MEDIA_ACTION_KEY_CODES', keyCodeStart);
+    expect(keyCodeEnd).toBeGreaterThan(keyCodeStart);
+    const keyCodeSource = bridgeServiceSource.slice(keyCodeStart, keyCodeEnd);
+
+    expect(keyCodeSource).toContain('PRINTSCREEN: 0x2c');
+    expect(keyCodeSource).toContain('PRTSC: 0x2c');
+    expect(keyCodeSource).toContain('PRTSCN: 0x2c');
+    expect(bridgeServiceSource).toContain('function normalizeVirtualKeyName');
   });
 });

@@ -173,4 +173,21 @@ describe('renderer behavior guards', () => {
     expect(appSource).toContain("window.bridge.setMuteButtonAction(mode, keyUsage, keyModifiers, keyBehavior, keyChordStarterEnabled)");
     expect(appSource).toContain('Pair PS, LFN, RFN, or Mute with a button.');
   });
+
+  it('offers Print Screen as a chord keyboard shortcut key', () => {
+    const optionsStart = appSource.indexOf('const CHORD_KEYBOARD_KEY_OPTIONS');
+    expect(optionsStart).toBeGreaterThanOrEqual(0);
+    const optionsEnd = appSource.indexOf('const CHORD_KEYBOARD_KEY_MAX_LABEL_LENGTH', optionsStart);
+    expect(optionsEnd).toBeGreaterThan(optionsStart);
+    const optionsSource = appSource.slice(optionsStart, optionsEnd);
+
+    expect(optionsSource).toContain("['Print Screen', 'Print Screen']");
+
+    const normalizeSource = extractFunction('normalizeChordKeyLabel');
+    expect(normalizeSource).toContain("case 'print screen':");
+    expect(normalizeSource).toContain("case 'printscreen':");
+    expect(normalizeSource).toContain("case 'prtsc':");
+    expect(normalizeSource).toContain("case 'prtscn':");
+    expect(normalizeSource).toContain("return 'Print Screen';");
+  });
 });

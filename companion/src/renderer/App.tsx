@@ -554,6 +554,7 @@ const CHORD_KEYBOARD_KEY_OPTIONS: Array<[string, string]> = [
   ['Down Arrow', 'Down'],
   ['Left Arrow', 'Left'],
   ['Right Arrow', 'Right'],
+  ['Print Screen', 'Print Screen'],
   ['Pause', 'Pause'],
   ['Caps Lock', 'Caps Lock'],
   ['Num Lock', 'Num Lock'],
@@ -2594,6 +2595,12 @@ function normalizeChordKeyLabel(key: string): string {
       return 'Up';
     case 'down arrow':
       return 'Down';
+    case 'print screen':
+    case 'printscreen':
+    case 'prtsc':
+    case 'prtscn':
+    case 'snapshot':
+      return 'Print Screen';
     default:
       return trimmed.length === 1 ? trimmed.toUpperCase() : trimmed;
   }
