@@ -35,6 +35,12 @@ extern uint16_t host_bridge_get_report(uint8_t report_id, uint8_t *buffer, uint1
 extern void host_bridge_set_report(uint8_t const *report, uint16_t len);
 #endif
 
+// Kitsune Input must enumerate as a stock DualSense. Never turn ENABLE_DSE on:
+// the DualSense Edge USB identity/report descriptor is intentionally unsupported.
+#ifdef ENABLE_DSE
+#error "ENABLE_DSE is intentionally disabled; Kitsune Input must never enumerate as DualSense Edge."
+#endif
+
 #define CONFIG_TOTAL_LEN_STANDARD 0x0148
 #define RAW_PCM_RETURN_DESC_LEN 0x0065
 #define KEYBOARD_HID_DESC_LEN 0x0019

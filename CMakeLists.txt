@@ -118,11 +118,11 @@ target_compile_definitions(ds5-bridge PRIVATE
         CYW43_PIO_CLOCK_DIV_INT=${CYW43_PIO_CLOCK_DIV_VALUE}
         SYS_CLOCK_KHZ=${SYS_CLOCK_KHZ_VALUE}
 )
-option(ENABLE_DSE "Enable DSE" OFF)
+# Kitsune Input intentionally enumerates as a stock DualSense only. Never turn
+# this on: DualSense Edge USB identity/descriptors are not a supported persona.
+option(ENABLE_DSE "Unsupported: do not enable DualSense Edge USB enumeration" OFF)
 if(ENABLE_DSE)
-    target_compile_definitions(ds5-bridge PRIVATE
-            ENABLE_DSE # Use the DualSense Edge USB PID and product name.
-    )
+    message(FATAL_ERROR "ENABLE_DSE is intentionally disabled. Kitsune Input must never enumerate as DualSense Edge.")
 endif()
 
 option(ENABLE_COMPANION "Enable the optional companion HID interface" OFF)
