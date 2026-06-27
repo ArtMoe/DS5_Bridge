@@ -74,6 +74,7 @@ import {
   AudioHapticsSessionMonitor,
   MicKeepaliveEngine,
   SystemAudioHapticsEngine,
+  playBridgeHapticsTestPattern,
   playBridgeSpeakerTestTone,
   getDefaultRenderEndpointStatus,
   setDefaultRenderBridgeEndpoint,
@@ -2694,7 +2695,7 @@ export class BridgeService extends EventEmitter {
   }
 
   async testHaptics(): Promise<BridgeSnapshot> {
-    await this.sendCommand(COMMAND_ID.TEST_HAPTICS, 0, { throwOnCommandError: false });
+    await playBridgeHapticsTestPattern(this.settingsStore.get().hapticsGainPercent);
     return this.getSnapshot();
   }
 

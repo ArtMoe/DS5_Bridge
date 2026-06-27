@@ -54,6 +54,11 @@ const winUsbTransportMock = vi.hoisted(() => ({
   })
 }));
 
+const audioHelperMock = vi.hoisted(() => ({
+  playBridgeHapticsTestPattern: vi.fn(async () => undefined),
+  playBridgeSpeakerTestTone: vi.fn(async () => undefined)
+}));
+
 vi.mock('node-hid', () => ({
   default: {
     devices: hidMock.devices,
@@ -66,6 +71,15 @@ vi.mock('./winusb-companion-transport', () => ({
     open: winUsbTransportMock.open
   }
 }));
+
+vi.mock('./audio-helper', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('./audio-helper')>();
+  return {
+    ...actual,
+    playBridgeHapticsTestPattern: audioHelperMock.playBridgeHapticsTestPattern,
+    playBridgeSpeakerTestTone: audioHelperMock.playBridgeSpeakerTestTone
+  };
+});
 
 import { BridgeService } from './bridge-service';
 import { SettingsStore } from './settings-store';
@@ -448,6 +462,8 @@ describe('BridgeService', () => {
     hidMock.devices.mockClear();
     hidMock.HID.mockClear();
     winUsbTransportMock.open.mockClear();
+    audioHelperMock.playBridgeHapticsTestPattern.mockClear();
+    audioHelperMock.playBridgeSpeakerTestTone.mockClear();
     tempDirs = [];
     services = [];
   });
@@ -750,17 +766,18 @@ describe('BridgeService', () => {
     expect(device.sentReports.map((report) => report[7])).toEqual(FULL_REAPPLY_COMMANDS);
   });
 
-  it('surfaces test haptics ACK failures without rejecting IPC', async () => {
-    const service = serviceFixture();
+  it('plays test haptics through the bridge audio helper', async () => {
+    const service = serviceFixture({ hapticsGainPercent: 130 });
     const device = new MockHidDevice();
-    device.ackResults = [ACK_RESULT.ERR_NOT_CONNECTED];
     hidMock.state.devicesList = [companionDeviceInfo()];
     hidMock.state.openDevices.set('companion-path', device);
 
+    await poll(service);
     const snapshot = await service.testHaptics();
 
-    expect(snapshot.diagnostics.lastError).toBe('Controller not connected');
-    expect(snapshot.diagnostics.lastAck?.resultCode).toBe(ACK_RESULT.ERR_NOT_CONNECTED);
+    expect(audioHelperMock.playBridgeHapticsTestPattern).toHaveBeenCalledWith(130);
+    expect(device.sentReports.some((report) => report[7] === COMMAND_ID.TEST_HAPTICS)).toBe(false);
+    expect(snapshot.settings.hapticsGainPercent).toBe(130);
   });
 
   it('sends rumble test commands without rejecting busy ACKs', async () => {

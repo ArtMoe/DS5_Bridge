@@ -53,6 +53,7 @@ vi.mock('node:fs', () => ({
 
 import {
   AudioHapticsSessionMonitor,
+  playBridgeHapticsTestPattern,
   SystemAudioHapticsEngine
 } from './audio-helper';
 
@@ -98,6 +99,26 @@ describe('SystemAudioHapticsEngine app source', () => {
     await engine.stop();
   });
 
+});
+
+describe('bridge haptics test', () => {
+  it('launches the helper against the bridge endpoint with clamped haptics gain', async () => {
+    const play = playBridgeHapticsTestPattern(500);
+    const helper = childProcessMock.processes[0]!;
+
+    helper.emit('exit', 0, null);
+    await play;
+
+    expect(childProcessMock.spawn).toHaveBeenCalledTimes(1);
+    const args = childProcessMock.spawn.mock.calls[0]![1] as string[];
+    expect(args).toEqual([
+      '--play-test-haptics',
+      '--device-name',
+      'DS5 Bridge',
+      '--haptics-gain',
+      '200'
+    ]);
+  });
 });
 
 describe('audio haptics session listing', () => {

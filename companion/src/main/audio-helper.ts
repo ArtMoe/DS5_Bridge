@@ -412,6 +412,10 @@ function normalizeSpeakerVolumePercent(percent: number): number {
   return Math.max(0, Math.min(100, Math.round(percent)));
 }
 
+function normalizeTestHapticsGainPercent(percent: number): number {
+  return Math.max(0, Math.min(200, Math.round(percent)));
+}
+
 function normalizeSystemAudioHapticsConfig(config: SystemAudioHapticsConfig): SystemAudioHapticsConfig {
   return {
     source: normalizeAudioReactiveHapticsSource(config.source),
@@ -771,6 +775,59 @@ export async function playBridgeSpeakerTestTone(speakerVolumePercent = 100): Pro
         helper.kill('SIGKILL');
       }
       finish(new Error('Speaker test helper timed out.'));
+    }, HELPER_TEST_TONE_TIMEOUT_MS);
+
+    helper.stderr.on('data', (chunk: Buffer) => {
+      stderr += chunk.toString('utf8');
+      if (stderr.length > HELPER_STDERR_MAX_CHARS) {
+        stderr = stderr.slice(-HELPER_STDERR_MAX_CHARS);
+      }
+    });
+    helper.on('error', (error) => finish(error));
+    helper.on('exit', (code, signal) => {
+      if (code === 0) {
+        finish();
+        return;
+      }
+      const detail = stderr.trim() || `helper exited (${signal ?? code ?? 'unknown'})`;
+      finish(new Error(detail));
+    });
+  });
+}
+
+export async function playBridgeHapticsTestPattern(hapticsGainPercent = 100): Promise<void> {
+  const helperPath = resolveHelperPath();
+  const helper = spawn(helperPath, [
+    '--play-test-haptics',
+    '--device-name',
+    BRIDGE_AUDIO_DEVICE_NAME,
+    '--haptics-gain',
+    `${normalizeTestHapticsGainPercent(hapticsGainPercent)}`
+  ], {
+    windowsHide: true,
+    stdio: ['ignore', 'ignore', 'pipe']
+  });
+
+  await new Promise<void>((resolve, reject) => {
+    let settled = false;
+    let stderr = '';
+    const finish = (error?: Error) => {
+      if (settled) {
+        return;
+      }
+      settled = true;
+      clearTimeout(timeout);
+      if (error) {
+        reject(error);
+      } else {
+        resolve();
+      }
+    };
+    const timeout = setTimeout(() => {
+      if (!helper.killed) {
+        helper.kill('SIGKILL');
+      }
+      finish(new Error('Haptics test helper timed out.'));
     }, HELPER_TEST_TONE_TIMEOUT_MS);
 
     helper.stderr.on('data', (chunk: Buffer) => {

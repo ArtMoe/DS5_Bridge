@@ -42,6 +42,11 @@ if (options.PlayTestTone)
     AudioHelperTestTone.Play(options);
     return;
 }
+if (options.PlayTestHaptics)
+{
+    AudioHelperTestHaptics.Play(options);
+    return;
+}
 if (options.MonitorAudioSessions)
 {
     using var monitor = new AudioSessionMonitor();
@@ -151,6 +156,136 @@ static class AudioHelperTestTone
             throw new FileNotFoundException("Test audio file was not found.", path);
         }
         return new AudioFileReader(path);
+    }
+}
+
+static class AudioHelperTestHaptics
+{
+    private const int PacketCount = 36;
+    private const int PrerollPacketCount = 3;
+    private const int NeutralPacketCount = 5;
+    private const int BaseAmplitude = 72;
+    private const int MaxGainPercent = 200;
+
+    public static void Play(HelperOptions options)
+    {
+        using var enumerator = new MMDeviceEnumerator();
+        var device = EndpointManager.SelectRenderEndpoint(enumerator, options.DeviceName);
+        var format = device.AudioClient.MixFormat;
+        if (format.Channels < 4)
+        {
+            throw new InvalidOperationException(
+                $"Test haptics requires a 4-channel bridge audio endpoint; '{device.FriendlyName}' exposes {format.Channels} channel(s).");
+        }
+
+        var pcm = BuildTestPcm(format, options.HapticsGainPercent);
+        using var stream = new MemoryStream(pcm);
+        using var waveStream = new RawSourceWaveStream(stream, format);
+        using var output = new WasapiOut(device, AudioClientShareMode.Shared, false, 80);
+        using var playbackStopped = new ManualResetEventSlim(false);
+        output.PlaybackStopped += (_, _) => playbackStopped.Set();
+        output.Init(waveStream);
+        output.Play();
+        if (!playbackStopped.Wait(TimeSpan.FromSeconds(3)))
+        {
+            output.Stop();
+            playbackStopped.Wait(TimeSpan.FromMilliseconds(500));
+        }
+        Console.Error.WriteLine($"status: test-haptics-played '{device.FriendlyName}'");
+    }
+
+    internal static byte[] BuildTestPcm(WaveFormat format, int gainPercent)
+    {
+        var framesPerPacket = Math.Max(
+            1,
+            (int)Math.Round(format.SampleRate * AudioConstants.PicoInputBlockFrames / (double)AudioConstants.TargetSampleRate)
+        );
+        var packetTotal = PrerollPacketCount + PacketCount + NeutralPacketCount;
+        var buffer = new byte[packetTotal * framesPerPacket * format.BlockAlign];
+        var bytesPerSample = Math.Max(1, format.BitsPerSample / 8);
+        var gain = Math.Clamp(gainPercent, 0, MaxGainPercent);
+
+        for (var packet = 0; packet < PacketCount; packet++)
+        {
+            var amplitude = TestAmplitude(BaseAmplitude, gain, TestEnvelopePercent(packet, PacketCount)) / 127.0f;
+            if (amplitude <= 0)
+            {
+                continue;
+            }
+            var packetsRemaining = PacketCount - packet;
+            var positivePhase = (packetsRemaining & 1) != 0;
+            var left = positivePhase ? amplitude : -amplitude;
+            var right = positivePhase ? -amplitude : amplitude;
+            var packetFrameStart = (PrerollPacketCount + packet) * framesPerPacket;
+
+            for (var frame = 0; frame < framesPerPacket; frame++)
+            {
+                var offset = (packetFrameStart + frame) * format.BlockAlign;
+                WriteSample(buffer, offset + bytesPerSample * 2, format, left);
+                WriteSample(buffer, offset + bytesPerSample * 3, format, right);
+            }
+        }
+
+        return buffer;
+    }
+
+    private static int TestEnvelopePercent(int packetIndex, int packetCount)
+    {
+        _ = packetIndex;
+        return packetCount == 0 ? 0 : 100;
+    }
+
+    private static int TestAmplitude(int baseAmplitude, int gainPercent, int envelopePercent)
+    {
+        var scaled = baseAmplitude * Math.Clamp(gainPercent, 0, MaxGainPercent) * envelopePercent;
+        return Math.Min(127, scaled / 10000);
+    }
+
+    private static void WriteSample(byte[] buffer, int offset, WaveFormat format, float sample)
+    {
+        if (offset < 0 || offset >= buffer.Length)
+        {
+            return;
+        }
+
+        sample = Math.Clamp(sample, -1.0f, 1.0f);
+        if (format.Encoding == WaveFormatEncoding.IeeeFloat && format.BitsPerSample == 32)
+        {
+            _ = BitConverter.TryWriteBytes(buffer.AsSpan(offset, Math.Min(4, buffer.Length - offset)), sample);
+            return;
+        }
+
+        switch (format.BitsPerSample)
+        {
+            case 16 when offset + 1 < buffer.Length:
+                BinaryPrimitives.WriteInt16LittleEndian(buffer.AsSpan(offset, 2), FloatToInt16(sample));
+                break;
+            case 24 when offset + 2 < buffer.Length:
+                WriteInt24(buffer, offset, (int)Math.Round(sample * 8388607.0f));
+                break;
+            case 32 when offset + 3 < buffer.Length && format.Encoding == WaveFormatEncoding.Pcm:
+                BinaryPrimitives.WriteInt32LittleEndian(
+                    buffer.AsSpan(offset, 4),
+                    (int)Math.Round(sample * 2147483647.0f)
+                );
+                break;
+            case 32 when offset + 3 < buffer.Length:
+                _ = BitConverter.TryWriteBytes(buffer.AsSpan(offset, 4), sample);
+                break;
+        }
+    }
+
+    private static void WriteInt24(byte[] buffer, int offset, int value)
+    {
+        value = Math.Clamp(value, -8388608, 8388607);
+        buffer[offset] = (byte)(value & 0xff);
+        buffer[offset + 1] = (byte)((value >> 8) & 0xff);
+        buffer[offset + 2] = (byte)((value >> 16) & 0xff);
+    }
+
+    private static short FloatToInt16(float sample)
+    {
+        return (short)Math.Round(Math.Clamp(sample, -1, 1) * short.MaxValue);
     }
 }
 
@@ -2468,6 +2603,7 @@ sealed record HelperOptions(
     int SpeakerVolumePercent,
     string? TestAudioPath,
     bool PlayTestTone,
+    bool PlayTestHaptics,
     bool DefaultRenderStatus,
     bool SetDefaultRenderBridge,
     string? BridgePersona,
@@ -2524,6 +2660,7 @@ sealed record HelperOptions(
         string? appProcessPath = null;
         string? appExecutableName = null;
         var playTestTone = false;
+        var playTestHaptics = false;
         var defaultRenderStatus = false;
         var setDefaultRenderBridge = false;
         string? bridgePersona = null;
@@ -2661,6 +2798,9 @@ sealed record HelperOptions(
                 case "--play-test-tone":
                     playTestTone = true;
                     break;
+                case "--play-test-haptics":
+                    playTestHaptics = true;
+                    break;
                 case "--default-render-status":
                     defaultRenderStatus = true;
                     break;
@@ -2698,6 +2838,7 @@ sealed record HelperOptions(
             speakerVolumePercent,
             testAudioPath,
             playTestTone,
+            playTestHaptics,
             defaultRenderStatus,
             setDefaultRenderBridge,
             bridgePersona,
