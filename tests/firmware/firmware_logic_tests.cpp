@@ -696,6 +696,31 @@ void rumble_state_machine_sends_real_stops_immediately() {
         static_cast<uint16_t>(payload.size())
     );
     EXPECT_TRUE(state.classic_rumble_active);
+    EXPECT_EQ(state.classic_rumble_right, 9);
+    EXPECT_EQ(state.classic_rumble_left, 4);
+    EXPECT_FALSE(controller_output_rumble_payload_requires_immediate_send(
+        state,
+        payload.data(),
+        static_cast<uint16_t>(payload.size())
+    ));
+    EXPECT_TRUE(controller_output_rumble_payload_is_redundant(
+        state,
+        payload.data(),
+        static_cast<uint16_t>(payload.size())
+    ));
+
+    payload[kMotorRightOffset] = 10;
+    EXPECT_TRUE(controller_output_rumble_payload_requires_immediate_send(
+        state,
+        payload.data(),
+        static_cast<uint16_t>(payload.size())
+    ));
+    controller_output_rumble_state_apply_payload(
+        state,
+        payload.data(),
+        static_cast<uint16_t>(payload.size())
+    );
+    EXPECT_EQ(state.classic_rumble_right, 10);
 
     payload = empty_payload();
     payload[kValidFlag0Offset] = kFlag0HapticsSelect;
@@ -711,6 +736,16 @@ void rumble_state_machine_sends_real_stops_immediately() {
         static_cast<uint16_t>(payload.size())
     );
     EXPECT_FALSE(state.classic_rumble_active);
+    EXPECT_FALSE(controller_output_rumble_payload_requires_immediate_send(
+        state,
+        payload.data(),
+        static_cast<uint16_t>(payload.size())
+    ));
+    EXPECT_TRUE(controller_output_rumble_payload_is_redundant(
+        state,
+        payload.data(),
+        static_cast<uint16_t>(payload.size())
+    ));
 
     payload = empty_payload();
     payload[kValidFlag0Offset] = kFlag0CompatibleVibration | kFlag0HapticsSelect;
@@ -918,6 +953,7 @@ void xusb360_rumble_decodes_to_ds5_classic_rumble_payload() {
     EXPECT_TRUE((payload[kValidFlag0Offset] & kFlag0HapticsSelect) != 0);
     EXPECT_FALSE((payload[kValidFlag0Offset] & kFlag0CompatibleVibration) != 0);
     EXPECT_TRUE((payload[kValidFlag2Offset] & kFlag2EnableImprovedRumbleEmulation) != 0);
+    EXPECT_TRUE((payload[kValidFlag2Offset] & kFlag2UseRumbleNotHaptics2) != 0);
     EXPECT_EQ(payload[kMotorLeftOffset], 0x90);
     EXPECT_EQ(payload[kMotorRightOffset], 0x30);
 }
@@ -936,6 +972,7 @@ void classic_rumble_renderer_can_emit_v1_classic_rumble() {
     EXPECT_TRUE((payload[kValidFlag0Offset] & kFlag0CompatibleVibration) != 0);
     EXPECT_TRUE((payload[kValidFlag0Offset] & kFlag0HapticsSelect) != 0);
     EXPECT_FALSE((payload[kValidFlag2Offset] & kFlag2EnableImprovedRumbleEmulation) != 0);
+    EXPECT_FALSE((payload[kValidFlag2Offset] & kFlag2UseRumbleNotHaptics2) != 0);
     EXPECT_EQ(payload[kMotorLeftOffset], 0x90);
     EXPECT_EQ(payload[kMotorRightOffset], 0x30);
 
@@ -1005,6 +1042,7 @@ void ds4_output_decodes_to_ds5_rumble_and_lightbar_payload() {
     EXPECT_TRUE((payload[kValidFlag0Offset] & kFlag0HapticsSelect) != 0);
     EXPECT_FALSE((payload[kValidFlag0Offset] & kFlag0CompatibleVibration) != 0);
     EXPECT_TRUE((payload[kValidFlag2Offset] & kFlag2EnableImprovedRumbleEmulation) != 0);
+    EXPECT_TRUE((payload[kValidFlag2Offset] & kFlag2UseRumbleNotHaptics2) != 0);
     EXPECT_TRUE((payload[kValidFlag1Offset] & kFlag1LightbarControlEnable) != 0);
     EXPECT_EQ(payload[kMotorRightOffset], 0x12);
     EXPECT_EQ(payload[kMotorLeftOffset], 0xfe);

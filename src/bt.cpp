@@ -219,6 +219,7 @@ static bool select_next_control_packet_locked(control_packet &packet, uint32_t n
 static void request_can_send_if_needed(bool should_request_send);
 static void request_control_can_send_if_needed(bool should_request_send);
 static bool headset_audio_send_window_closed_locked(uint32_t now);
+static bool state_send_blocked_by_audio_locked(uint32_t now);
 static void request_control_if_audio_window_open_locked(uint32_t now, bool &should_request_control);
 static void init_state_report(uint8_t *report);
 static bool select_next_output_packet_locked(output_packet &packet, uint32_t now);
@@ -312,7 +313,7 @@ static void clear_output_queues_locked() {
     last_audio_0x36_send_us = 0;
     output_counters.audio_queue_depth = 0;
     output_counters.consecutive_state_sends = 0;
-    classic_rumble_state.classic_rumble_active = false;
+    classic_rumble_state = ControllerOutputRumbleStateMachine{};
 }
 
 static void reset_controller_output_session_locked() {
@@ -1505,6 +1506,9 @@ static bool select_next_output_packet_locked(output_packet &packet, uint32_t now
             packet = std::move(audio_queue.front());
             audio_queue.pop();
         } else if (choice == OutputSchedulerChoice::CoalescedState) {
+            if (state_send_blocked_by_audio_locked(now)) {
+                return false;
+            }
             uint8_t report[DS_OUTPUT_REPORT_BT_SIZE];
             memcpy(report, state_pending_report, sizeof(report));
             if (!build_interrupt_output_packet(report, sizeof(report), packet.data)) {
@@ -1836,6 +1840,18 @@ static bool headset_audio_send_window_closed_locked(uint32_t now) {
         && elapsed_us < CONTROL_SEND_HEADSET_AUDIO_IDLE_US;
 }
 
+static bool state_send_blocked_by_audio_locked(uint32_t now) {
+    if (!speaker_output_enabled || !audio_queue.empty()) {
+        return false;
+    }
+    if (last_audio_0x36_send_us == 0) {
+        return false;
+    }
+
+    const uint32_t elapsed_us = packet_age_us(now, last_audio_0x36_send_us);
+    return elapsed_us < CONTROL_SEND_HEADSET_AUDIO_IDLE_US;
+}
+
 static void request_control_if_audio_window_open_locked(uint32_t now, bool &should_request_control) {
     should_request_control = control_pending_locked() && !headset_audio_send_window_closed_locked(now);
 }
@@ -2012,6 +2028,35 @@ static bool output_report_payload(
         return true;
     }
     return false;
+}
+
+static bool strip_redundant_classic_rumble_from_output(uint8_t *data, uint16_t len) {
+    uint8_t *payload = nullptr;
+    uint16_t payload_len = 0;
+    if (!output_report_payload(data, len, payload, payload_len)) {
+        return false;
+    }
+    if (!controller_output_rumble_payload_is_redundant(classic_rumble_state, payload, payload_len)) {
+        return false;
+    }
+
+    payload[OUTPUT_PAYLOAD_VALID_FLAG0_OFFSET] = static_cast<uint8_t>(
+        payload[OUTPUT_PAYLOAD_VALID_FLAG0_OFFSET]
+        & static_cast<uint8_t>(~(
+            DS_OUTPUT_VALID_FLAG0_COMPATIBLE_VIBRATION
+            | DS_OUTPUT_VALID_FLAG0_HAPTICS_SELECT
+        ))
+    );
+    payload[OUTPUT_PAYLOAD_VALID_FLAG2_OFFSET] = static_cast<uint8_t>(
+        payload[OUTPUT_PAYLOAD_VALID_FLAG2_OFFSET]
+        & static_cast<uint8_t>(~(
+            DS_OUTPUT_VALID_FLAG2_ENABLE_IMPROVED_RUMBLE_EMULATION
+            | DS_OUTPUT_VALID_FLAG2_USE_RUMBLE_NOT_HAPTICS2
+        ))
+    );
+    payload[OUTPUT_PAYLOAD_MOTOR_RIGHT_OFFSET] = 0;
+    payload[OUTPUT_PAYLOAD_MOTOR_LEFT_OFFSET] = 0;
+    return true;
 }
 
 static bool mirror_classic_rumble_in_report(
@@ -2594,8 +2639,8 @@ static bool enqueue_state_output(uint8_t *data, uint16_t len, uint8_t reason) {
     const uint32_t now = time_us_32();
     bool should_request_send = false;
     critical_section_enter_blocking(&queue_lock);
-    should_request_send = !output_pending_locked();
     merge_state_output_locked(data, len, now, reason);
+    should_request_send = !state_send_blocked_by_audio_locked(now);
     update_queue_depth_counters_locked();
     critical_section_exit(&queue_lock);
     request_can_send_if_needed(should_request_send);
@@ -2603,7 +2648,6 @@ static bool enqueue_state_output(uint8_t *data, uint16_t len, uint8_t reason) {
 }
 
 static bool enqueue_feedback_state_output(uint8_t *data, uint16_t len, uint8_t reason) {
-    remember_classic_rumble_state_from_output(data, len);
     return enqueue_state_output(data, len, reason);
 }
 
@@ -2635,9 +2679,14 @@ bool bt_write_classified_output(uint8_t *data, uint16_t len) {
 #endif
     const bool audio_protected = audio_output_route_protected();
     const bool classic_rumble_transition = output_report_is_classic_rumble_transition(data, len);
+    const bool stripped_redundant_classic_rumble =
+        !classic_rumble_transition && strip_redundant_classic_rumble_from_output(data, len);
     if (speaker_output_enabled && audio_protected && !classic_rumble_transition) {
         const uint8_t reason = classify_output_report(data, len);
         uint8_t trace_transform_flags = OutputTraceTransformAudioProtected;
+        if (stripped_redundant_classic_rumble) {
+            trace_transform_flags |= OutputTraceTransformStrippedZeroRumble;
+        }
         if (output_report_has_feedback_state_flags(data, len)) {
             trace_transform_flags |= OutputTraceTransformFeedbackState;
         }
@@ -2670,6 +2719,9 @@ bool bt_write_classified_output(uint8_t *data, uint16_t len) {
     }
     if (classic_rumble_transition) {
         trace_transform_flags |= OutputTraceTransformClassicRumble;
+    }
+    if (stripped_redundant_classic_rumble) {
+        trace_transform_flags |= OutputTraceTransformStrippedZeroRumble;
     }
     if (output_report_has_feedback_state_flags(data, len)) {
         trace_transform_flags |= OutputTraceTransformFeedbackState;

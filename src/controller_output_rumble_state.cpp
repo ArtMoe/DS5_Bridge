@@ -15,6 +15,22 @@ bool payload_motors_active(uint8_t const *payload, uint16_t len) {
         && (payload[kMotorRightOffset] | payload[kMotorLeftOffset]) != 0;
 }
 
+uint8_t classic_rumble_flag0(uint8_t const *payload) {
+    return static_cast<uint8_t>(
+        payload[kValidFlag0Offset] & static_cast<uint8_t>(kFlag0CompatibleVibration | kFlag0HapticsSelect)
+    );
+}
+
+uint8_t classic_rumble_flag2(uint8_t const *payload, uint16_t len) {
+    if (len <= kValidFlag2Offset) {
+        return 0;
+    }
+    return static_cast<uint8_t>(
+        payload[kValidFlag2Offset]
+        & static_cast<uint8_t>(kFlag2EnableImprovedRumbleEmulation | kFlag2UseRumbleNotHaptics2)
+    );
+}
+
 } // namespace
 
 bool controller_output_rumble_payload_uses_classic_selector(uint8_t const *payload, uint16_t len) {
@@ -37,11 +53,31 @@ bool controller_output_rumble_payload_requires_immediate_send(
         return false;
     }
 
-    if (controller_output_rumble_payload_uses_classic_selector(payload, len)) {
-        return true;
+    if (!controller_output_rumble_payload_uses_classic_selector(payload, len)) {
+        return state.classic_rumble_active;
     }
 
-    return state.classic_rumble_active;
+    const uint8_t right = payload[kMotorRightOffset];
+    const uint8_t left = payload[kMotorLeftOffset];
+    const bool motors_active = (right | left) != 0;
+    if (!state.classic_rumble_active) {
+        return motors_active;
+    }
+
+    return right != state.classic_rumble_right
+        || left != state.classic_rumble_left
+        || classic_rumble_flag0(payload) != state.classic_rumble_flag0
+        || classic_rumble_flag2(payload, len) != state.classic_rumble_flag2;
+}
+
+bool controller_output_rumble_payload_is_redundant(
+    ControllerOutputRumbleStateMachine const &state,
+    uint8_t const *payload,
+    uint16_t len
+) {
+    return payload_has_common_motor_bytes(payload, len)
+        && controller_output_rumble_payload_uses_classic_selector(payload, len)
+        && !controller_output_rumble_payload_requires_immediate_send(state, payload, len);
 }
 
 void controller_output_rumble_state_apply_payload(
@@ -55,8 +91,17 @@ void controller_output_rumble_state_apply_payload(
 
     if (!controller_output_rumble_payload_uses_classic_selector(payload, len)) {
         state.classic_rumble_active = false;
+        state.classic_rumble_right = 0;
+        state.classic_rumble_left = 0;
+        state.classic_rumble_flag0 = 0;
+        state.classic_rumble_flag2 = 0;
         return;
     }
 
-    state.classic_rumble_active = payload_motors_active(payload, len);
+    const bool motors_active = payload_motors_active(payload, len);
+    state.classic_rumble_active = motors_active;
+    state.classic_rumble_right = motors_active ? payload[kMotorRightOffset] : 0;
+    state.classic_rumble_left = motors_active ? payload[kMotorLeftOffset] : 0;
+    state.classic_rumble_flag0 = motors_active ? classic_rumble_flag0(payload) : 0;
+    state.classic_rumble_flag2 = motors_active ? classic_rumble_flag2(payload, len) : 0;
 }

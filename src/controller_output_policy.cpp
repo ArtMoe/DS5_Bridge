@@ -105,7 +105,9 @@ bool controller_output_policy_render_classic_rumble_payload(
         );
     } else if (len > kValidFlag2Offset) {
         payload[kValidFlag2Offset] = static_cast<uint8_t>(
-            payload[kValidFlag2Offset] | kFlag2EnableImprovedRumbleEmulation
+            payload[kValidFlag2Offset]
+            | kFlag2EnableImprovedRumbleEmulation
+            | kFlag2UseRumbleNotHaptics2
         );
     }
 
