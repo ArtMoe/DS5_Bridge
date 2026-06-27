@@ -12,6 +12,13 @@
     <Company>DS5 Bridge</Company>
   </PropertyGroup>
 
+  <PropertyGroup Condition="'$(Configuration)' == 'Release'">
+    <DebugSymbols>false</DebugSymbols>
+    <DebugType>none</DebugType>
+    <EnableSourceLink>false</EnableSourceLink>
+    <PathMap>$(MSBuildProjectDirectory)=/_/companion/native/AudioHelper</PathMap>
+  </PropertyGroup>
+
   <ItemGroup>
     <PackageReference Include="Concentus" Version="1.1.7" />
     <PackageReference Include="HidSharp" Version="2.1.0" />

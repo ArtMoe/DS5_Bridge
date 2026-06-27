@@ -103,6 +103,20 @@ describe('WinUsbCompanionTransport', () => {
     expect(transport.path).toBe('winusb://bridge');
   });
 
+  it('rejects a controlled helper startup failure without waiting for a crash', async () => {
+    const opening = WinUsbCompanionTransport.open();
+    const process = helperProcess();
+
+    emitJsonLine(process.stdout, {
+      id: 0,
+      ok: false,
+      error: 'IOException: DS5 Bridge WinUSB interface was not found.'
+    });
+
+    await expect(opening).rejects.toThrow('DS5 Bridge WinUSB interface was not found');
+    expect(process.kill).toHaveBeenCalled();
+  });
+
   it('routes feature report requests by id and returns the matching helper response', async () => {
     const transport = await openTransport();
     const report = new Array<number>(64).fill(0).map((_, index) => index);

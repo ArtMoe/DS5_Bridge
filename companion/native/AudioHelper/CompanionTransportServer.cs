@@ -4,26 +4,46 @@ static class CompanionTransportServer
 {
     private const int ReportBytes = 64;
 
-    public static async Task RunAsync()
+    public static async Task<int> RunAsync()
     {
-        using var transport = WinUsbBridgeTransport.Open();
-        await WriteResponse(new
+        WinUsbBridgeTransport transport;
+        try
         {
-            id = 0,
-            ok = true,
-            path = transport.DevicePath
-        });
-
-        string? line;
-        while ((line = await Console.In.ReadLineAsync()) is not null)
-        {
-            if (string.IsNullOrWhiteSpace(line))
-            {
-                continue;
-            }
-
-            await HandleLine(transport, line);
+            transport = WinUsbBridgeTransport.Open();
         }
+        catch (Exception error)
+        {
+            await WriteResponse(new
+            {
+                id = 0,
+                ok = false,
+                error = $"{error.GetType().Name}: {error.Message}"
+            });
+            return 2;
+        }
+
+        using (transport)
+        {
+            await WriteResponse(new
+            {
+                id = 0,
+                ok = true,
+                path = transport.DevicePath
+            });
+
+            string? line;
+            while ((line = await Console.In.ReadLineAsync()) is not null)
+            {
+                if (string.IsNullOrWhiteSpace(line))
+                {
+                    continue;
+                }
+
+                await HandleLine(transport, line);
+            }
+        }
+
+        return 0;
     }
 
     private static async Task HandleLine(WinUsbBridgeTransport transport, string line)

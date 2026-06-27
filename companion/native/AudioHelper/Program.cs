@@ -34,7 +34,7 @@ if (!string.IsNullOrWhiteSpace(options.ResolveIconDataUrlPath))
 }
 if (options.CompanionTransportServer)
 {
-    await CompanionTransportServer.RunAsync();
+    Environment.ExitCode = await CompanionTransportServer.RunAsync();
     return;
 }
 if (options.PlayTestTone)

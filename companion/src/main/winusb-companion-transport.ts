@@ -2,11 +2,19 @@ import { spawn, type ChildProcessWithoutNullStreams } from 'node:child_process';
 import { EventEmitter } from 'node:events';
 import { resolveAudioHelperPath } from './audio-helper';
 
-type TransportReady = {
+type TransportReadySuccess = {
   id: 0;
   ok: true;
   path: string;
 };
+
+type TransportReadyFailure = {
+  id: 0;
+  ok: false;
+  error: string;
+};
+
+type TransportReady = TransportReadySuccess | TransportReadyFailure;
 
 type TransportResponse = {
   id: number;
@@ -87,12 +95,12 @@ export class WinUsbCompanionTransport extends EventEmitter {
       stdio: ['pipe', 'pipe', 'pipe']
     });
 
-    const ready = await new Promise<TransportReady>((resolve, reject) => {
+    const ready = await new Promise<TransportReadySuccess>((resolve, reject) => {
       let settled = false;
       let stdout = '';
       let stderr = '';
       let timeout: NodeJS.Timeout;
-      function finish(message?: TransportReady, error?: Error) {
+      function finish(message?: TransportReadySuccess, error?: Error) {
         if (settled) {
           return;
         }
@@ -125,6 +133,8 @@ export class WinUsbCompanionTransport extends EventEmitter {
           const message = JSON.parse(line) as TransportReady;
           if (message.ok && message.id === 0 && message.path) {
             finish(message);
+          } else if (message.ok === false && message.id === 0 && message.error) {
+            finish(undefined, new Error(message.error));
           } else {
             finish(undefined, new Error('WinUSB bridge helper returned an invalid ready response.'));
           }
