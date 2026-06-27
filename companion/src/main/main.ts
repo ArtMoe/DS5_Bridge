@@ -669,6 +669,9 @@ function registerIpc(service: BridgeService): void {
   ipcMain.handle('bridge:setHapticsBufferLength', (_event, value: number) => service.setHapticsBufferLength(value));
   ipcMain.handle('bridge:setClassicRumbleGain', (_event, value: number) => service.setClassicRumbleGain(value));
   ipcMain.handle('bridge:setClassicRumbleEnabled', (_event, value: boolean) => service.setClassicRumbleEnabled(value));
+  ipcMain.handle('bridge:setClassicRumbleV1Enabled', (_event, value: boolean) => (
+    service.setClassicRumbleV1Enabled(value)
+  ));
   ipcMain.handle('bridge:setTriggerEffectIntensity', (_event, value: number) => (
     service.setTriggerEffectIntensity(value)
   ));

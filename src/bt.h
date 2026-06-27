@@ -62,6 +62,8 @@ void bt_rearm_speaker_output_route(bool headset_plugged);
 void bt_refresh_speaker_output();
 void bt_set_classic_rumble_gain(uint16_t gain_percent);
 uint16_t bt_classic_rumble_gain();
+void bt_set_classic_rumble_v1_enabled(bool enabled);
+bool bt_classic_rumble_v1_enabled();
 void bt_set_classic_rumble_output(uint8_t right, uint8_t left);
 void bt_set_adaptive_trigger_effect(uint8_t mode, uint8_t intensity_percent, uint8_t target = 0);
 void bt_set_custom_adaptive_trigger_effect(

@@ -1412,6 +1412,7 @@ function controllerProfileSettingsFromSnapshot(snapshot: BridgeSnapshot): Contro
     feedbackBoostEnabled: snapshot.settings.feedbackBoostEnabled,
     classicRumbleEnabled: snapshot.settings.classicRumbleEnabled,
     classicRumbleGainPercent: snapshot.settings.classicRumbleGainPercent,
+    classicRumbleV1Enabled: snapshot.settings.classicRumbleV1Enabled,
     adaptiveTriggersEnabled: snapshot.settings.adaptiveTriggersEnabled,
     triggerEffectIntensityPercent: snapshot.settings.triggerEffectIntensityPercent,
     triggerTestMode: snapshot.settings.triggerTestMode,
@@ -2750,6 +2751,7 @@ export function App() {
   const [triggerTestLocked, setTriggerTestLocked] = useState(false);
   const [hapticsCommitPending, setHapticsCommitPending] = useState(false);
   const [classicRumbleCommitPending, setClassicRumbleCommitPending] = useState(false);
+  const [classicRumbleV1CommitPending, setClassicRumbleV1CommitPending] = useState(false);
   const [feedbackBoostCommitPending, setFeedbackBoostCommitPending] = useState(false);
   const [speakerVolumeCommitPending, setSpeakerVolumeCommitPending] = useState(false);
   const [micVolumeCommitPending, setMicVolumeCommitPending] = useState(false);
@@ -3437,6 +3439,7 @@ export function App() {
     audioReactiveHapticsSourceKey
   ]);
   const classicRumbleEnabled = Boolean(snapshot?.settings.classicRumbleEnabled);
+  const classicRumbleV1Enabled = Boolean(snapshot?.settings.classicRumbleV1Enabled);
   const activeHapticsFeatureEnabled = showClassicRumbleControl ? classicRumbleEnabled : hapticsEnabled;
   const speakerEnabled = Boolean(snapshot?.settings.speakerEnabled);
   const adaptiveTriggersEnabled = Boolean(snapshot?.settings.adaptiveTriggersEnabled);
@@ -5489,6 +5492,23 @@ export function App() {
     ));
   }
 
+  function toggleClassicRumbleV1Enabled() {
+    if (!snapshot || classicRumbleV1CommitPending) return;
+
+    setClassicRumbleV1CommitPending(true);
+    void (async () => {
+      try {
+        const next = await window.bridge.setClassicRumbleV1Enabled(!snapshot.settings.classicRumbleV1Enabled);
+        setSnapshot(next);
+      } catch {
+        const next = await window.bridge.getStatus();
+        setSnapshot(next);
+      } finally {
+        setClassicRumbleV1CommitPending(false);
+      }
+    })();
+  }
+
   function toggleFeedbackBoostEnabled() {
     if (!snapshot || feedbackBoostCommitPending) return;
 
@@ -6959,6 +6979,25 @@ export function App() {
                       <span />
                     </button>
                   </div>
+                  {showClassicRumbleControl ? (
+                    <div
+                      className="inline-switch feedback-boost-control haptics-rumble-v1-control"
+                      title={classicRumbleV1Enabled ? 'Classic rumble: v1 compatibility mode' : 'Classic rumble: v2 default mode'}
+                    >
+                      <span className="feedback-boost-label">v1 Rumble</span>
+                      <button
+                        type="button"
+                        role="switch"
+                        aria-checked={classicRumbleV1Enabled}
+                        aria-label={classicRumbleV1Enabled ? 'Disable v1 rumble mode' : 'Enable v1 rumble mode'}
+                        className={`switch ${classicRumbleV1Enabled ? 'on' : ''}`}
+                        disabled={!connected || pendingAction !== null || classicRumbleV1CommitPending}
+                        onClick={toggleClassicRumbleV1Enabled}
+                      >
+                        <span />
+                      </button>
+                    </div>
+                  ) : null}
                 </section>
                 <section className="feature-card test-card">
                   <div className="feature-card-title">

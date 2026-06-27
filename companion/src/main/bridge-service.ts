@@ -2105,6 +2105,13 @@ export class BridgeService extends EventEmitter {
     return this.getSnapshot();
   }
 
+  async setClassicRumbleV1Enabled(enabled: boolean): Promise<BridgeSnapshot> {
+    await this.sendSettingCommand(COMMAND_ID.SET_CLASSIC_RUMBLE_V1, enabled ? 1 : 0, customSettingUpdate({
+      classicRumbleV1Enabled: enabled
+    }));
+    return this.getSnapshot();
+  }
+
   async setTriggerEffectIntensity(percent: number): Promise<BridgeSnapshot> {
     const value = Math.max(0, Math.min(100, Math.round(percent)));
     const nextSettings = { ...this.settingsStore.get(), triggerEffectIntensityPercent: value };
@@ -3408,6 +3415,9 @@ export class BridgeService extends EventEmitter {
       this.effectiveClassicRumbleGain(settings),
       { expectSettingsRevisionChange }
     );
+    await this.sendCommand(COMMAND_ID.SET_CLASSIC_RUMBLE_V1, settings.classicRumbleV1Enabled ? 1 : 0, {
+      expectSettingsRevisionChange
+    });
     await this.sendCommand(
       COMMAND_ID.SET_TRIGGER_EFFECT_INTENSITY,
       this.effectiveTriggerEffectIntensity(settings),

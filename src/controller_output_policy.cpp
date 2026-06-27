@@ -7,6 +7,7 @@ using namespace ds5::output;
 namespace {
 
 uint16_t classic_rumble_gain_percent = 100;
+bool classic_rumble_v1_enabled = false;
 bool audio_haptics_replace_requested = false;
 bool audio_haptics_replace_producer_active = false;
 
@@ -24,6 +25,14 @@ uint16_t controller_output_policy_classic_rumble_gain() {
     return classic_rumble_gain_percent;
 }
 
+void controller_output_policy_set_classic_rumble_v1_enabled(bool enabled) {
+    classic_rumble_v1_enabled = enabled;
+}
+
+bool controller_output_policy_classic_rumble_v1_enabled() {
+    return classic_rumble_v1_enabled;
+}
+
 void controller_output_policy_set_audio_haptics_replace_requested(bool requested) {
     audio_haptics_replace_requested = requested;
 }
@@ -37,10 +46,6 @@ bool controller_output_policy_audio_haptics_replace_active() {
 }
 
 uint8_t controller_output_policy_scale_classic_rumble_byte(uint8_t value) {
-    if (audio_haptics_replace_active()) {
-        return 0;
-    }
-
     const uint32_t scaled = static_cast<uint32_t>(value) * classic_rumble_gain_percent;
     return static_cast<uint8_t>(scaled >= 25500 ? 255 : (scaled + 50) / 100);
 }
@@ -52,48 +57,61 @@ bool controller_output_policy_apply_classic_rumble_gain_payload(uint8_t *payload
 
     const uint8_t flag0 = payload[kValidFlag0Offset];
     const uint8_t flag2 = len > kValidFlag2Offset ? payload[kValidFlag2Offset] : 0;
+    const bool has_motor_values = (payload[kMotorRightOffset] | payload[kMotorLeftOffset]) != 0;
     const bool has_rumble = (flag0 & (
         kFlag0CompatibleVibration
         | kFlag0HapticsSelect
-    )) != 0 || (flag2 & kFlag2CompatibleVibration2) != 0;
+    )) != 0 || (flag2 & (
+        kFlag2EnableImprovedRumbleEmulation
+        | kFlag2UseRumbleNotHaptics2
+    )) != 0 || has_motor_values;
     if (!has_rumble) {
         return false;
     }
 
     const uint8_t right = payload[kMotorRightOffset];
     const uint8_t left = payload[kMotorLeftOffset];
-    if (audio_haptics_replace_active()) {
-        bool changed = false;
-
-        const uint8_t next_flag0 = static_cast<uint8_t>(flag0 & ~(
-            kFlag0CompatibleVibration
-            | kFlag0HapticsSelect
-        ));
-        if (payload[kValidFlag0Offset] != next_flag0) {
-            payload[kValidFlag0Offset] = next_flag0;
-            changed = true;
-        }
-        if (len > kValidFlag2Offset) {
-            const uint8_t next_flag2 = static_cast<uint8_t>(flag2 & ~kFlag2CompatibleVibration2);
-            if (payload[kValidFlag2Offset] != next_flag2) {
-                payload[kValidFlag2Offset] = next_flag2;
-                changed = true;
-            }
-        }
-        if (right != 0) {
-            payload[kMotorRightOffset] = 0;
-            changed = true;
-        }
-        if (left != 0) {
-            payload[kMotorLeftOffset] = 0;
-            changed = true;
-        }
-        return changed;
-    }
-
     payload[kMotorRightOffset] = controller_output_policy_scale_classic_rumble_byte(right);
     payload[kMotorLeftOffset] = controller_output_policy_scale_classic_rumble_byte(left);
     return payload[kMotorRightOffset] != right || payload[kMotorLeftOffset] != left;
+}
+
+bool controller_output_policy_render_classic_rumble_payload(
+    uint8_t *payload,
+    uint16_t len,
+    uint8_t right,
+    uint8_t left
+) {
+    if (payload == nullptr || len <= kMotorLeftOffset) {
+        return false;
+    }
+
+    payload[kValidFlag0Offset] = static_cast<uint8_t>(
+        (payload[kValidFlag0Offset] & static_cast<uint8_t>(~(
+            kFlag0CompatibleVibration | kFlag0HapticsSelect
+        ))) | kFlag0HapticsSelect
+    );
+    if (len > kValidFlag2Offset) {
+        payload[kValidFlag2Offset] = static_cast<uint8_t>(
+            payload[kValidFlag2Offset] & static_cast<uint8_t>(~(
+                kFlag2EnableImprovedRumbleEmulation | kFlag2UseRumbleNotHaptics2
+            ))
+        );
+    }
+
+    if (classic_rumble_v1_enabled) {
+        payload[kValidFlag0Offset] = static_cast<uint8_t>(
+            payload[kValidFlag0Offset] | kFlag0CompatibleVibration
+        );
+    } else if (len > kValidFlag2Offset) {
+        payload[kValidFlag2Offset] = static_cast<uint8_t>(
+            payload[kValidFlag2Offset] | kFlag2EnableImprovedRumbleEmulation
+        );
+    }
+
+    payload[kMotorRightOffset] = right;
+    payload[kMotorLeftOffset] = left;
+    return true;
 }
 
 bool controller_output_policy_sanitize_host_speaker_amp_payload(uint8_t *payload, uint16_t len) {

@@ -9,6 +9,7 @@
 #include <vector>
 
 #include "controller_output_policy.h"
+#include "controller_output_rumble_state.h"
 #include "controller_output_state.h"
 #include "controller_packet_compositor.h"
 #include "dualsense_input_decoder.h"
@@ -142,16 +143,13 @@ uint8_t haptic_frame_left_sign_flips(HapticFrame const &frame) {
 
 void reset_policy_state() {
     controller_output_policy_set_classic_rumble_gain(100);
+    controller_output_policy_set_classic_rumble_v1_enabled(false);
     controller_output_policy_set_audio_haptics_replace_requested(false);
     controller_output_policy_set_audio_haptics_replace_producer_active(false);
 }
 
 void reset_output_state() {
-    controller_output_state_reset_cached_triggers();
-    controller_output_state_reset_cached_player_leds();
-    controller_output_state_set_player_led_enabled(true);
-    Payload payload{};
-    controller_output_state_apply_host_payload(payload.data(), static_cast<uint8_t>(payload.size()));
+    controller_output_state_reset();
 }
 
 DualSenseInputReport sample_dualsense_input_report() {
@@ -263,21 +261,34 @@ void packet_compositor_initializes_bluetooth_report_and_wraps_sequence() {
     EXPECT_EQ(int_sequence, 0x0f);
 }
 
-void classic_rumble_gain_clamps_rounds_and_only_touches_flagged_payloads() {
+void classic_rumble_gain_clamps_rounds_and_touches_motor_payloads() {
     reset_policy_state();
     controller_output_policy_set_classic_rumble_gain(150);
 
     auto payload = empty_payload();
+    EXPECT_FALSE(controller_output_policy_apply_classic_rumble_gain_payload(payload.data(), payload.size()));
+
     payload[kMotorRightOffset] = 20;
     payload[kMotorLeftOffset] = 21;
-    EXPECT_FALSE(controller_output_policy_apply_classic_rumble_gain_payload(payload.data(), payload.size()));
-    EXPECT_EQ(payload[kMotorRightOffset], 20);
-    EXPECT_EQ(payload[kMotorLeftOffset], 21);
-
-    payload[kValidFlag0Offset] = kFlag0CompatibleVibration;
     EXPECT_TRUE(controller_output_policy_apply_classic_rumble_gain_payload(payload.data(), payload.size()));
     EXPECT_EQ(payload[kMotorRightOffset], 30);
     EXPECT_EQ(payload[kMotorLeftOffset], 32);
+
+    payload = empty_payload();
+    payload[kValidFlag0Offset] = kFlag0CompatibleVibration;
+    payload[kMotorRightOffset] = 20;
+    payload[kMotorLeftOffset] = 21;
+    EXPECT_TRUE(controller_output_policy_apply_classic_rumble_gain_payload(payload.data(), payload.size()));
+    EXPECT_EQ(payload[kMotorRightOffset], 30);
+    EXPECT_EQ(payload[kMotorLeftOffset], 32);
+
+    payload = empty_payload();
+    payload[kValidFlag2Offset] = kFlag2UseRumbleNotHaptics2;
+    payload[kMotorRightOffset] = 10;
+    payload[kMotorLeftOffset] = 11;
+    EXPECT_TRUE(controller_output_policy_apply_classic_rumble_gain_payload(payload.data(), payload.size()));
+    EXPECT_EQ(payload[kMotorRightOffset], 15);
+    EXPECT_EQ(payload[kMotorLeftOffset], 17);
 
     controller_output_policy_set_classic_rumble_gain(999);
     EXPECT_EQ(controller_output_policy_classic_rumble_gain(), 500);
@@ -285,7 +296,7 @@ void classic_rumble_gain_clamps_rounds_and_only_touches_flagged_payloads() {
     reset_policy_state();
 }
 
-void audio_haptics_replace_suppresses_classic_rumble_without_changing_saved_gain() {
+void audio_haptics_replace_tracks_state_without_suppressing_classic_rumble() {
     reset_policy_state();
     controller_output_policy_set_classic_rumble_gain(175);
     controller_output_policy_set_audio_haptics_replace_requested(true);
@@ -297,18 +308,18 @@ void audio_haptics_replace_suppresses_classic_rumble_without_changing_saved_gain
 
     EXPECT_TRUE(controller_output_policy_audio_haptics_replace_active());
     EXPECT_EQ(controller_output_policy_classic_rumble_gain(), 175);
-    EXPECT_EQ(controller_output_policy_scale_classic_rumble_byte(200), 0);
+    EXPECT_EQ(controller_output_policy_scale_classic_rumble_byte(200), 255);
 
     auto payload = empty_payload();
     payload[kValidFlag0Offset] = kFlag0CompatibleVibration | kFlag0HapticsSelect | kFlag0RightTriggerEffect;
-    payload[kValidFlag2Offset] = kFlag2CompatibleVibration2 | kFlag2LightbarSetupControlEnable;
+    payload[kValidFlag2Offset] = kFlag2EnableImprovedRumbleEmulation | kFlag2LightbarSetupControlEnable;
     payload[kMotorRightOffset] = 40;
     payload[kMotorLeftOffset] = 80;
     EXPECT_TRUE(controller_output_policy_apply_classic_rumble_gain_payload(payload.data(), payload.size()));
-    EXPECT_EQ(payload[kValidFlag0Offset], kFlag0RightTriggerEffect);
-    EXPECT_EQ(payload[kValidFlag2Offset], kFlag2LightbarSetupControlEnable);
-    EXPECT_EQ(payload[kMotorRightOffset], 0);
-    EXPECT_EQ(payload[kMotorLeftOffset], 0);
+    EXPECT_EQ(payload[kValidFlag0Offset], kFlag0CompatibleVibration | kFlag0HapticsSelect | kFlag0RightTriggerEffect);
+    EXPECT_EQ(payload[kValidFlag2Offset], kFlag2EnableImprovedRumbleEmulation | kFlag2LightbarSetupControlEnable);
+    EXPECT_EQ(payload[kMotorRightOffset], 70);
+    EXPECT_EQ(payload[kMotorLeftOffset], 140);
 
     controller_output_policy_set_audio_haptics_replace_producer_active(false);
     EXPECT_EQ(controller_output_policy_classic_rumble_gain(), 175);
@@ -368,18 +379,18 @@ void mic_sanitizer_removes_mute_led_and_only_mic_power_save_bit() {
 void lightbar_override_removes_host_led_claims_without_mutating_color_bytes() {
     auto payload = empty_payload();
     payload[kValidFlag1Offset] = kHostLedControlMask | kFlag1AudioControl2Enable;
-    payload[kValidFlag2Offset] = kHostLightbarSetupMask | kFlag2CompatibleVibration2;
+    payload[kValidFlag2Offset] = kHostLightbarSetupMask | kFlag2EnableImprovedRumbleEmulation;
     payload[kLightbarRedOffset] = 9;
     payload[kLightbarGreenOffset] = 8;
     payload[kLightbarBlueOffset] = 7;
 
     EXPECT_FALSE(controller_output_policy_sanitize_host_lightbar_payload(payload.data(), payload.size(), false));
     EXPECT_EQ(payload[kValidFlag1Offset], static_cast<uint8_t>(kHostLedControlMask | kFlag1AudioControl2Enable));
-    EXPECT_EQ(payload[kValidFlag2Offset], static_cast<uint8_t>(kHostLightbarSetupMask | kFlag2CompatibleVibration2));
+    EXPECT_EQ(payload[kValidFlag2Offset], static_cast<uint8_t>(kHostLightbarSetupMask | kFlag2EnableImprovedRumbleEmulation));
 
     EXPECT_TRUE(controller_output_policy_sanitize_host_lightbar_payload(payload.data(), payload.size(), true));
     EXPECT_EQ(payload[kValidFlag1Offset], kFlag1AudioControl2Enable);
-    EXPECT_EQ(payload[kValidFlag2Offset], kFlag2CompatibleVibration2);
+    EXPECT_EQ(payload[kValidFlag2Offset], kFlag2EnableImprovedRumbleEmulation);
     EXPECT_EQ(payload[kLightbarRedOffset], 9);
     EXPECT_EQ(payload[kLightbarGreenOffset], 8);
     EXPECT_EQ(payload[kLightbarBlueOffset], 7);
@@ -413,6 +424,7 @@ void output_state_audio_snapshot_routes_to_speaker_and_headphones_safely() {
     payload[kSpeakerVolumeOffset] = 0xff;
     payload[kMicVolumeOffset] = kMicVolumeMax;
     payload[kMuteLedOffset] = 1;
+    payload[kAudioControl2Offset] = 0x03;
     controller_output_state_apply_host_payload(payload.data(), static_cast<uint8_t>(payload.size()));
 
     AudioSnapshot speaker{};
@@ -427,20 +439,20 @@ void output_state_audio_snapshot_routes_to_speaker_and_headphones_safely() {
     EXPECT_EQ(speaker[kMicVolumeOffset], 0);
     EXPECT_EQ(speaker[kMuteLedOffset], 0);
     EXPECT_EQ(speaker[kAudioControlOffset], kAudioFlagsOutputPathSpeaker);
-    EXPECT_EQ(speaker[kAudioControl2Offset], kAudioFlags2SpeakerPreampGain);
+    EXPECT_EQ(speaker[kAudioControl2Offset], 0x03);
 
     AudioSnapshot headset{};
     controller_output_state_copy_audio_snapshot(headset.data(), true);
     EXPECT_TRUE((headset[kValidFlag0Offset] & kFlag0AudioControlEnable) != 0);
     EXPECT_FALSE((headset[kValidFlag0Offset] & kFlag0SpeakerVolumeEnable) != 0);
-    EXPECT_FALSE((headset[kValidFlag1Offset] & kFlag1AudioControl2Enable) != 0);
+    EXPECT_TRUE((headset[kValidFlag1Offset] & kFlag1AudioControl2Enable) != 0);
     EXPECT_EQ(headset[kHeadphoneVolumeOffset], kHeadphoneVolumeMax);
     EXPECT_EQ(headset[kSpeakerVolumeOffset], 0);
     EXPECT_EQ(headset[kAudioControlOffset], kAudioFlagsOutputPathHeadphones);
-    EXPECT_EQ(headset[kAudioControl2Offset], 0);
+    EXPECT_EQ(headset[kAudioControl2Offset], 0x03);
 }
 
-void output_state_audio_snapshot_preserves_haptic_motor_power() {
+void output_state_audio_snapshot_preserves_adaptive_trigger_effects_and_motor_power() {
     reset_output_state();
     auto payload = empty_payload();
     payload[kValidFlag0Offset] = kFlag0RightTriggerEffect | kFlag0LeftTriggerEffect;
@@ -453,13 +465,13 @@ void output_state_audio_snapshot_preserves_haptic_motor_power() {
     AudioSnapshot snapshot{};
     controller_output_state_copy_audio_snapshot(snapshot.data(), false);
 
-    EXPECT_FALSE((snapshot[kValidFlag0Offset] & kFlag0RightTriggerEffect) != 0);
-    EXPECT_FALSE((snapshot[kValidFlag0Offset] & kFlag0LeftTriggerEffect) != 0);
+    EXPECT_TRUE((snapshot[kValidFlag0Offset] & kFlag0RightTriggerEffect) != 0);
+    EXPECT_TRUE((snapshot[kValidFlag0Offset] & kFlag0LeftTriggerEffect) != 0);
     EXPECT_TRUE((snapshot[kValidFlag1Offset] & kFlag1MotorPowerLevelEnable) != 0);
     EXPECT_EQ(snapshot[kTriggerPowerOffset], 0xa5);
     for (uint8_t index = 0; index < kTriggerEffectSize; ++index) {
-        EXPECT_EQ(snapshot[kTriggerEffectRightOffset + index], 0);
-        EXPECT_EQ(snapshot[kTriggerEffectLeftOffset + index], 0);
+        EXPECT_EQ(snapshot[kTriggerEffectRightOffset + index], 0x31);
+        EXPECT_EQ(snapshot[kTriggerEffectLeftOffset + index], 0x42);
     }
 }
 
@@ -553,20 +565,90 @@ void output_state_player_led_release_invalidates_cached_indicator() {
     EXPECT_FALSE(controller_output_state_copy_player_led_report(report.data(), static_cast<uint16_t>(report.size())));
 }
 
-void output_state_clears_zero_rumble_flags_but_preserves_nonzero_rumble() {
+void output_state_preserves_selector_zero_and_ignores_motor_only_rumble() {
+    reset_output_state();
+
     auto payload = empty_payload();
     payload[kValidFlag0Offset] = kFlag0CompatibleVibration | kFlag0HapticsSelect;
-    payload[kValidFlag2Offset] = kFlag2CompatibleVibration2;
-    controller_output_state_clear_zero_rumble(payload.data());
-    EXPECT_EQ(payload[kValidFlag0Offset], 0);
-    EXPECT_EQ(payload[kValidFlag2Offset], 0);
+    payload[kValidFlag2Offset] = kFlag2EnableImprovedRumbleEmulation | kFlag2UseRumbleNotHaptics2;
+    controller_output_state_apply_host_payload(payload.data(), static_cast<uint8_t>(payload.size()));
 
-    payload[kValidFlag0Offset] = kFlag0CompatibleVibration;
-    payload[kValidFlag2Offset] = kFlag2CompatibleVibration2;
+    AudioSnapshot snapshot{};
+    controller_output_state_copy_audio_snapshot(snapshot.data(), false);
+    EXPECT_TRUE((snapshot[kValidFlag0Offset] & kFlag0CompatibleVibration) != 0);
+    EXPECT_TRUE((snapshot[kValidFlag0Offset] & kFlag0HapticsSelect) != 0);
+    EXPECT_TRUE((snapshot[kValidFlag2Offset] & kFlag2EnableImprovedRumbleEmulation) != 0);
+    EXPECT_TRUE((snapshot[kValidFlag2Offset] & kFlag2UseRumbleNotHaptics2) != 0);
+
+    payload = empty_payload();
+    payload[kValidFlag2Offset] = kFlag2UseRumbleNotHaptics2;
+    payload[kMotorRightOffset] = 9;
     payload[kMotorLeftOffset] = 1;
-    controller_output_state_clear_zero_rumble(payload.data());
-    EXPECT_EQ(payload[kValidFlag0Offset], kFlag0CompatibleVibration);
-    EXPECT_EQ(payload[kValidFlag2Offset], kFlag2CompatibleVibration2);
+    controller_output_state_apply_host_payload(payload.data(), static_cast<uint8_t>(payload.size()));
+    controller_output_state_copy_audio_snapshot(snapshot.data(), false);
+    EXPECT_TRUE((snapshot[kValidFlag2Offset] & kFlag2UseRumbleNotHaptics2) != 0);
+    EXPECT_EQ(snapshot[kMotorRightOffset], 9);
+    EXPECT_EQ(snapshot[kMotorLeftOffset], 1);
+
+    payload = empty_payload();
+    payload[kMotorRightOffset] = 7;
+    payload[kMotorLeftOffset] = 3;
+    controller_output_state_apply_host_payload(payload.data(), static_cast<uint8_t>(payload.size()));
+    controller_output_state_copy_audio_snapshot(snapshot.data(), false);
+    EXPECT_FALSE((snapshot[kValidFlag0Offset] & kFlag0HapticsSelect) != 0);
+    EXPECT_FALSE((snapshot[kValidFlag2Offset] & kFlag2UseRumbleNotHaptics2) != 0);
+    EXPECT_EQ(snapshot[kMotorRightOffset], 0);
+    EXPECT_EQ(snapshot[kMotorLeftOffset], 0);
+
+    payload = empty_payload();
+    controller_output_state_apply_host_payload(payload.data(), static_cast<uint8_t>(payload.size()));
+    controller_output_state_copy_audio_snapshot(snapshot.data(), false);
+    EXPECT_FALSE((snapshot[kValidFlag0Offset] & kFlag0HapticsSelect) != 0);
+    EXPECT_FALSE((snapshot[kValidFlag2Offset] & kFlag2UseRumbleNotHaptics2) != 0);
+    EXPECT_EQ(snapshot[kMotorRightOffset], 0);
+    EXPECT_EQ(snapshot[kMotorLeftOffset], 0);
+}
+
+void output_state_clear_classic_rumble_clears_cached_selector_state() {
+    reset_output_state();
+
+    auto payload = empty_payload();
+    payload[kValidFlag0Offset] = kFlag0CompatibleVibration;
+    payload[kValidFlag2Offset] = kFlag2EnableImprovedRumbleEmulation;
+    payload[kMotorRightOffset] = 4;
+    payload[kMotorLeftOffset] = 5;
+    controller_output_state_apply_host_payload(payload.data(), static_cast<uint8_t>(payload.size()));
+    EXPECT_FALSE(controller_output_state_classic_rumble_active());
+
+    payload[kValidFlag0Offset] = kFlag0CompatibleVibration | kFlag0HapticsSelect;
+    payload[kValidFlag2Offset] = kFlag2EnableImprovedRumbleEmulation | kFlag2UseRumbleNotHaptics2;
+    controller_output_state_apply_host_payload(payload.data(), static_cast<uint8_t>(payload.size()));
+    EXPECT_TRUE(controller_output_state_classic_rumble_active());
+
+    controller_output_state_clear_classic_rumble();
+    AudioSnapshot snapshot{};
+    controller_output_state_copy_audio_snapshot(snapshot.data(), false);
+    EXPECT_FALSE(controller_output_state_classic_rumble_active());
+    EXPECT_FALSE((snapshot[kValidFlag0Offset] & kFlag0CompatibleVibration) != 0);
+    EXPECT_FALSE((snapshot[kValidFlag0Offset] & kFlag0HapticsSelect) != 0);
+    EXPECT_FALSE((snapshot[kValidFlag2Offset] & kFlag2EnableImprovedRumbleEmulation) != 0);
+    EXPECT_FALSE((snapshot[kValidFlag2Offset] & kFlag2UseRumbleNotHaptics2) != 0);
+    EXPECT_EQ(snapshot[kMotorRightOffset], 0);
+    EXPECT_EQ(snapshot[kMotorLeftOffset], 0);
+}
+
+void output_state_preserves_haptic_low_pass_filter_byte() {
+    reset_output_state();
+
+    auto payload = empty_payload();
+    payload[kValidFlag1Offset] = kFlag1HapticLowPassFilterEnable;
+    payload[kHapticLowPassFilterOffset] = 0x81;
+    controller_output_state_apply_host_payload(payload.data(), static_cast<uint8_t>(payload.size()));
+
+    AudioSnapshot snapshot{};
+    controller_output_state_copy_audio_snapshot(snapshot.data(), false);
+    EXPECT_TRUE((snapshot[kValidFlag1Offset] & kFlag1HapticLowPassFilterEnable) != 0);
+    EXPECT_EQ(snapshot[kHapticLowPassFilterOffset], 0x81);
 }
 
 void output_state_clear_triggers_removes_effect_bytes_flags_and_power() {
@@ -587,6 +669,103 @@ void output_state_clear_triggers_removes_effect_bytes_flags_and_power() {
         EXPECT_EQ(payload[kTriggerEffectRightOffset + index], 0);
         EXPECT_EQ(payload[kTriggerEffectLeftOffset + index], 0);
     }
+}
+
+void rumble_state_machine_sends_real_stops_immediately() {
+    ControllerOutputRumbleStateMachine state{};
+    auto payload = empty_payload();
+
+    EXPECT_FALSE(controller_output_rumble_payload_requires_immediate_send(
+        state,
+        payload.data(),
+        static_cast<uint16_t>(payload.size())
+    ));
+
+    payload[kValidFlag0Offset] = kFlag0HapticsSelect;
+    payload[kValidFlag2Offset] = kFlag2EnableImprovedRumbleEmulation;
+    payload[kMotorRightOffset] = 9;
+    payload[kMotorLeftOffset] = 4;
+    EXPECT_TRUE(controller_output_rumble_payload_requires_immediate_send(
+        state,
+        payload.data(),
+        static_cast<uint16_t>(payload.size())
+    ));
+    controller_output_rumble_state_apply_payload(
+        state,
+        payload.data(),
+        static_cast<uint16_t>(payload.size())
+    );
+    EXPECT_TRUE(state.classic_rumble_active);
+
+    payload = empty_payload();
+    payload[kValidFlag0Offset] = kFlag0HapticsSelect;
+    payload[kValidFlag2Offset] = kFlag2EnableImprovedRumbleEmulation;
+    EXPECT_TRUE(controller_output_rumble_payload_requires_immediate_send(
+        state,
+        payload.data(),
+        static_cast<uint16_t>(payload.size())
+    ));
+    controller_output_rumble_state_apply_payload(
+        state,
+        payload.data(),
+        static_cast<uint16_t>(payload.size())
+    );
+    EXPECT_FALSE(state.classic_rumble_active);
+
+    payload = empty_payload();
+    payload[kValidFlag0Offset] = kFlag0CompatibleVibration | kFlag0HapticsSelect;
+    payload[kMotorRightOffset] = 8;
+    payload[kMotorLeftOffset] = 3;
+    EXPECT_TRUE(controller_output_rumble_payload_requires_immediate_send(
+        state,
+        payload.data(),
+        static_cast<uint16_t>(payload.size())
+    ));
+    controller_output_rumble_state_apply_payload(
+        state,
+        payload.data(),
+        static_cast<uint16_t>(payload.size())
+    );
+    EXPECT_TRUE(state.classic_rumble_active);
+
+    payload = empty_payload();
+    EXPECT_TRUE(controller_output_rumble_payload_requires_immediate_send(
+        state,
+        payload.data(),
+        static_cast<uint16_t>(payload.size())
+    ));
+    controller_output_rumble_state_apply_payload(
+        state,
+        payload.data(),
+        static_cast<uint16_t>(payload.size())
+    );
+    EXPECT_FALSE(state.classic_rumble_active);
+
+    payload = empty_payload();
+    payload[kValidFlag0Offset] = kFlag0HapticsSelect;
+    payload[kMotorRightOffset] = 6;
+    payload[kMotorLeftOffset] = 2;
+    controller_output_rumble_state_apply_payload(
+        state,
+        payload.data(),
+        static_cast<uint16_t>(payload.size())
+    );
+    EXPECT_TRUE(state.classic_rumble_active);
+
+    payload = empty_payload();
+    payload[kValidFlag0Offset] = kFlag0RightTriggerEffect;
+    std::fill_n(payload.data() + kTriggerEffectRightOffset, kTriggerEffectSize, 0x31);
+    EXPECT_TRUE(controller_output_rumble_payload_requires_immediate_send(
+        state,
+        payload.data(),
+        static_cast<uint16_t>(payload.size())
+    ));
+    controller_output_rumble_state_apply_payload(
+        state,
+        payload.data(),
+        static_cast<uint16_t>(payload.size())
+    );
+    EXPECT_FALSE(state.classic_rumble_active);
 }
 
 void haptics_test_signal_matches_original_main_packet_flip_pattern() {
@@ -736,10 +915,31 @@ void xusb360_rumble_decodes_to_ds5_classic_rumble_payload() {
         payload_len
     ));
     EXPECT_EQ(payload_len, kCommonPayloadSize);
-    EXPECT_TRUE((payload[kValidFlag0Offset] & kFlag0CompatibleVibration) != 0);
     EXPECT_TRUE((payload[kValidFlag0Offset] & kFlag0HapticsSelect) != 0);
+    EXPECT_FALSE((payload[kValidFlag0Offset] & kFlag0CompatibleVibration) != 0);
+    EXPECT_TRUE((payload[kValidFlag2Offset] & kFlag2EnableImprovedRumbleEmulation) != 0);
     EXPECT_EQ(payload[kMotorLeftOffset], 0x90);
     EXPECT_EQ(payload[kMotorRightOffset], 0x30);
+}
+
+void classic_rumble_renderer_can_emit_v1_classic_rumble() {
+    reset_policy_state();
+    controller_output_policy_set_classic_rumble_v1_enabled(true);
+
+    Payload payload{};
+    EXPECT_TRUE(controller_output_policy_render_classic_rumble_payload(
+        payload.data(),
+        payload.size(),
+        0x30,
+        0x90
+    ));
+    EXPECT_TRUE((payload[kValidFlag0Offset] & kFlag0CompatibleVibration) != 0);
+    EXPECT_TRUE((payload[kValidFlag0Offset] & kFlag0HapticsSelect) != 0);
+    EXPECT_FALSE((payload[kValidFlag2Offset] & kFlag2EnableImprovedRumbleEmulation) != 0);
+    EXPECT_EQ(payload[kMotorLeftOffset], 0x90);
+    EXPECT_EQ(payload[kMotorRightOffset], 0x30);
+
+    reset_policy_state();
 }
 
 void ds4_persona_maps_standard_gamepad_fields() {
@@ -802,8 +1002,9 @@ void ds4_output_decodes_to_ds5_rumble_and_lightbar_payload() {
         payload_len
     ));
     EXPECT_EQ(payload_len, kCommonPayloadSize);
-    EXPECT_TRUE((payload[kValidFlag0Offset] & kFlag0CompatibleVibration) != 0);
     EXPECT_TRUE((payload[kValidFlag0Offset] & kFlag0HapticsSelect) != 0);
+    EXPECT_FALSE((payload[kValidFlag0Offset] & kFlag0CompatibleVibration) != 0);
+    EXPECT_TRUE((payload[kValidFlag2Offset] & kFlag2EnableImprovedRumbleEmulation) != 0);
     EXPECT_TRUE((payload[kValidFlag1Offset] & kFlag1LightbarControlEnable) != 0);
     EXPECT_EQ(payload[kMotorRightOffset], 0x12);
     EXPECT_EQ(payload[kMotorLeftOffset], 0xfe);
@@ -910,21 +1111,24 @@ std::vector<TestCase> tests{
     {"scheduler sends coalesced state when audio is absent", scheduler_sends_coalesced_state_when_audio_is_absent},
     {"scheduler audio due on age backlog or fairness limit", scheduler_audio_due_on_age_backlog_or_fairness_limit},
     {"packet compositor initializes bluetooth report and wraps sequence", packet_compositor_initializes_bluetooth_report_and_wraps_sequence},
-    {"classic rumble gain clamps rounds and only touches flagged payloads", classic_rumble_gain_clamps_rounds_and_only_touches_flagged_payloads},
-    {"audio haptics replace suppresses classic rumble without changing saved gain", audio_haptics_replace_suppresses_classic_rumble_without_changing_saved_gain},
+    {"classic rumble gain clamps rounds and touches motor payloads", classic_rumble_gain_clamps_rounds_and_touches_motor_payloads},
+    {"audio haptics replace tracks state without suppressing classic rumble", audio_haptics_replace_tracks_state_without_suppressing_classic_rumble},
     {"speaker sanitizer strips host amp flags and zeroes only controlled fields", speaker_sanitizer_strips_host_amp_flags_and_zeroes_only_controlled_fields},
     {"mic sanitizer removes mute led and only mic power save bit", mic_sanitizer_removes_mute_led_and_only_mic_power_save_bit},
     {"lightbar override removes host led claims without mutating color bytes", lightbar_override_removes_host_led_claims_without_mutating_color_bytes},
     {"host led clear detection covers release player and lightbar paths", host_led_clear_detection_covers_release_player_and_lightbar_paths},
     {"output state audio snapshot routes to speaker and headphones safely", output_state_audio_snapshot_routes_to_speaker_and_headphones_safely},
-    {"output state audio snapshot preserves haptic motor power", output_state_audio_snapshot_preserves_haptic_motor_power},
+    {"output state audio snapshot preserves adaptive trigger effects and motor power", output_state_audio_snapshot_preserves_adaptive_trigger_effects_and_motor_power},
     {"output state lightbar override is scaled and survives audio snapshot", output_state_lightbar_override_is_scaled_and_survives_audio_snapshot},
     {"output state player led enabled preserves host indicator", output_state_player_led_enabled_preserves_host_indicator},
     {"output state player led disabled suppresses host indicator", output_state_player_led_disabled_suppresses_host_indicator},
     {"output state player led reenabled restores host indicator", output_state_player_led_reenabled_restores_host_indicator},
     {"output state player led release invalidates cached indicator", output_state_player_led_release_invalidates_cached_indicator},
-    {"output state clears zero rumble flags but preserves nonzero rumble", output_state_clears_zero_rumble_flags_but_preserves_nonzero_rumble},
+    {"output state preserves selector zero and ignores motor only rumble", output_state_preserves_selector_zero_and_ignores_motor_only_rumble},
+    {"output state clear classic rumble clears cached selector state", output_state_clear_classic_rumble_clears_cached_selector_state},
+    {"output state preserves haptic low pass filter byte", output_state_preserves_haptic_low_pass_filter_byte},
     {"output state clear triggers removes effect bytes flags and power", output_state_clear_triggers_removes_effect_bytes_flags_and_power},
+    {"rumble state machine sends real stops immediately", rumble_state_machine_sends_real_stops_immediately},
     {"haptics test signal matches original main packet flip pattern", haptics_test_signal_matches_original_main_packet_flip_pattern},
     {"haptics test signal is constant inside each original packet", haptics_test_signal_is_constant_inside_each_original_packet},
     {"haptics test signal drives left and right actuators opposite phase", haptics_test_signal_drives_left_and_right_actuators_opposite_phase},
@@ -933,6 +1137,7 @@ std::vector<TestCase> tests{
     {"dualsense persona preserves native report bytes", dualsense_persona_preserves_native_report_bytes},
     {"xusb360 persona maps standard gamepad fields", xusb360_persona_maps_standard_gamepad_fields},
     {"xusb360 rumble decodes to ds5 classic rumble payload", xusb360_rumble_decodes_to_ds5_classic_rumble_payload},
+    {"classic rumble renderer can emit v1 classic rumble", classic_rumble_renderer_can_emit_v1_classic_rumble},
     {"ds4 persona maps standard gamepad fields", ds4_persona_maps_standard_gamepad_fields},
     {"ds4 output decodes to ds5 rumble and lightbar payload", ds4_output_decodes_to_ds5_rumble_and_lightbar_payload},
     {"dualsense persona feature reports cover identity probe surface", dualsense_persona_feature_reports_cover_identity_probe_surface},

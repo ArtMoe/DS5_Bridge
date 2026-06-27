@@ -50,6 +50,7 @@ add_executable(ds5-bridge
         src/usb.cpp
         src/controller_packet_compositor.cpp
         src/controller_output_policy.cpp
+        src/controller_output_rumble_state.cpp
         src/controller_output_state.cpp
         src/haptics_test_signal.cpp
         src/output_scheduler.cpp

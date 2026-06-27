@@ -57,6 +57,9 @@ const api = {
   setClassicRumbleEnabled: (value: boolean): Promise<BridgeSnapshot> => (
     ipcRenderer.invoke('bridge:setClassicRumbleEnabled', value)
   ),
+  setClassicRumbleV1Enabled: (value: boolean): Promise<BridgeSnapshot> => (
+    ipcRenderer.invoke('bridge:setClassicRumbleV1Enabled', value)
+  ),
   setTriggerEffectIntensity: (value: number): Promise<BridgeSnapshot> => (
     ipcRenderer.invoke('bridge:setTriggerEffectIntensity', value)
   ),

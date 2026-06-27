@@ -45,6 +45,7 @@ const DEFAULT_CONTROLLER_PROFILE_SETTINGS: ControllerProfileSettings = {
   feedbackBoostEnabled: false,
   classicRumbleEnabled: true,
   classicRumbleGainPercent: 100,
+  classicRumbleV1Enabled: false,
   adaptiveTriggersEnabled: true,
   triggerEffectIntensityPercent: 100,
   triggerTestMode: 'feedback',
@@ -102,6 +103,7 @@ const CONTROLLER_PROFILE_SETTING_KEYS = new Set<keyof ControllerProfileSettings>
   'feedbackBoostEnabled',
   'classicRumbleEnabled',
   'classicRumbleGainPercent',
+  'classicRumbleV1Enabled',
   'adaptiveTriggersEnabled',
   'triggerEffectIntensityPercent',
   'triggerTestMode',
@@ -145,6 +147,7 @@ export const DEFAULT_SETTINGS: CompanionSettings = {
   hapticsBufferLength: 64,
   classicRumbleEnabled: DEFAULT_CONTROLLER_PROFILE_SETTINGS.classicRumbleEnabled,
   classicRumbleGainPercent: DEFAULT_CONTROLLER_PROFILE_SETTINGS.classicRumbleGainPercent,
+  classicRumbleV1Enabled: DEFAULT_CONTROLLER_PROFILE_SETTINGS.classicRumbleV1Enabled,
   adaptiveTriggersEnabled: DEFAULT_CONTROLLER_PROFILE_SETTINGS.adaptiveTriggersEnabled,
   triggerEffectIntensityPercent: DEFAULT_CONTROLLER_PROFILE_SETTINGS.triggerEffectIntensityPercent,
   triggerTestMode: DEFAULT_CONTROLLER_PROFILE_SETTINGS.triggerTestMode,
@@ -337,6 +340,7 @@ export function controllerProfileSettingsFrom(settings: CompanionSettings): Cont
     feedbackBoostEnabled: settings.feedbackBoostEnabled,
     classicRumbleEnabled: settings.classicRumbleEnabled,
     classicRumbleGainPercent: settings.classicRumbleGainPercent,
+    classicRumbleV1Enabled: settings.classicRumbleV1Enabled,
     adaptiveTriggersEnabled: settings.adaptiveTriggersEnabled,
     triggerEffectIntensityPercent: settings.triggerEffectIntensityPercent,
     triggerTestMode: settings.triggerTestMode,
@@ -388,6 +392,9 @@ function normalizeControllerProfileSettings(value: unknown): ControllerProfileSe
     classicRumbleGainPercent: Number.isFinite(candidate.classicRumbleGainPercent)
       ? Math.max(0, Math.min(500, Math.round(candidate.classicRumbleGainPercent!)))
       : DEFAULT_CONTROLLER_PROFILE_SETTINGS.classicRumbleGainPercent,
+    classicRumbleV1Enabled: typeof candidate.classicRumbleV1Enabled === 'boolean'
+      ? candidate.classicRumbleV1Enabled
+      : DEFAULT_CONTROLLER_PROFILE_SETTINGS.classicRumbleV1Enabled,
     adaptiveTriggersEnabled: typeof candidate.adaptiveTriggersEnabled === 'boolean'
       ? candidate.adaptiveTriggersEnabled
       : DEFAULT_CONTROLLER_PROFILE_SETTINGS.adaptiveTriggersEnabled,
@@ -868,6 +875,9 @@ function normalizeSettings(value: Partial<CompanionSettings> | null | undefined)
     classicRumbleGainPercent: Number.isFinite(value?.classicRumbleGainPercent)
       ? Math.max(0, Math.min(500, Math.round(value!.classicRumbleGainPercent!)))
       : DEFAULT_SETTINGS.classicRumbleGainPercent,
+    classicRumbleV1Enabled: typeof value?.classicRumbleV1Enabled === 'boolean'
+      ? value.classicRumbleV1Enabled
+      : DEFAULT_SETTINGS.classicRumbleV1Enabled,
     adaptiveTriggersEnabled: typeof value?.adaptiveTriggersEnabled === 'boolean'
       ? value.adaptiveTriggersEnabled
       : DEFAULT_SETTINGS.adaptiveTriggersEnabled,

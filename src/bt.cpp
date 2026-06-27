@@ -17,6 +17,7 @@
 #include "audio.h"
 #include "controller_packet_compositor.h"
 #include "controller_output_policy.h"
+#include "controller_output_rumble_state.h"
 #include "controller_output_state.h"
 #include "output_scheduler.h"
 #ifdef ENABLE_COMPANION
@@ -54,17 +55,19 @@
 #define DS_OUTPUT_VALID_FLAG1_LIGHTBAR_CONTROL_ENABLE 0x04
 #define DS_OUTPUT_VALID_FLAG1_RELEASE_LEDS 0x08
 #define DS_OUTPUT_VALID_FLAG1_PLAYER_INDICATOR_CONTROL_ENABLE 0x10
+#define DS_OUTPUT_VALID_FLAG1_HAPTIC_LOW_PASS_FILTER_ENABLE 0x20
 #define DS_OUTPUT_VALID_FLAG1_MOTOR_POWER_LEVEL_ENABLE 0x40
 #define DS_OUTPUT_VALID_FLAG1_AUDIO_CONTROL2_ENABLE 0x80
 #define DS_OUTPUT_VALID_FLAG2_LIGHTBAR_SETUP_CONTROL_ENABLE 0x02
-#define DS_OUTPUT_VALID_FLAG2_COMPATIBLE_VIBRATION2 0x04
+#define DS_OUTPUT_VALID_FLAG2_ENABLE_IMPROVED_RUMBLE_EMULATION 0x04
+#define DS_OUTPUT_VALID_FLAG2_USE_RUMBLE_NOT_HAPTICS2 0x08
 #define DS_OUTPUT_AUDIO_FLAGS_OUTPUT_PATH_HEADPHONES 0x00
 #define DS_OUTPUT_AUDIO_FLAGS_OUTPUT_PATH_SPEAKER 0x30
 #define DS_OUTPUT_POWER_SAVE_CONTROL_MIC_MUTE 0x10
 #define DS_OUTPUT_HEADPHONE_VOLUME_MAX 0x7f
 #define DS_OUTPUT_SPEAKER_VOLUME_MAX 0x64
 #define DS_OUTPUT_MIC_VOLUME_MAX 0x40
-#define DS_OUTPUT_AUDIO_FLAGS2_SPEAKER_PREAMP_GAIN 0x07
+#define DS_OUTPUT_AUDIO_FLAGS2_SPEAKER_PREAMP_GAIN 0x02
 #define DS_OUTPUT_LIGHTBAR_SETUP_LIGHT_OUT 0x02
 #define DS_TRIGGER_EFFECT_SIZE 11
 #define DS_TRIGGER_EFFECT_RIGHT_OFFSET 10
@@ -102,6 +105,7 @@
 #define OUTPUT_PAYLOAD_TRIGGER_POWER_OFFSET 36
 #define OUTPUT_PAYLOAD_AUDIO_CONTROL2_OFFSET 37
 #define OUTPUT_PAYLOAD_VALID_FLAG2_OFFSET 38
+#define OUTPUT_PAYLOAD_HAPTIC_LOW_PASS_FILTER_OFFSET 39
 #define OUTPUT_PAYLOAD_LED_BRIGHTNESS_OFFSET 42
 #define OUTPUT_PAYLOAD_PLAYER_LEDS_OFFSET 43
 #define OUTPUT_PAYLOAD_LIGHTBAR_RED_OFFSET 44
@@ -139,6 +143,7 @@ enum OutputClassificationReason : uint8_t {
     OutputReasonCriticalFlags = 4,
     OutputReasonCriticalPayload = 5,
     OutputReasonStateNoop = 6,
+    OutputReasonClassicRumbleImmediate = 7,
 };
 
 enum BtAudioDebugKind : uint8_t {
@@ -218,6 +223,13 @@ static void request_control_if_audio_window_open_locked(uint32_t now, bool &shou
 static void init_state_report(uint8_t *report);
 static bool select_next_output_packet_locked(output_packet &packet, uint32_t now);
 static bool audio_output_route_protected();
+static bool output_report_payload(
+    uint8_t const *data,
+    uint16_t len,
+    uint8_t const *&payload,
+    uint16_t &payload_len
+);
+static void mirror_pending_classic_rumble_locked(uint8_t const *data, uint16_t len);
 
 static btstack_packet_callback_registration_t hci_event_callback_registration, l2cap_event_callback_registration;
 static bd_addr_t current_device_addr;
@@ -270,7 +282,7 @@ static uint8_t state_report_seq = 0;
 static bool speaker_output_enabled = false;
 static bool speaker_output_headset_route = false;
 static uint8_t companion_mic_volume_percent = 100;
-static bool classic_rumble_output_active = false;
+static ControllerOutputRumbleStateMachine classic_rumble_state{};
 
 static void update_max_u32(uint32_t &current, uint32_t candidate) {
     if (candidate > current) {
@@ -300,11 +312,12 @@ static void clear_output_queues_locked() {
     last_audio_0x36_send_us = 0;
     output_counters.audio_queue_depth = 0;
     output_counters.consecutive_state_sends = 0;
-    classic_rumble_output_active = false;
+    classic_rumble_state.classic_rumble_active = false;
 }
 
 static void reset_controller_output_session_locked() {
     clear_output_queues_locked();
+    controller_output_state_clear_classic_rumble();
     state_report_seq = 0;
     speaker_output_enabled = false;
     speaker_output_headset_route = false;
@@ -393,7 +406,7 @@ static uint8_t output_trace_route_flags_locked() {
     if (usb_speaker_streaming_active()) {
         flags |= OutputTraceUsbSpeakerActive;
     }
-    if (classic_rumble_output_active) {
+    if (classic_rumble_state.classic_rumble_active) {
         flags |= OutputTraceClassicRumbleActive;
     }
     return flags;
@@ -464,8 +477,12 @@ uint16_t bt_classic_rumble_gain() {
     return controller_output_policy_classic_rumble_gain();
 }
 
-static uint8_t scale_classic_rumble_byte(uint8_t value) {
-    return controller_output_policy_scale_classic_rumble_byte(value);
+void bt_set_classic_rumble_v1_enabled(bool enabled) {
+    controller_output_policy_set_classic_rumble_v1_enabled(enabled);
+}
+
+bool bt_classic_rumble_v1_enabled() {
+    return controller_output_policy_classic_rumble_v1_enabled();
 }
 
 bool bt_apply_classic_rumble_gain_payload(uint8_t *payload, uint16_t len) {
@@ -483,57 +500,14 @@ static bool apply_classic_rumble_gain(uint8_t *data, uint16_t len) {
     return bt_apply_classic_rumble_gain_payload(data + 3, len - 3);
 }
 
-static bool output_report_payload_all_zero(uint8_t const *data, uint16_t len) {
-    if (data == nullptr || len < 3 + DS_OUTPUT_REPORT_COMMON_SIZE) {
-        return false;
-    }
-    if (data[0] != DS_OUTPUT_REPORT_BT || data[2] != DS_OUTPUT_TAG) {
-        return false;
-    }
-
-    uint8_t const *payload = data + 3;
-    for (uint16_t i = 0; i < len - 3; i++) {
-        if (payload[i] != 0) {
-            return false;
-        }
-    }
-    return true;
-}
-
-static bool normalize_classic_rumble_stop_if_needed(uint8_t *data, uint16_t len) {
-    if (!classic_rumble_output_active || !output_report_payload_all_zero(data, len)) {
-        return false;
-    }
-
-    uint8_t *payload = data + 3;
-    payload[OUTPUT_PAYLOAD_VALID_FLAG0_OFFSET] = static_cast<uint8_t>(
-        DS_OUTPUT_VALID_FLAG0_COMPATIBLE_VIBRATION | DS_OUTPUT_VALID_FLAG0_HAPTICS_SELECT
-    );
-    payload[OUTPUT_PAYLOAD_VALID_FLAG2_OFFSET] = 0;
-    return true;
-}
-
 static void remember_classic_rumble_state_from_output(uint8_t const *data, uint16_t len) {
-    if (data == nullptr || len < 3 + DS_OUTPUT_REPORT_COMMON_SIZE) {
-        return;
-    }
-    if (data[0] != DS_OUTPUT_REPORT_BT || data[2] != DS_OUTPUT_TAG) {
-        return;
-    }
-
-    uint8_t const *payload = data + 3;
-    const uint8_t flag0 = payload[OUTPUT_PAYLOAD_VALID_FLAG0_OFFSET];
-    const uint8_t flag2 = payload[OUTPUT_PAYLOAD_VALID_FLAG2_OFFSET];
-    const bool has_rumble = (flag0 & (
-        DS_OUTPUT_VALID_FLAG0_COMPATIBLE_VIBRATION
-        | DS_OUTPUT_VALID_FLAG0_HAPTICS_SELECT
-    )) != 0 || (flag2 & DS_OUTPUT_VALID_FLAG2_COMPATIBLE_VIBRATION2) != 0;
-    if (!has_rumble) {
+    uint8_t const *payload = nullptr;
+    uint16_t payload_len = 0;
+    if (!output_report_payload(data, len, payload, payload_len)) {
         return;
     }
 
-    classic_rumble_output_active =
-        (payload[OUTPUT_PAYLOAD_MOTOR_RIGHT_OFFSET] | payload[OUTPUT_PAYLOAD_MOTOR_LEFT_OFFSET]) != 0;
+    controller_output_rumble_state_apply_payload(classic_rumble_state, payload, payload_len);
 }
 
 void bt_set_classic_rumble_output(uint8_t right, uint8_t left) {
@@ -543,16 +517,10 @@ void bt_set_classic_rumble_output(uint8_t right, uint8_t left) {
 
     uint8_t report[DS_OUTPUT_REPORT_BT_SIZE];
     init_state_report(report);
-    report[3 + OUTPUT_PAYLOAD_VALID_FLAG0_OFFSET] = static_cast<uint8_t>(
-        DS_OUTPUT_VALID_FLAG0_COMPATIBLE_VIBRATION | DS_OUTPUT_VALID_FLAG0_HAPTICS_SELECT
-    );
-    report[3 + OUTPUT_PAYLOAD_MOTOR_RIGHT_OFFSET] = scale_classic_rumble_byte(right);
-    report[3 + OUTPUT_PAYLOAD_MOTOR_LEFT_OFFSET] = scale_classic_rumble_byte(left);
-    classic_rumble_output_active = (
-        report[3 + OUTPUT_PAYLOAD_MOTOR_RIGHT_OFFSET]
-        | report[3 + OUTPUT_PAYLOAD_MOTOR_LEFT_OFFSET]
-    ) != 0;
-    bt_write(report, sizeof(report));
+    controller_output_policy_render_classic_rumble_payload(report + 3, DS_OUTPUT_REPORT_COMMON_SIZE, right, left);
+    if (bt_write_classified_output(report, sizeof(report))) {
+        controller_output_state_apply_host_payload(report + 3, DS_OUTPUT_REPORT_COMMON_SIZE);
+    }
 }
 
 static uint8_t scale_lightbar_channel(uint8_t channel, uint8_t brightness_percent) {
@@ -1901,6 +1869,9 @@ static bool enqueue_urgent_output(uint8_t *data, uint16_t len, uint8_t reason) {
     bool should_request_send = false;
     critical_section_enter_blocking(&queue_lock);
     should_request_send = !output_pending_locked();
+    if (reason == OutputReasonClassicRumbleImmediate) {
+        mirror_pending_classic_rumble_locked(data, len);
+    }
     while (urgent_queue.size() >= URGENT_SEND_QUEUE_MAX_DEPTH) {
         urgent_queue.pop();
     }
@@ -1980,6 +1951,152 @@ static void clear_payload_byte(uint8_t *payload, uint16_t payload_len, uint8_t o
     }
 }
 
+static bool payload_has_classic_rumble_flags(uint8_t flag0, uint8_t flag2) {
+    return (flag0 & (
+        DS_OUTPUT_VALID_FLAG0_COMPATIBLE_VIBRATION
+        | DS_OUTPUT_VALID_FLAG0_HAPTICS_SELECT
+    )) != 0 || (flag2 & (
+        DS_OUTPUT_VALID_FLAG2_ENABLE_IMPROVED_RUMBLE_EMULATION
+        | DS_OUTPUT_VALID_FLAG2_USE_RUMBLE_NOT_HAPTICS2
+    )) != 0;
+}
+
+static bool payload_uses_classic_rumble_selector(uint8_t flag0, uint8_t flag2) {
+    return (flag0 & DS_OUTPUT_VALID_FLAG0_HAPTICS_SELECT) != 0
+        || (flag2 & DS_OUTPUT_VALID_FLAG2_USE_RUMBLE_NOT_HAPTICS2) != 0;
+}
+
+static bool output_report_payload(
+    uint8_t *data,
+    uint16_t len,
+    uint8_t *&payload,
+    uint16_t &payload_len
+) {
+    payload = nullptr;
+    payload_len = 0;
+    if (data == nullptr || len < 3 + DS_OUTPUT_REPORT_COMMON_SIZE) {
+        return false;
+    }
+    if (data[0] == DS_OUTPUT_REPORT_BT && data[2] == DS_OUTPUT_TAG) {
+        payload = data + 3;
+        payload_len = len - 3;
+        return true;
+    }
+    if (data[0] == 0x36 && len >= 13 + DS_OUTPUT_REPORT_COMMON_SIZE) {
+        payload = data + 13;
+        payload_len = len - 13;
+        return true;
+    }
+    return false;
+}
+
+static bool output_report_payload(
+    uint8_t const *data,
+    uint16_t len,
+    uint8_t const *&payload,
+    uint16_t &payload_len
+) {
+    payload = nullptr;
+    payload_len = 0;
+    if (data == nullptr || len < 3 + DS_OUTPUT_REPORT_COMMON_SIZE) {
+        return false;
+    }
+    if (data[0] == DS_OUTPUT_REPORT_BT && data[2] == DS_OUTPUT_TAG) {
+        payload = data + 3;
+        payload_len = len - 3;
+        return true;
+    }
+    if (data[0] == 0x36 && len >= 13 + DS_OUTPUT_REPORT_COMMON_SIZE) {
+        payload = data + 13;
+        payload_len = len - 13;
+        return true;
+    }
+    return false;
+}
+
+static bool mirror_classic_rumble_in_report(
+    uint8_t *target,
+    uint16_t target_len,
+    uint8_t const *source,
+    uint16_t source_len
+) {
+    uint8_t *target_payload = nullptr;
+    uint16_t target_payload_len = 0;
+    uint8_t const *source_payload = nullptr;
+    uint16_t source_payload_len = 0;
+    if (
+        !output_report_payload(target, target_len, target_payload, target_payload_len)
+        || !output_report_payload(source, source_len, source_payload, source_payload_len)
+        || target_payload_len <= OUTPUT_PAYLOAD_MOTOR_LEFT_OFFSET
+        || source_payload_len <= OUTPUT_PAYLOAD_MOTOR_LEFT_OFFSET
+    ) {
+        return false;
+    }
+
+    const uint8_t source_flag0 = source_payload[OUTPUT_PAYLOAD_VALID_FLAG0_OFFSET];
+    const uint8_t source_flag2 = source_payload[OUTPUT_PAYLOAD_VALID_FLAG2_OFFSET];
+    const uint8_t rumble_flag0 = source_flag0 & static_cast<uint8_t>(
+        DS_OUTPUT_VALID_FLAG0_COMPATIBLE_VIBRATION | DS_OUTPUT_VALID_FLAG0_HAPTICS_SELECT
+    );
+    const uint8_t rumble_flag2 = source_flag2 & static_cast<uint8_t>(
+        DS_OUTPUT_VALID_FLAG2_ENABLE_IMPROVED_RUMBLE_EMULATION | DS_OUTPUT_VALID_FLAG2_USE_RUMBLE_NOT_HAPTICS2
+    );
+
+    target_payload[OUTPUT_PAYLOAD_VALID_FLAG0_OFFSET] = static_cast<uint8_t>(
+        (target_payload[OUTPUT_PAYLOAD_VALID_FLAG0_OFFSET] & static_cast<uint8_t>(~(
+            DS_OUTPUT_VALID_FLAG0_COMPATIBLE_VIBRATION | DS_OUTPUT_VALID_FLAG0_HAPTICS_SELECT
+        ))) | rumble_flag0
+    );
+    target_payload[OUTPUT_PAYLOAD_VALID_FLAG2_OFFSET] = static_cast<uint8_t>(
+        (target_payload[OUTPUT_PAYLOAD_VALID_FLAG2_OFFSET] & static_cast<uint8_t>(~(
+            DS_OUTPUT_VALID_FLAG2_ENABLE_IMPROVED_RUMBLE_EMULATION | DS_OUTPUT_VALID_FLAG2_USE_RUMBLE_NOT_HAPTICS2
+        ))) | rumble_flag2
+    );
+    target_payload[OUTPUT_PAYLOAD_MOTOR_RIGHT_OFFSET] = source_payload[OUTPUT_PAYLOAD_MOTOR_RIGHT_OFFSET];
+    target_payload[OUTPUT_PAYLOAD_MOTOR_LEFT_OFFSET] = source_payload[OUTPUT_PAYLOAD_MOTOR_LEFT_OFFSET];
+    return true;
+}
+
+static bool mirror_classic_rumble_in_packet(
+    output_packet &packet,
+    uint8_t const *source,
+    uint16_t source_len
+) {
+    if (packet.data.size() < 2) {
+        return false;
+    }
+
+    uint8_t *report = packet.data.data() + 1;
+    const uint16_t report_len = static_cast<uint16_t>(packet.data.size() - 1);
+    if (!mirror_classic_rumble_in_report(report, report_len, source, source_len)) {
+        return false;
+    }
+    return fill_output_report_checksum(report, report_len);
+}
+
+static void mirror_packet_queue_classic_rumble_locked(
+    queue<output_packet> &packets,
+    uint8_t const *source,
+    uint16_t source_len
+) {
+    queue<output_packet> scrubbed;
+    while (!packets.empty()) {
+        output_packet packet = std::move(packets.front());
+        packets.pop();
+        (void)mirror_classic_rumble_in_packet(packet, source, source_len);
+        scrubbed.push(std::move(packet));
+    }
+    packets = std::move(scrubbed);
+}
+
+static void mirror_pending_classic_rumble_locked(uint8_t const *data, uint16_t len) {
+    if (state_pending) {
+        (void)mirror_classic_rumble_in_report(state_pending_report, sizeof(state_pending_report), data, len);
+    }
+    mirror_packet_queue_classic_rumble_locked(urgent_queue, data, len);
+    mirror_packet_queue_classic_rumble_locked(audio_queue, data, len);
+}
+
 static void apply_player_led_policy_to_payload(uint8_t *payload, uint16_t payload_len) {
     if (payload == nullptr || payload_len <= OUTPUT_PAYLOAD_PLAYER_LEDS_OFFSET) {
         return;
@@ -2007,10 +2124,7 @@ static bool has_unclassified_state_payload_data(uint8_t const *payload, uint16_t
         | DS_OUTPUT_VALID_FLAG1_RELEASE_LEDS
         | DS_OUTPUT_VALID_FLAG1_PLAYER_INDICATOR_CONTROL_ENABLE
     );
-    const bool has_rumble = (flag0 & (
-        DS_OUTPUT_VALID_FLAG0_COMPATIBLE_VIBRATION
-        | DS_OUTPUT_VALID_FLAG0_HAPTICS_SELECT
-    )) != 0 || (flag2 & DS_OUTPUT_VALID_FLAG2_COMPATIBLE_VIBRATION2) != 0;
+    const bool has_rumble = payload_has_classic_rumble_flags(flag0, flag2);
     const uint8_t trigger_flags = flag0 & (
         DS_OUTPUT_VALID_FLAG0_RIGHT_TRIGGER_EFFECT
         | DS_OUTPUT_VALID_FLAG0_LEFT_TRIGGER_EFFECT
@@ -2035,6 +2149,9 @@ static bool has_unclassified_state_payload_data(uint8_t const *payload, uint16_t
     }
     if (flag1 & DS_OUTPUT_VALID_FLAG1_MOTOR_POWER_LEVEL_ENABLE) {
         mark_payload_byte(recognized, payload_len, OUTPUT_PAYLOAD_TRIGGER_POWER_OFFSET);
+    }
+    if (flag1 & DS_OUTPUT_VALID_FLAG1_HAPTIC_LOW_PASS_FILTER_ENABLE) {
+        mark_payload_byte(recognized, payload_len, OUTPUT_PAYLOAD_HAPTIC_LOW_PASS_FILTER_OFFSET);
     }
     if (trigger_flags & DS_OUTPUT_VALID_FLAG0_RIGHT_TRIGGER_EFFECT) {
         for (uint8_t i = 0; i < DS_TRIGGER_EFFECT_SIZE; i++) {
@@ -2113,8 +2230,11 @@ static uint8_t classify_output_report(uint8_t const *data, uint16_t len) {
         | DS_OUTPUT_VALID_FLAG1_LIGHTBAR_CONTROL_ENABLE
         | DS_OUTPUT_VALID_FLAG1_RELEASE_LEDS
         | DS_OUTPUT_VALID_FLAG1_PLAYER_INDICATOR_CONTROL_ENABLE
+        | DS_OUTPUT_VALID_FLAG1_HAPTIC_LOW_PASS_FILTER_ENABLE
         | DS_OUTPUT_VALID_FLAG1_MOTOR_POWER_LEVEL_ENABLE;
-    const uint8_t state_flag2 = DS_OUTPUT_VALID_FLAG2_COMPATIBLE_VIBRATION2;
+    const uint8_t state_flag2 =
+        DS_OUTPUT_VALID_FLAG2_ENABLE_IMPROVED_RUMBLE_EMULATION
+        | DS_OUTPUT_VALID_FLAG2_USE_RUMBLE_NOT_HAPTICS2;
 
     if ((flag0 & ~state_flag0) != 0 || (flag1 & ~state_flag1) != 0 || (flag2 & ~state_flag2) != 0) {
         return OutputReasonCriticalFlags;
@@ -2157,8 +2277,11 @@ static bool output_report_has_state_flags(uint8_t const *data, uint16_t len) {
         | DS_OUTPUT_VALID_FLAG1_LIGHTBAR_CONTROL_ENABLE
         | DS_OUTPUT_VALID_FLAG1_RELEASE_LEDS
         | DS_OUTPUT_VALID_FLAG1_PLAYER_INDICATOR_CONTROL_ENABLE
+        | DS_OUTPUT_VALID_FLAG1_HAPTIC_LOW_PASS_FILTER_ENABLE
         | DS_OUTPUT_VALID_FLAG1_MOTOR_POWER_LEVEL_ENABLE;
-    const uint8_t state_mask2 = DS_OUTPUT_VALID_FLAG2_COMPATIBLE_VIBRATION2;
+    const uint8_t state_mask2 =
+        DS_OUTPUT_VALID_FLAG2_ENABLE_IMPROVED_RUMBLE_EMULATION
+        | DS_OUTPUT_VALID_FLAG2_USE_RUMBLE_NOT_HAPTICS2;
 
     return ((flag0 & state_mask0) | (flag1 & state_mask1) | (flag2 & state_mask2)) != 0;
 }
@@ -2181,63 +2304,32 @@ static bool output_report_has_feedback_state_flags(uint8_t const *data, uint16_t
         | DS_OUTPUT_VALID_FLAG0_RIGHT_TRIGGER_EFFECT
         | DS_OUTPUT_VALID_FLAG0_LEFT_TRIGGER_EFFECT;
     const uint8_t feedback_mask1 = DS_OUTPUT_VALID_FLAG1_MOTOR_POWER_LEVEL_ENABLE;
-    const uint8_t feedback_mask2 = DS_OUTPUT_VALID_FLAG2_COMPATIBLE_VIBRATION2;
+    const uint8_t feedback_mask2 =
+        DS_OUTPUT_VALID_FLAG2_ENABLE_IMPROVED_RUMBLE_EMULATION
+        | DS_OUTPUT_VALID_FLAG2_USE_RUMBLE_NOT_HAPTICS2;
 
     return ((flag0 & feedback_mask0) | (flag1 & feedback_mask1) | (flag2 & feedback_mask2)) != 0;
 }
 
 static bool output_report_is_classic_rumble_transition(uint8_t const *data, uint16_t len) {
-    if (data == nullptr || len < 3 + DS_OUTPUT_REPORT_COMMON_SIZE) {
-        return false;
-    }
-    if (data[0] != DS_OUTPUT_REPORT_BT || data[2] != DS_OUTPUT_TAG) {
-        return false;
-    }
-
-    uint8_t const *payload = data + 3;
-    const uint8_t flag0 = payload[OUTPUT_PAYLOAD_VALID_FLAG0_OFFSET];
-    const uint8_t flag2 = payload[OUTPUT_PAYLOAD_VALID_FLAG2_OFFSET];
-    const bool has_rumble = (flag0 & (
-        DS_OUTPUT_VALID_FLAG0_COMPATIBLE_VIBRATION
-        | DS_OUTPUT_VALID_FLAG0_HAPTICS_SELECT
-    )) != 0 || (flag2 & DS_OUTPUT_VALID_FLAG2_COMPATIBLE_VIBRATION2) != 0;
-    if (!has_rumble) {
+    uint8_t const *payload = nullptr;
+    uint16_t payload_len = 0;
+    if (!output_report_payload(data, len, payload, payload_len)) {
         return false;
     }
 
-    return classic_rumble_output_active
-        || (payload[OUTPUT_PAYLOAD_MOTOR_RIGHT_OFFSET] | payload[OUTPUT_PAYLOAD_MOTOR_LEFT_OFFSET]) != 0;
+    return controller_output_rumble_payload_requires_immediate_send(classic_rumble_state, payload, payload_len);
 }
 
-static bool strip_redundant_zero_rumble_during_audio(uint8_t *data, uint16_t len) {
-    if (!audio_output_route_protected() || classic_rumble_output_active) {
-        return false;
+static bool enqueue_classic_rumble_immediate_or_state_output(uint8_t *data, uint16_t len, uint8_t reason) {
+    if (output_report_is_classic_rumble_transition(data, len)) {
+        if (!enqueue_urgent_output(data, len, OutputReasonClassicRumbleImmediate)) {
+            return false;
+        }
+        remember_classic_rumble_state_from_output(data, len);
+        return true;
     }
-    if (data == nullptr || len < 3 + DS_OUTPUT_REPORT_COMMON_SIZE) {
-        return false;
-    }
-    if (data[0] != DS_OUTPUT_REPORT_BT || data[2] != DS_OUTPUT_TAG) {
-        return false;
-    }
-
-    uint8_t *payload = data + 3;
-    const uint8_t flag0 = payload[OUTPUT_PAYLOAD_VALID_FLAG0_OFFSET];
-    const uint8_t flag2 = payload[OUTPUT_PAYLOAD_VALID_FLAG2_OFFSET];
-    const uint8_t rumble_flag0 = flag0 & (
-        DS_OUTPUT_VALID_FLAG0_COMPATIBLE_VIBRATION
-        | DS_OUTPUT_VALID_FLAG0_HAPTICS_SELECT
-    );
-    const uint8_t rumble_flag2 = flag2 & DS_OUTPUT_VALID_FLAG2_COMPATIBLE_VIBRATION2;
-    if ((rumble_flag0 | rumble_flag2) == 0) {
-        return false;
-    }
-    if ((payload[OUTPUT_PAYLOAD_MOTOR_RIGHT_OFFSET] | payload[OUTPUT_PAYLOAD_MOTOR_LEFT_OFFSET]) != 0) {
-        return false;
-    }
-
-    payload[OUTPUT_PAYLOAD_VALID_FLAG0_OFFSET] = static_cast<uint8_t>(flag0 & ~rumble_flag0);
-    payload[OUTPUT_PAYLOAD_VALID_FLAG2_OFFSET] = static_cast<uint8_t>(flag2 & ~rumble_flag2);
-    return true;
+    return enqueue_feedback_state_output(data, len, reason);
 }
 
 static bool split_state_from_mixed_output(uint8_t *data, uint16_t len) {
@@ -2265,8 +2357,11 @@ static bool split_state_from_mixed_output(uint8_t *data, uint16_t len) {
         | DS_OUTPUT_VALID_FLAG1_LIGHTBAR_CONTROL_ENABLE
         | DS_OUTPUT_VALID_FLAG1_RELEASE_LEDS
         | DS_OUTPUT_VALID_FLAG1_PLAYER_INDICATOR_CONTROL_ENABLE
+        | DS_OUTPUT_VALID_FLAG1_HAPTIC_LOW_PASS_FILTER_ENABLE
         | DS_OUTPUT_VALID_FLAG1_MOTOR_POWER_LEVEL_ENABLE;
-    const uint8_t state_mask2 = DS_OUTPUT_VALID_FLAG2_COMPATIBLE_VIBRATION2;
+    const uint8_t state_mask2 =
+        DS_OUTPUT_VALID_FLAG2_ENABLE_IMPROVED_RUMBLE_EMULATION
+        | DS_OUTPUT_VALID_FLAG2_USE_RUMBLE_NOT_HAPTICS2;
     const uint8_t state_flag0 = flag0 & state_mask0;
     const uint8_t state_flag1 = flag1 & state_mask1;
     const uint8_t state_flag2 = flag2 & state_mask2;
@@ -2289,12 +2384,14 @@ static bool split_state_from_mixed_output(uint8_t *data, uint16_t len) {
     payload[OUTPUT_PAYLOAD_VALID_FLAG1_OFFSET] = flag1 & static_cast<uint8_t>(~state_flag1);
     payload[OUTPUT_PAYLOAD_VALID_FLAG2_OFFSET] = flag2 & static_cast<uint8_t>(~state_flag2);
 
-    if (state_flag0 & (
-        DS_OUTPUT_VALID_FLAG0_COMPATIBLE_VIBRATION
-        | DS_OUTPUT_VALID_FLAG0_HAPTICS_SELECT
-    )) {
-        copy_payload_byte(state_payload, payload, payload_len, OUTPUT_PAYLOAD_MOTOR_RIGHT_OFFSET);
-        copy_payload_byte(state_payload, payload, payload_len, OUTPUT_PAYLOAD_MOTOR_LEFT_OFFSET);
+    const bool state_has_rumble_flags = payload_has_classic_rumble_flags(state_flag0, state_flag2);
+    const bool state_uses_classic_rumble = payload_uses_classic_rumble_selector(state_flag0, state_flag2)
+        && payload_len > OUTPUT_PAYLOAD_MOTOR_LEFT_OFFSET;
+    if (state_has_rumble_flags) {
+        if (state_uses_classic_rumble) {
+            copy_payload_byte(state_payload, payload, payload_len, OUTPUT_PAYLOAD_MOTOR_RIGHT_OFFSET);
+            copy_payload_byte(state_payload, payload, payload_len, OUTPUT_PAYLOAD_MOTOR_LEFT_OFFSET);
+        }
         clear_payload_byte(payload, payload_len, OUTPUT_PAYLOAD_MOTOR_RIGHT_OFFSET);
         clear_payload_byte(payload, payload_len, OUTPUT_PAYLOAD_MOTOR_LEFT_OFFSET);
     }
@@ -2326,6 +2423,10 @@ static bool split_state_from_mixed_output(uint8_t *data, uint16_t len) {
     if (state_flag1 & DS_OUTPUT_VALID_FLAG1_MOTOR_POWER_LEVEL_ENABLE) {
         copy_payload_byte(state_payload, payload, payload_len, OUTPUT_PAYLOAD_TRIGGER_POWER_OFFSET);
         clear_payload_byte(payload, payload_len, OUTPUT_PAYLOAD_TRIGGER_POWER_OFFSET);
+    }
+    if (state_flag1 & DS_OUTPUT_VALID_FLAG1_HAPTIC_LOW_PASS_FILTER_ENABLE) {
+        copy_payload_byte(state_payload, payload, payload_len, OUTPUT_PAYLOAD_HAPTIC_LOW_PASS_FILTER_OFFSET);
+        clear_payload_byte(payload, payload_len, OUTPUT_PAYLOAD_HAPTIC_LOW_PASS_FILTER_OFFSET);
     }
     if (state_flag1 & DS_OUTPUT_VALID_FLAG1_LIGHTBAR_CONTROL_ENABLE) {
         copy_payload_byte(state_payload, payload, payload_len, OUTPUT_PAYLOAD_LED_BRIGHTNESS_OFFSET);
@@ -2360,7 +2461,7 @@ static bool split_state_from_mixed_output(uint8_t *data, uint16_t len) {
         OutputTraceTransformSplitState | OutputTraceTransformState
     );
 #endif
-    return enqueue_feedback_state_output(state_data, sizeof(state_data), OutputReasonStateOnly);
+    return enqueue_classic_rumble_immediate_or_state_output(state_data, sizeof(state_data), OutputReasonStateOnly);
 }
 
 static void merge_state_output_locked(uint8_t const *data, uint16_t len, uint32_t now, uint8_t reason) {
@@ -2374,7 +2475,12 @@ static void merge_state_output_locked(uint8_t const *data, uint16_t len, uint32_
         DS_OUTPUT_VALID_FLAG0_COMPATIBLE_VIBRATION
         | DS_OUTPUT_VALID_FLAG0_HAPTICS_SELECT
     );
-    const uint8_t rumble_flag2 = flag2 & DS_OUTPUT_VALID_FLAG2_COMPATIBLE_VIBRATION2;
+    const uint8_t state_flag2 = flag2 & static_cast<uint8_t>(
+        DS_OUTPUT_VALID_FLAG2_ENABLE_IMPROVED_RUMBLE_EMULATION
+        | DS_OUTPUT_VALID_FLAG2_USE_RUMBLE_NOT_HAPTICS2
+    );
+    const bool has_rumble_flags = payload_has_classic_rumble_flags(rumble_flag0, state_flag2);
+    const bool uses_classic_rumble = payload_uses_classic_rumble_selector(rumble_flag0, state_flag2);
     const uint8_t trigger_flags = flag0 & (
         DS_OUTPUT_VALID_FLAG0_RIGHT_TRIGGER_EFFECT
         | DS_OUTPUT_VALID_FLAG0_LEFT_TRIGGER_EFFECT
@@ -2397,7 +2503,7 @@ static void merge_state_output_locked(uint8_t const *data, uint16_t len, uint32_
     state_pending_report[1] = data[1];
     state_pending_reason = reason;
 
-    if (rumble_flag0 != 0 || rumble_flag2 != 0) {
+    if (has_rumble_flags) {
         dst[OUTPUT_PAYLOAD_VALID_FLAG0_OFFSET] = static_cast<uint8_t>(
             (dst[OUTPUT_PAYLOAD_VALID_FLAG0_OFFSET] & static_cast<uint8_t>(~(
                 DS_OUTPUT_VALID_FLAG0_COMPATIBLE_VIBRATION
@@ -2405,12 +2511,18 @@ static void merge_state_output_locked(uint8_t const *data, uint16_t len, uint32_
             ))) | rumble_flag0
         );
         dst[OUTPUT_PAYLOAD_VALID_FLAG2_OFFSET] = static_cast<uint8_t>(
-            (dst[OUTPUT_PAYLOAD_VALID_FLAG2_OFFSET] & static_cast<uint8_t>(~DS_OUTPUT_VALID_FLAG2_COMPATIBLE_VIBRATION2))
-            | rumble_flag2
+            (dst[OUTPUT_PAYLOAD_VALID_FLAG2_OFFSET] & static_cast<uint8_t>(~(
+                DS_OUTPUT_VALID_FLAG2_ENABLE_IMPROVED_RUMBLE_EMULATION
+                | DS_OUTPUT_VALID_FLAG2_USE_RUMBLE_NOT_HAPTICS2
+            )))
+            | state_flag2
         );
-        if (payload_len > OUTPUT_PAYLOAD_MOTOR_LEFT_OFFSET) {
+        if (uses_classic_rumble && payload_len > OUTPUT_PAYLOAD_MOTOR_LEFT_OFFSET) {
             dst[OUTPUT_PAYLOAD_MOTOR_RIGHT_OFFSET] = src[OUTPUT_PAYLOAD_MOTOR_RIGHT_OFFSET];
             dst[OUTPUT_PAYLOAD_MOTOR_LEFT_OFFSET] = src[OUTPUT_PAYLOAD_MOTOR_LEFT_OFFSET];
+        } else {
+            dst[OUTPUT_PAYLOAD_MOTOR_RIGHT_OFFSET] = 0;
+            dst[OUTPUT_PAYLOAD_MOTOR_LEFT_OFFSET] = 0;
         }
     }
     if (trigger_flags != 0) {
@@ -2441,6 +2553,10 @@ static void merge_state_output_locked(uint8_t const *data, uint16_t len, uint32_
     if (flag1 & DS_OUTPUT_VALID_FLAG1_MOTOR_POWER_LEVEL_ENABLE) {
         dst[OUTPUT_PAYLOAD_VALID_FLAG1_OFFSET] |= DS_OUTPUT_VALID_FLAG1_MOTOR_POWER_LEVEL_ENABLE;
         dst[OUTPUT_PAYLOAD_TRIGGER_POWER_OFFSET] = src[OUTPUT_PAYLOAD_TRIGGER_POWER_OFFSET];
+    }
+    if (flag1 & DS_OUTPUT_VALID_FLAG1_HAPTIC_LOW_PASS_FILTER_ENABLE) {
+        dst[OUTPUT_PAYLOAD_VALID_FLAG1_OFFSET] |= DS_OUTPUT_VALID_FLAG1_HAPTIC_LOW_PASS_FILTER_ENABLE;
+        dst[OUTPUT_PAYLOAD_HAPTIC_LOW_PASS_FILTER_OFFSET] = src[OUTPUT_PAYLOAD_HAPTIC_LOW_PASS_FILTER_OFFSET];
     }
     if (led_flags & DS_OUTPUT_VALID_FLAG1_RELEASE_LEDS) {
         dst[OUTPUT_PAYLOAD_VALID_FLAG1_OFFSET] = static_cast<uint8_t>(
@@ -2500,7 +2616,6 @@ bool bt_write_classified_output(uint8_t *data, uint16_t len) {
     bt_sanitize_host_speaker_amp_ownership(data, len);
     bt_sanitize_host_mic_ownership(data, len);
     apply_classic_rumble_gain(data, len);
-    normalize_classic_rumble_stop_if_needed(data, len);
     uint8_t trace_critical_depth = 0;
     uint8_t trace_audio_depth = 0;
     uint8_t trace_route_flags = 0;
@@ -2518,20 +2633,42 @@ bool bt_write_classified_output(uint8_t *data, uint16_t len) {
         0
     );
 #endif
-    const bool stripped_zero_rumble = strip_redundant_zero_rumble_during_audio(data, len);
+    const bool audio_protected = audio_output_route_protected();
+    const bool classic_rumble_transition = output_report_is_classic_rumble_transition(data, len);
+    if (speaker_output_enabled && audio_protected && !classic_rumble_transition) {
+        const uint8_t reason = classify_output_report(data, len);
+        uint8_t trace_transform_flags = OutputTraceTransformAudioProtected;
+        if (output_report_has_feedback_state_flags(data, len)) {
+            trace_transform_flags |= OutputTraceTransformFeedbackState;
+        }
+        if (output_report_has_state_flags(data, len)) {
+            trace_transform_flags |= OutputTraceTransformState;
+        }
+#ifdef ENABLE_COMPANION
+        companion_note_trigger_trace_report(CompanionTriggerTraceBridgeOut, data, len, reason);
+        companion_note_feedback_trace_report(
+            CompanionFeedbackTraceBridgeOut,
+            data,
+            len,
+            reason,
+            trace_critical_depth,
+            trace_audio_depth,
+            trace_route_flags,
+            trace_transform_flags
+        );
+#endif
+        return true;
+    }
     const bool split_state = split_state_from_mixed_output(data, len);
     const uint8_t reason = classify_output_report(data, len);
     uint8_t trace_transform_flags = 0;
-    if (stripped_zero_rumble) {
-        trace_transform_flags |= OutputTraceTransformStrippedZeroRumble;
-    }
     if (split_state) {
         trace_transform_flags |= OutputTraceTransformSplitState;
     }
-    if (audio_output_route_protected()) {
+    if (audio_protected) {
         trace_transform_flags |= OutputTraceTransformAudioProtected;
     }
-    if (output_report_is_classic_rumble_transition(data, len)) {
+    if (classic_rumble_transition) {
         trace_transform_flags |= OutputTraceTransformClassicRumble;
     }
     if (output_report_has_feedback_state_flags(data, len)) {
@@ -2554,15 +2691,18 @@ bool bt_write_classified_output(uint8_t *data, uint16_t len) {
     );
 #endif
     if (reason == OutputReasonStateNoop) {
-        return true;
+        if (!classic_rumble_transition) {
+            return true;
+        }
+        return enqueue_classic_rumble_immediate_or_state_output(data, len, OutputReasonClassicRumbleImmediate);
     }
     if (reason != OutputReasonStateOnly) {
         if (output_report_has_state_flags(data, len)) {
-            return enqueue_feedback_state_output(data, len, OutputReasonStateOnly);
+            return enqueue_classic_rumble_immediate_or_state_output(data, len, OutputReasonStateOnly);
         }
         return true;
     }
-    return enqueue_feedback_state_output(data, len, reason);
+    return enqueue_classic_rumble_immediate_or_state_output(data, len, reason);
 }
 
 bool bt_write_audio_stream(uint8_t *data, uint16_t len) {

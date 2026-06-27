@@ -14,6 +14,7 @@ add_executable(firmware_logic_tests
     ../../src/persona/ds4_persona.cpp
     ../../src/persona/xusb360_persona.cpp
     ../../src/controller_output_policy.cpp
+    ../../src/controller_output_rumble_state.cpp
     ../../src/controller_output_state.cpp
     ../../src/controller_packet_compositor.cpp
     ../../src/haptics_test_signal.cpp

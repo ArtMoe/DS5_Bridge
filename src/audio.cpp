@@ -800,17 +800,12 @@ void audio_reactive_haptics_reset() {
 }
 
 static void refresh_audio_haptics_replace_policy() {
-    const bool previous_replace_active = controller_output_policy_audio_haptics_replace_active();
     controller_output_policy_set_audio_haptics_replace_requested(
         audio_reactive_haptics_suppress_classic_rumble
     );
     controller_output_policy_set_audio_haptics_replace_producer_active(
         audio_reactive_haptics_config_enabled
     );
-    const bool replace_active = controller_output_policy_audio_haptics_replace_active();
-    if (!previous_replace_active && replace_active) {
-        bt_set_classic_rumble_output(0, 0);
-    }
 }
 
 bool audio_set_reactive_haptics_config(
@@ -884,6 +879,7 @@ void audio_handle_controller_disconnect() {
     test_haptics_neutral_packets_remaining = 0;
     controller_output_state_reset_cached_triggers();
     controller_output_state_reset_cached_player_leds();
+    controller_output_state_clear_classic_rumble();
     plug_headset = false;
     controller_state_ready = false;
     host_route_primer_toggle_pending = false;

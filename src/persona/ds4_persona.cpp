@@ -3,6 +3,7 @@
 #include <algorithm>
 #include <cstring>
 
+#include "controller_output_policy.h"
 #include "dualsense_output.h"
 
 namespace {
@@ -240,11 +241,7 @@ bool ds4_persona_decode_output_to_ds5_payload(
     }
 
     std::memset(payload, 0, payload_capacity);
-    payload[ds5::output::kValidFlag0Offset] = static_cast<uint8_t>(
-        ds5::output::kFlag0CompatibleVibration | ds5::output::kFlag0HapticsSelect
-    );
-    payload[ds5::output::kMotorRightOffset] = data[4];
-    payload[ds5::output::kMotorLeftOffset] = data[5];
+    controller_output_policy_render_classic_rumble_payload(payload, payload_capacity, data[4], data[5]);
 
     const bool led_requested = (data[1] & 0x02) != 0 || data[6] != 0 || data[7] != 0 || data[8] != 0;
     if (led_requested) {

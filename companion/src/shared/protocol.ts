@@ -4,7 +4,7 @@ export const REPORT_LENGTH = 64;
 export const PAYLOAD_LENGTH = 63;
 export const MAGIC = 'DS5B';
 export const PROTOCOL_MAJOR = 1;
-export const PROTOCOL_MINOR = 14;
+export const PROTOCOL_MINOR = 15;
 
 export const REPORT_ID = {
   STATUS: 0x01,
@@ -85,7 +85,8 @@ export const COMMAND_ID = {
   SET_HOST_PERSONA: 0x21,
   SET_AUDIO_REACTIVE_HAPTICS: 0x22,
   SET_CHORD_BINDINGS: 0x23,
-  SET_PLAYER_LED_ENABLED: 0x24
+  SET_PLAYER_LED_ENABLED: 0x24,
+  SET_CLASSIC_RUMBLE_V1: 0x25
 } as const;
 
 export const ACK_RESULT = {
@@ -260,6 +261,7 @@ export interface ControllerProfileSettings {
   feedbackBoostEnabled: boolean;
   classicRumbleEnabled: boolean;
   classicRumbleGainPercent: number;
+  classicRumbleV1Enabled: boolean;
   adaptiveTriggersEnabled: boolean;
   triggerEffectIntensityPercent: number;
   triggerTestMode: TriggerTestMode;

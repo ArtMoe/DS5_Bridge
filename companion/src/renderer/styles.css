@@ -4044,6 +4044,12 @@ button.feature-icon {
   bottom: var(--card-padding);
 }
 
+.haptics-rumble-v1-control {
+  position: absolute;
+  left: var(--card-padding);
+  bottom: var(--card-padding);
+}
+
 .shell.controller-unavailable button.feature-icon:disabled,
 .shell.controller-unavailable button.feature-icon.active {
   opacity: 1;

@@ -2,6 +2,7 @@
 
 #include <cstring>
 
+#include "controller_output_policy.h"
 #include "dualsense_output.h"
 
 namespace {
@@ -109,11 +110,12 @@ bool xusb360_persona_decode_output_to_ds5_payload(
     const uint8_t strong_left_motor = data[3];
     const uint8_t weak_right_motor = data[4];
     std::memset(payload, 0, payload_capacity);
-    payload[ds5::output::kValidFlag0Offset] = static_cast<uint8_t>(
-        ds5::output::kFlag0CompatibleVibration | ds5::output::kFlag0HapticsSelect
+    controller_output_policy_render_classic_rumble_payload(
+        payload,
+        payload_capacity,
+        weak_right_motor,
+        strong_left_motor
     );
-    payload[ds5::output::kMotorRightOffset] = weak_right_motor;
-    payload[ds5::output::kMotorLeftOffset] = strong_left_motor;
     payload_len = ds5::output::kCommonPayloadSize;
     return true;
 }

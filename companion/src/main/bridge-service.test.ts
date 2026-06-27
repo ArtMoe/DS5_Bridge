@@ -112,6 +112,7 @@ const FULL_REAPPLY_COMMANDS = [
   COMMAND_ID.SET_HAPTICS_BUFFER_LENGTH,
   COMMAND_ID.SET_AUDIO_REACTIVE_HAPTICS,
   COMMAND_ID.SET_CLASSIC_RUMBLE_GAIN,
+  COMMAND_ID.SET_CLASSIC_RUMBLE_V1,
   COMMAND_ID.SET_TRIGGER_EFFECT_INTENSITY,
   COMMAND_ID.SET_SPEAKER_VOLUME,
   COMMAND_ID.SET_DUPLEX_ENABLED,
@@ -1513,6 +1514,22 @@ describe('BridgeService', () => {
     expect(command?.[7]).toBe(COMMAND_ID.SET_CLASSIC_RUMBLE_GAIN);
     expect(command?.[9]).toBe(140);
     expect(snapshot.settings.classicRumbleGainPercent).toBe(140);
+  });
+
+  it('sends and stores classic rumble v1 compatibility mode', async () => {
+    const service = serviceFixture();
+    const device = new MockHidDevice();
+    device.status = statusReport({ controllerConnected: false });
+    hidMock.state.devicesList = [companionDeviceInfo()];
+    hidMock.state.openDevices.set('companion-path', device);
+
+    await poll(service);
+    const snapshot = await service.setClassicRumbleV1Enabled(true);
+
+    const command = device.sentReports.at(-1);
+    expect(command?.[7]).toBe(COMMAND_ID.SET_CLASSIC_RUMBLE_V1);
+    expect(command?.[9]).toBe(1);
+    expect(snapshot.settings.classicRumbleV1Enabled).toBe(true);
   });
 
   it('allows boosted haptics and rumble gains up to 500 percent', async () => {

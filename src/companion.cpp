@@ -20,7 +20,7 @@ namespace {
 
 constexpr uint8_t kMagic[] = {'D', 'S', '5', 'B'};
 constexpr uint8_t kProtocolMajor = 1;
-constexpr uint8_t kProtocolMinor = 14;
+constexpr uint8_t kProtocolMinor = 15;
 constexpr uint8_t kProtocolMinSupportedMinor = 7;
 constexpr uint8_t kFirmwareMajor = 1;
 constexpr uint8_t kFirmwareMinor = 6;
@@ -133,6 +133,7 @@ enum CommandId : uint8_t {
     CommandSetAudioReactiveHaptics = 0x22,
     CommandSetChordBindings = 0x23,
     CommandSetPlayerLedEnabled = 0x24,
+    CommandSetClassicRumbleV1 = 0x25,
 };
 
 enum AckResult : uint8_t {
@@ -1392,18 +1393,13 @@ void submit_classic_rumble_test_output(uint8_t right, uint8_t left) {
     }
 
     uint8_t payload[ds5::output::kCommonPayloadSize]{};
-    payload[ds5::output::kValidFlag0Offset] = static_cast<uint8_t>(
-        ds5::output::kFlag0CompatibleVibration | ds5::output::kFlag0HapticsSelect
-    );
-    payload[ds5::output::kMotorRightOffset] = right;
-    payload[ds5::output::kMotorLeftOffset] = left;
+    controller_output_policy_render_classic_rumble_payload(payload, sizeof(payload), right, left);
     controller_output_submit_usb_payload(payload, sizeof(payload));
 }
 
 bool schedule_classic_rumble_test() {
     if (
         !bt_is_controller_connected()
-        || controller_output_policy_audio_haptics_replace_active()
         || classic_rumble_test_active
     ) {
         return false;
@@ -1931,6 +1927,17 @@ void handle_command(uint8_t const *buffer, uint16_t bufsize) {
             set_ack(command_id, sequence, AckOk);
             return;
 
+        case CommandSetClassicRumbleV1:
+            if (value > 1) {
+                set_ack(command_id, sequence, AckInvalidValue);
+                return;
+            }
+            bt_set_classic_rumble_v1_enabled(value == 1);
+            stop_classic_rumble_test();
+            settings_revision++;
+            set_ack(command_id, sequence, AckOk);
+            return;
+
         case CommandTestClassicRumble:
             if (value != 0) {
                 set_ack(command_id, sequence, AckInvalidValue);
@@ -2209,9 +2216,6 @@ void handle_command(uint8_t const *buffer, uint16_t bufsize) {
             ) {
                 set_ack(command_id, sequence, AckInvalidValue);
                 return;
-            }
-            if (suppress_classic_rumble) {
-                stop_classic_rumble_test();
             }
             settings_revision++;
             set_ack(command_id, sequence, AckOk);
