@@ -1,4 +1,4 @@
-import { app, BrowserWindow, Menu, Notification, Tray, ipcMain, nativeImage, screen, shell } from 'electron';
+import { app, BrowserWindow, Menu, Notification, Tray, ipcMain, nativeImage, powerMonitor, screen, shell } from 'electron';
 import { spawnSync } from 'node:child_process';
 import fs from 'node:fs';
 import path from 'node:path';
@@ -127,6 +127,23 @@ function applySnapshotWindowScale(snapshot: { settings: { uiScalePercent: UiScal
   }
 }
 
+function currentUiScalePercent(): UiScalePercent {
+  return bridgeService?.getSnapshot().settings.uiScalePercent ?? 100;
+}
+
+function restoreMainWindowScale(recenter: boolean): void {
+  const window = mainWindow;
+  if (!window || window.isDestroyed()) {
+    return;
+  }
+  applyWindowScale(window, currentUiScalePercent(), recenter);
+}
+
+function scheduleMainWindowScaleRestore(recenter: boolean): void {
+  setTimeout(() => restoreMainWindowScale(recenter), 0);
+  setTimeout(() => restoreMainWindowScale(recenter), 250);
+}
+
 function shouldStartInTray(argv = process.argv): boolean {
   return argv.includes(START_IN_TRAY_ARG);
 }
@@ -244,15 +261,17 @@ function showWindowCentered(): void {
     return;
   }
 
+  if (mainWindow.isMinimized()) {
+    mainWindow.restore();
+  }
+  restoreMainWindowScale(false);
+
   const display = screen.getPrimaryDisplay();
   const windowBounds = mainWindow.getBounds();
   const x = Math.round(display.workArea.x + (display.workArea.width - windowBounds.width) / 2);
   const y = Math.round(display.workArea.y + (display.workArea.height - windowBounds.height) / 2);
 
   mainWindow.setPosition(x, y, false);
-  if (mainWindow.isMinimized()) {
-    mainWindow.restore();
-  }
   mainWindow.show();
   mainWindow.focus();
 }
@@ -836,11 +855,17 @@ app.whenReady().then(async () => {
   mainWindow = createWindow(settingsStore.get().uiScalePercent);
   mainWindow.on('maximize', sendWindowMaximizedState);
   mainWindow.on('unmaximize', sendWindowMaximizedState);
+  mainWindow.on('show', () => scheduleMainWindowScaleRestore(false));
+  mainWindow.on('restore', () => scheduleMainWindowScaleRestore(false));
+  mainWindow.on('focus', () => scheduleMainWindowScaleRestore(false));
   mainWindow.once('ready-to-show', () => {
     if (!shouldStartInTray()) {
       showWindowCentered();
     }
   });
+  powerMonitor.on('resume', () => scheduleMainWindowScaleRestore(true));
+  powerMonitor.on('unlock-screen', () => scheduleMainWindowScaleRestore(true));
+  screen.on('display-metrics-changed', () => scheduleMainWindowScaleRestore(true));
 
   tray = new Tray(await createTrayIcon());
   tray.setToolTip(APP_NAME);
