@@ -235,7 +235,7 @@ static bool prime_host_audio_route_if_needed();
 static bool audio_silence_tail_active(uint32_t now);
 static uint8_t clamp_debug_u8(uint32_t value);
 static void refresh_audio_haptics_replace_policy();
-static bool merge_test_haptics_overlay(int8_t *destination);
+static bool merge_test_haptics_overlay(int8_t *destination, bool carrier_paced);
 static bool append_resampled_haptic_sample(float left, float right, float gain);
 #if DS5_AUDIO_DEBUG_ENABLED
 static void audio_debug_log_impl(
@@ -996,7 +996,7 @@ static bool send_audio_haptics_packet(
     }
 
     if (merge_test_overlay) {
-        (void)merge_test_haptics_overlay(final_haptics);
+        (void)merge_test_haptics_overlay(final_haptics, include_speaker);
     }
     memcpy(pkt + 78, final_haptics, SAMPLE_SIZE);
 #ifdef ENABLE_COMPANION
@@ -1250,7 +1250,7 @@ static void mix_haptics_overlay(int8_t *destination, int8_t const *overlay) {
     }
 }
 
-static bool merge_test_haptics_overlay(int8_t *destination) {
+static bool merge_test_haptics_overlay(int8_t *destination, bool carrier_paced) {
     if (!test_haptics_active) {
         return false;
     }
@@ -1265,10 +1265,12 @@ static bool merge_test_haptics_overlay(int8_t *destination) {
     }
 
     const uint32_t now = time_us_32();
-    if (
-        test_haptics_last_packet_us != 0
-        && static_cast<uint32_t>(now - test_haptics_last_packet_us) < TEST_HAPTICS_PACKET_INTERVAL_US
-    ) {
+    if (!haptics_test_signal_packet_due(
+            now,
+            test_haptics_last_packet_us,
+            TEST_HAPTICS_PACKET_INTERVAL_US,
+            carrier_paced
+        )) {
         return false;
     }
 
@@ -1332,12 +1334,15 @@ bool audio_schedule_test_haptics() {
     test_haptics_cooldown_until_us = 0;
 
     const bool audio_carrier_active = audio_silence_tail_active(now);
+    const bool keep_speaker_route = should_keep_speaker_route_open();
     if (!audio_carrier_active) {
         drain_audio_queues();
         clear_partial_audio_state();
-        bt_set_speaker_output_enabled(false);
-        speaker_route_active = false;
-        speaker_route_headset = false;
+        if (!keep_speaker_route) {
+            bt_set_speaker_output_enabled(false);
+            speaker_route_active = false;
+            speaker_route_headset = false;
+        }
         last_audio_us = 0;
     }
     test_haptics_active = true;
@@ -1566,8 +1571,8 @@ void audio_test_haptics_loop() {
     }
 
     int8_t haptic_buf[SAMPLE_SIZE]{};
-    if (merge_test_haptics_overlay(haptic_buf)) {
-        send_audio_haptics_packet(haptic_buf, false, false);
+    if (merge_test_haptics_overlay(haptic_buf, false)) {
+        send_audio_haptics_packet(haptic_buf, speaker_route_active, false);
     }
 }
 

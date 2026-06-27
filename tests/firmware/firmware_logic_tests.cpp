@@ -616,6 +616,16 @@ void haptics_test_signal_drives_left_and_right_actuators_opposite_phase() {
     }
 }
 
+void haptics_test_signal_allows_carrier_paced_packets_without_wall_clock_gap() {
+    constexpr uint32_t interval_us = 10666;
+    constexpr uint32_t last_packet_us = 100000;
+
+    EXPECT_FALSE(haptics_test_signal_packet_due(last_packet_us + interval_us - 1, last_packet_us, interval_us, false));
+    EXPECT_TRUE(haptics_test_signal_packet_due(last_packet_us + 1, last_packet_us, interval_us, true));
+    EXPECT_TRUE(haptics_test_signal_packet_due(last_packet_us + interval_us, last_packet_us, interval_us, false));
+    EXPECT_TRUE(haptics_test_signal_packet_due(last_packet_us + 1, 0, interval_us, false));
+}
+
 void dualsense_decoder_extracts_normalized_controller_state() {
     const auto report = sample_dualsense_input_report();
     BridgeControllerState state{};
@@ -850,6 +860,7 @@ std::vector<TestCase> tests{
     {"haptics test signal matches original main packet flip pattern", haptics_test_signal_matches_original_main_packet_flip_pattern},
     {"haptics test signal is constant inside each original packet", haptics_test_signal_is_constant_inside_each_original_packet},
     {"haptics test signal drives left and right actuators opposite phase", haptics_test_signal_drives_left_and_right_actuators_opposite_phase},
+    {"haptics test signal allows carrier paced packets without wall clock gap", haptics_test_signal_allows_carrier_paced_packets_without_wall_clock_gap},
     {"dualsense decoder extracts normalized controller state", dualsense_decoder_extracts_normalized_controller_state},
     {"dualsense persona preserves native report bytes", dualsense_persona_preserves_native_report_bytes},
     {"xusb360 persona maps standard gamepad fields", xusb360_persona_maps_standard_gamepad_fields},
