@@ -70,6 +70,9 @@ const api = {
     ipcRenderer.invoke('bridge:setAdaptiveTriggersEnabled', value)
   ),
   setSpeakerVolume: (value: number): Promise<BridgeSnapshot> => ipcRenderer.invoke('bridge:setSpeakerVolume', value),
+  setSpeakerGainLevel: (value: number): Promise<BridgeSnapshot> => (
+    ipcRenderer.invoke('bridge:setSpeakerGainLevel', value)
+  ),
   setSpeakerEnabled: (value: boolean): Promise<BridgeSnapshot> => ipcRenderer.invoke('bridge:setSpeakerEnabled', value),
   setMicVolume: (value: number): Promise<BridgeSnapshot> => ipcRenderer.invoke('bridge:setMicVolume', value),
   setMicMute: (value: boolean): Promise<BridgeSnapshot> => ipcRenderer.invoke('bridge:setMicMute', value),

@@ -88,6 +88,7 @@ type StatusOverrides = {
   controllerConnected?: boolean;
   batteryPercent?: number;
   speakerVolumePercent?: number;
+  speakerGainLevel?: number;
   idleDisconnectTimeoutMinutes?: number;
   settingsRevision?: number;
   uptimeSeconds?: number;
@@ -114,6 +115,7 @@ const FULL_REAPPLY_COMMANDS = [
   COMMAND_ID.SET_CLASSIC_RUMBLE_GAIN,
   COMMAND_ID.SET_CLASSIC_RUMBLE_V1,
   COMMAND_ID.SET_TRIGGER_EFFECT_INTENSITY,
+  COMMAND_ID.SET_SPEAKER_GAIN,
   COMMAND_ID.SET_SPEAKER_VOLUME,
   COMMAND_ID.SET_DUPLEX_ENABLED,
   COMMAND_ID.SET_MIC_VOLUME,
@@ -297,6 +299,7 @@ function statusReport(overrides: StatusOverrides = {}): number[] {
   report[48] = overrides.hostPersonaMode === 'xbox' ? 1 : overrides.hostPersonaMode === 'ds4' ? 2 : 0;
   report[49] = overrides.supportedHostPersonaModesMask ?? 0;
   report[51] = overrides.micMuted ? 1 : 0;
+  report[57] = overrides.speakerGainLevel ?? 4;
   return report;
 }
 
@@ -1154,6 +1157,24 @@ describe('BridgeService', () => {
     expect(command?.[9]).toBe(25);
     expect(snapshot.settings.speakerVolumePercent).toBe(25);
     expect(snapshot.status?.speakerVolumePercent).toBe(25);
+  });
+
+  it('sends speaker gain as a global pinned firmware amp setting', async () => {
+    const service = serviceFixture();
+    const device = new MockHidDevice();
+    device.status = statusReport({ controllerConnected: false, firmwareFlags: 0x05 });
+    hidMock.state.devicesList = [companionDeviceInfo()];
+    hidMock.state.openDevices.set('companion-path', device);
+
+    await poll(service);
+    const snapshot = await service.setSpeakerGainLevel(6);
+
+    const command = device.sentReports.at(-1);
+    expect(command?.[7]).toBe(COMMAND_ID.SET_SPEAKER_GAIN);
+    expect(command?.[9]).toBe(6);
+    expect(snapshot.settings.speakerGainLevel).toBe(6);
+    expect(snapshot.status?.speakerGainLevel).toBe(6);
+    expect(snapshot.settings.controllerProfiles[0]?.settings).not.toHaveProperty('speakerGainLevel');
   });
 
   it('stores audio reactive haptics settings and enables firmware DSP only for bridge output passthrough', async () => {

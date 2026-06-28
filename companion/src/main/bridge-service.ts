@@ -2188,6 +2188,21 @@ export class BridgeService extends EventEmitter {
     return this.getSnapshot();
   }
 
+  async setSpeakerGainLevel(level: number): Promise<BridgeSnapshot> {
+    const value = Math.max(1, Math.min(7, Math.round(level)));
+    await this.sendCommand(COMMAND_ID.SET_SPEAKER_GAIN, value, {
+      expectSettingsRevisionChange: true
+    });
+    this.snapshot.settings = this.settingsStore.update({
+      speakerGainLevel: value
+    });
+    if (this.snapshot.status) {
+      this.snapshot.status.speakerGainLevel = value;
+    }
+    this.emitSnapshot();
+    return this.getSnapshot();
+  }
+
   async setSpeakerEnabled(enabled: boolean): Promise<BridgeSnapshot> {
     const settings = this.settingsStore.get();
     await this.setFirmwareSpeakerVolume(enabled ? settings.speakerVolumePercent : 0, true);
@@ -3542,6 +3557,9 @@ export class BridgeService extends EventEmitter {
   }
 
   private async applySpeakerSettings(settings: CompanionSettings, expectSettingsRevisionChange: boolean): Promise<void> {
+    await this.sendCommand(COMMAND_ID.SET_SPEAKER_GAIN, settings.speakerGainLevel, {
+      expectSettingsRevisionChange
+    });
     await this.setFirmwareSpeakerVolume(settings.speakerEnabled ? settings.speakerVolumePercent : 0, expectSettingsRevisionChange);
   }
 

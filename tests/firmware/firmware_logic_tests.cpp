@@ -439,7 +439,7 @@ void output_state_audio_snapshot_routes_to_speaker_and_headphones_safely() {
     EXPECT_EQ(speaker[kMicVolumeOffset], 0);
     EXPECT_EQ(speaker[kMuteLedOffset], 0);
     EXPECT_EQ(speaker[kAudioControlOffset], kAudioFlagsOutputPathSpeaker);
-    EXPECT_EQ(speaker[kAudioControl2Offset], 0x03);
+    EXPECT_EQ(speaker[kAudioControl2Offset], 0x02);
 
     AudioSnapshot headset{};
     controller_output_state_copy_audio_snapshot(headset.data(), true);
@@ -449,7 +449,16 @@ void output_state_audio_snapshot_routes_to_speaker_and_headphones_safely() {
     EXPECT_EQ(headset[kHeadphoneVolumeOffset], kHeadphoneVolumeMax);
     EXPECT_EQ(headset[kSpeakerVolumeOffset], 0);
     EXPECT_EQ(headset[kAudioControlOffset], kAudioFlagsOutputPathHeadphones);
-    EXPECT_EQ(headset[kAudioControl2Offset], 0x03);
+    EXPECT_EQ(headset[kAudioControl2Offset], 0x02);
+
+    controller_output_state_set_speaker_gain(6);
+    controller_output_state_copy_audio_snapshot(speaker.data(), false);
+    EXPECT_EQ(speaker[kAudioControl2Offset], 0x06);
+
+    payload[kAudioControl2Offset] = 0x01;
+    controller_output_state_apply_host_payload(payload.data(), static_cast<uint8_t>(payload.size()));
+    controller_output_state_copy_audio_snapshot(speaker.data(), false);
+    EXPECT_EQ(speaker[kAudioControl2Offset], 0x06);
 }
 
 void output_state_audio_snapshot_preserves_adaptive_trigger_effects_and_motor_power() {

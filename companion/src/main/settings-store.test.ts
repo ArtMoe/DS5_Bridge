@@ -401,6 +401,17 @@ describe('SettingsStore', () => {
     expect(persistedSettings(userDataPath).speakerVolumePercent).toBe(45);
   });
 
+  it('keeps speaker gain global instead of storing it in controller profiles', () => {
+    const userDataPath = tempUserDataPath();
+    const store = new SettingsStore(userDataPath);
+
+    const updated = store.update({ speakerGainLevel: 6 });
+
+    expect(updated.speakerGainLevel).toBe(6);
+    expect(updated.controllerProfiles[0]?.settings).not.toHaveProperty('speakerGainLevel');
+    expect(persistedSettings(userDataPath).speakerGainLevel).toBe(6);
+  });
+
   it('persists audio haptics app-session sources', () => {
     const userDataPath = tempUserDataPath();
     const store = new SettingsStore(userDataPath);
@@ -468,6 +479,7 @@ describe('SettingsStore', () => {
       uiThemePreset: 'laserwave',
       lightbarColor: '#golden',
       speakerVolumePercent: 999,
+      speakerGainLevel: 99,
       idleDisconnectTimeoutMinutes: -10,
       controllerProfiles: [{
         id: DEFAULT_CONTROLLER_PROFILE_ID,
@@ -491,6 +503,7 @@ describe('SettingsStore', () => {
     expect(settings.uiThemePreset).toBe(DEFAULT_SETTINGS.uiThemePreset);
     expect(settings.lightbarColor).toBe(DEFAULT_SETTINGS.lightbarColor);
     expect(settings.speakerVolumePercent).toBe(100);
+    expect(settings.speakerGainLevel).toBe(7);
     expect(settings.idleDisconnectTimeoutMinutes).toBe(1);
     expect(settings.controllerProfiles[0]?.name).toBe('Default');
     expect(settings.controllerProfiles[0]?.settings.speakerVolumePercent).toBe(100);

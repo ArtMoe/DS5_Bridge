@@ -20,6 +20,8 @@ void controller_output_state_set_adaptive_trigger(
 );
 void controller_output_state_set_lightbar(uint8_t red, uint8_t green, uint8_t blue, uint8_t brightness_percent);
 void controller_output_state_set_player_led_enabled(bool enabled);
+void controller_output_state_set_speaker_gain(uint8_t gain);
+uint8_t controller_output_state_speaker_gain();
 bool controller_output_state_copy_player_led_report(uint8_t *destination, uint16_t len);
 void controller_output_state_copy_audio_snapshot(uint8_t *destination, bool headset_plugged);
 void controller_output_state_clear_triggers(uint8_t *payload);

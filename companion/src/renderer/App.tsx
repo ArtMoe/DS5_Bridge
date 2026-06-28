@@ -382,6 +382,15 @@ const HOST_PERSONA_OPTIONS: Array<[string, HostPersonaMode]> = [
   ['DualShock 4', 'ds4'],
   ['Xbox', 'xbox']
 ];
+const SPEAKER_GAIN_OPTIONS: Array<[string, number]> = [
+  ['1', 1],
+  ['2', 2],
+  ['3', 3],
+  ['4', 4],
+  ['5', 5],
+  ['6', 6],
+  ['7', 7]
+];
 const AUDIO_REACTIVE_HAPTICS_MODE_OPTIONS: Array<[string, AudioReactiveHapticsMode]> = [
   ['Mix', 'mix'],
   ['Replace', 'replace']
@@ -3442,6 +3451,9 @@ export function App() {
   const classicRumbleV1Enabled = Boolean(snapshot?.settings.classicRumbleV1Enabled);
   const activeHapticsFeatureEnabled = showClassicRumbleControl ? classicRumbleEnabled : hapticsEnabled;
   const speakerEnabled = Boolean(snapshot?.settings.speakerEnabled);
+  const speakerGainLevel = Math.max(1, Math.min(7, Math.round(
+    snapshot?.settings.speakerGainLevel ?? snapshot?.status?.speakerGainLevel ?? 4
+  )));
   const adaptiveTriggersEnabled = Boolean(snapshot?.settings.adaptiveTriggersEnabled);
   const lightbarEnabled = Boolean(snapshot?.settings.lightbarEnabled);
   const sleepKeybindEnabled = Boolean(snapshot?.settings.sleepKeybindEnabled);
@@ -4190,6 +4202,17 @@ export function App() {
     speakerVolumeEditingRef.current = true;
     setSpeakerVolumeValue(snappedValue);
     void commitSpeakerVolume(snappedValue);
+  }
+
+  function setSpeakerGainLevel(level: number) {
+    if (!snapshot) {
+      return;
+    }
+    const value = Math.max(1, Math.min(7, Math.round(level)));
+    if (value === snapshot.settings.speakerGainLevel) {
+      return;
+    }
+    void runQuietAction(() => window.bridge.setSpeakerGainLevel(value));
   }
 
   async function commitMicVolume(value = micVolumeValue) {
@@ -7047,20 +7070,42 @@ export function App() {
                   <h2>Audio</h2>
                   <p>{`Adjust controller ${outputControlLower} and microphone levels.`}</p>
                 </div>
-                <div className="audio-heading-controls">
-                  <div className="inline-switch">
-                    <span>Enabled</span>
-                    <button
-                      type="button"
-                      role="switch"
-                      aria-checked={audioEnabled}
-                      aria-label="Enable audio"
-                      className={`switch ${audioEnabled ? 'on' : ''}`}
-                      disabled={!controllerControlsAvailable || pendingAction !== null}
-                      onClick={toggleAudioEnabled}
-                    >
-                      <span />
-                    </button>
+                <div className="audio-heading-actions">
+                  <div className="chords-field chords-inline-field audio-speaker-gain-field">
+                    <span>Speaker Gain</span>
+                    <CustomSelect
+                      value={speakerGainLevel}
+                      options={SPEAKER_GAIN_OPTIONS}
+                      disabled={!controllerControlsAvailable || !speakerVolumeSupported || pendingAction !== null}
+                      ariaLabel="Speaker gain"
+                      className="audio-speaker-gain-select"
+                      closeOnSelect={true}
+                      onChange={setSpeakerGainLevel}
+                      renderValue={(_label, value) => (
+                        <span>{value}</span>
+                      )}
+                      renderOption={(label) => (
+                        <span className="speaker-gain-option">
+                          <strong>{label}</strong>
+                        </span>
+                      )}
+                    />
+                  </div>
+                  <div className="audio-heading-controls">
+                    <div className="inline-switch">
+                      <span>Enabled</span>
+                      <button
+                        type="button"
+                        role="switch"
+                        aria-checked={audioEnabled}
+                        aria-label="Enable audio"
+                        className={`switch ${audioEnabled ? 'on' : ''}`}
+                        disabled={!controllerControlsAvailable || pendingAction !== null}
+                        onClick={toggleAudioEnabled}
+                      >
+                        <span />
+                      </button>
+                    </div>
                   </div>
                 </div>
               </div>

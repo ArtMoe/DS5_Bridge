@@ -153,6 +153,7 @@ export const DEFAULT_SETTINGS: CompanionSettings = {
   triggerTestMode: DEFAULT_CONTROLLER_PROFILE_SETTINGS.triggerTestMode,
   speakerEnabled: DEFAULT_CONTROLLER_PROFILE_SETTINGS.speakerEnabled,
   speakerVolumePercent: DEFAULT_CONTROLLER_PROFILE_SETTINGS.speakerVolumePercent,
+  speakerGainLevel: 4,
   micVolumePercent: DEFAULT_CONTROLLER_PROFILE_SETTINGS.micVolumePercent,
   micMuted: DEFAULT_CONTROLLER_PROFILE_SETTINGS.micMuted,
   audioReactiveHapticsEnabled: DEFAULT_CONTROLLER_PROFILE_SETTINGS.audioReactiveHapticsEnabled,
@@ -893,6 +894,9 @@ function normalizeSettings(value: Partial<CompanionSettings> | null | undefined)
     speakerVolumePercent: Number.isFinite(value?.speakerVolumePercent)
       ? Math.max(0, Math.min(100, Math.round(value!.speakerVolumePercent!)))
       : DEFAULT_SETTINGS.speakerVolumePercent,
+    speakerGainLevel: Number.isFinite(value?.speakerGainLevel)
+      ? Math.max(1, Math.min(7, Math.round(value!.speakerGainLevel!)))
+      : DEFAULT_SETTINGS.speakerGainLevel,
     micVolumePercent: Number.isFinite(value?.micVolumePercent)
       ? Math.max(0, Math.min(100, Math.round(value!.micVolumePercent!)))
       : DEFAULT_SETTINGS.micVolumePercent,

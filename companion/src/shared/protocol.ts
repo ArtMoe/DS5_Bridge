@@ -4,7 +4,7 @@ export const REPORT_LENGTH = 64;
 export const PAYLOAD_LENGTH = 63;
 export const MAGIC = 'DS5B';
 export const PROTOCOL_MAJOR = 1;
-export const PROTOCOL_MINOR = 15;
+export const PROTOCOL_MINOR = 16;
 
 export const REPORT_ID = {
   STATUS: 0x01,
@@ -86,7 +86,8 @@ export const COMMAND_ID = {
   SET_AUDIO_REACTIVE_HAPTICS: 0x22,
   SET_CHORD_BINDINGS: 0x23,
   SET_PLAYER_LED_ENABLED: 0x24,
-  SET_CLASSIC_RUMBLE_V1: 0x25
+  SET_CLASSIC_RUMBLE_V1: 0x25,
+  SET_SPEAKER_GAIN: 0x32
 } as const;
 
 export const ACK_RESULT = {
@@ -403,6 +404,7 @@ export interface BridgeStatusPayload {
   hapticsReady: boolean;
   hapticsGainPercent: number;
   speakerVolumePercent: number;
+  speakerGainLevel: number;
   lightbarColor: {
     red: number;
     green: number;
@@ -677,6 +679,7 @@ export function parseStatusReport(report: ArrayLike<number>): BridgeStatusPayloa
     hapticsReady: report[12] === 1,
     hapticsGainPercent: readU16(report, 13),
     speakerVolumePercent: readU16(report, 29),
+    speakerGainLevel: Math.max(1, Math.min(7, report[57] || 4)),
     lightbarColor: {
       red: report[31],
       green: report[32],

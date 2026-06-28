@@ -67,7 +67,7 @@
 #define DS_OUTPUT_HEADPHONE_VOLUME_MAX 0x7f
 #define DS_OUTPUT_SPEAKER_VOLUME_MAX 0x64
 #define DS_OUTPUT_MIC_VOLUME_MAX 0x40
-#define DS_OUTPUT_AUDIO_FLAGS2_SPEAKER_PREAMP_GAIN 0x02
+#define DS_OUTPUT_AUDIO_FLAGS2_SPEAKER_PREAMP_GAIN 0x04
 #define DS_OUTPUT_LIGHTBAR_SETUP_LIGHT_OUT 0x02
 #define DS_TRIGGER_EFFECT_SIZE 11
 #define DS_TRIGGER_EFFECT_RIGHT_OFFSET 10
@@ -282,6 +282,7 @@ static uint32_t lightbar_restore_at_us = 0;
 static uint8_t state_report_seq = 0;
 static bool speaker_output_enabled = false;
 static bool speaker_output_headset_route = false;
+static uint8_t speaker_output_gain = DS_OUTPUT_AUDIO_FLAGS2_SPEAKER_PREAMP_GAIN;
 static uint8_t companion_mic_volume_percent = 100;
 static ControllerOutputRumbleStateMachine classic_rumble_state{};
 
@@ -899,12 +900,30 @@ static void send_speaker_output_state(bool enabled, bool headset_plugged) {
             report[3 + 1] = DS_OUTPUT_VALID_FLAG1_AUDIO_CONTROL2_ENABLE;
             report[3 + OUTPUT_PAYLOAD_SPEAKER_VOLUME_OFFSET] = DS_OUTPUT_SPEAKER_VOLUME_MAX;
             report[3 + OUTPUT_PAYLOAD_AUDIO_CONTROL_OFFSET] = DS_OUTPUT_AUDIO_FLAGS_OUTPUT_PATH_SPEAKER;
-            report[3 + OUTPUT_PAYLOAD_AUDIO_CONTROL2_OFFSET] = DS_OUTPUT_AUDIO_FLAGS2_SPEAKER_PREAMP_GAIN;
+            report[3 + OUTPUT_PAYLOAD_AUDIO_CONTROL2_OFFSET] = speaker_output_gain;
         }
     } else {
         report[3 + OUTPUT_PAYLOAD_AUDIO_CONTROL_OFFSET] = DS_OUTPUT_AUDIO_FLAGS_OUTPUT_PATH_HEADPHONES;
     }
     bt_write(report, sizeof(report));
+}
+
+static uint8_t normalize_speaker_output_gain(uint8_t gain) {
+    return std::min<uint8_t>(7, std::max<uint8_t>(1, gain));
+}
+
+void bt_set_speaker_output_gain(uint8_t gain) {
+    const uint8_t next_gain = normalize_speaker_output_gain(gain);
+    const bool changed = speaker_output_gain != next_gain;
+    speaker_output_gain = next_gain;
+    controller_output_state_set_speaker_gain(next_gain);
+    if (changed) {
+        bt_refresh_speaker_output();
+    }
+}
+
+uint8_t bt_speaker_output_gain() {
+    return speaker_output_gain;
 }
 
 void bt_set_speaker_output_enabled(bool enabled, bool headset_plugged, bool force) {
