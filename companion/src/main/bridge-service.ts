@@ -1715,6 +1715,16 @@ export class BridgeService extends EventEmitter {
     this.appendAudioDebugLines([`[SystemHaptics] restarted after persona transition persona=${mode}`]);
   }
 
+  private isBridgeRenderEndpointUnavailableError(error: unknown): boolean {
+    const message = error instanceof Error ? error.message : String(error);
+    return message.includes('Render endpoint matching') && message.includes('was not found');
+  }
+
+  private skipBridgeHapticsTest(reason: string): BridgeSnapshot {
+    this.appendAudioDebugLines([`[HostBridge] test haptics skipped: ${reason}`]);
+    return this.getSnapshot();
+  }
+
   private async readAudioDebugEvents(): Promise<void> {
     if (!AUDIO_DEBUG_DIAGNOSTICS_ENABLED) {
       return;
@@ -2723,8 +2733,21 @@ export class BridgeService extends EventEmitter {
   }
 
   async testHaptics(): Promise<BridgeSnapshot> {
+    const transition = this.hostPersonaTransitionMaskSnapshot();
+    if (transition) {
+      return this.skipBridgeHapticsTest(`switching to ${transition.to}`);
+    }
+
     const settings = this.settingsStore.get();
-    await playBridgeHapticsTestPattern(settings.hapticsGainPercent, this.currentHostPersonaMode());
+    const hostPersonaMode = this.currentHostPersonaMode();
+    try {
+      await playBridgeHapticsTestPattern(settings.hapticsGainPercent, hostPersonaMode);
+    } catch (error) {
+      if (this.isBridgeRenderEndpointUnavailableError(error)) {
+        return this.skipBridgeHapticsTest(`${hostPersonaModeLabel(hostPersonaMode)} audio endpoint unavailable`);
+      }
+      throw error;
+    }
     return this.getSnapshot();
   }
 

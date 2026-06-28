@@ -844,6 +844,43 @@ describe('BridgeService', () => {
     expect(audioHelperMock.playBridgeHapticsTestPattern).toHaveBeenCalledWith(130, hostPersonaMode);
   });
 
+  it('skips test haptics while a host persona transition is active', async () => {
+    const service = serviceFixture({ hapticsGainPercent: 130 });
+    const device = new MockHidDevice();
+    device.status = statusReport({
+      controllerConnected: false,
+      hostPersonaMode: 'dualsense',
+      supportedHostPersonaModesMask: 0x07
+    });
+    hidMock.state.devicesList = [companionDeviceInfo()];
+    hidMock.state.openDevices.set('companion-path', device);
+
+    await poll(service);
+    await service.setHostPersonaMode('xbox');
+    const snapshot = await service.testHaptics();
+
+    expect(audioHelperMock.playBridgeHapticsTestPattern).not.toHaveBeenCalled();
+    expect(snapshot.personaTransition?.to).toBe('xbox');
+    expect(snapshot.state).toBe('transitioning');
+  });
+
+  it('does not reject test haptics when the persona audio endpoint is still reconnecting', async () => {
+    const service = serviceFixture({ hapticsGainPercent: 130 });
+    const device = new MockHidDevice();
+    device.status = statusReport({ hostPersonaMode: 'xbox', supportedHostPersonaModesMask: 0x07 });
+    hidMock.state.devicesList = [companionDeviceInfo()];
+    hidMock.state.openDevices.set('companion-path', device);
+    audioHelperMock.playBridgeHapticsTestPattern.mockRejectedValueOnce(new Error(
+      "Unhandled exception. System.InvalidOperationException: Render endpoint matching persona 'xbox' ('Xbox 360 Controller for Windows') was not found."
+    ));
+
+    await poll(service);
+    const snapshot = await service.testHaptics();
+
+    expect(audioHelperMock.playBridgeHapticsTestPattern).toHaveBeenCalledWith(130, 'xbox');
+    expect(snapshot.settings.hapticsGainPercent).toBe(130);
+  });
+
   it('plays test speaker through the current persona audio endpoint', async () => {
     const service = serviceFixture({ speakerVolumePercent: 65 });
     const device = new MockHidDevice();
