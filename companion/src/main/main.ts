@@ -699,6 +699,7 @@ function registerIpc(service: BridgeService): void {
     service.setAdaptiveTriggersEnabled(value)
   ));
   ipcMain.handle('bridge:setSpeakerVolume', (_event, value: number) => service.setSpeakerVolume(value));
+  ipcMain.handle('bridge:setSpeakerGainLevel', (_event, value: number) => service.setSpeakerGainLevel(value));
   ipcMain.handle('bridge:setSpeakerEnabled', (_event, value: boolean) => service.setSpeakerEnabled(value));
   ipcMain.handle('bridge:setMicVolume', (_event, value: number) => service.setMicVolume(value));
   ipcMain.handle('bridge:setMicMute', (_event, value: boolean) => service.setMicMute(value));

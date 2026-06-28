@@ -3056,10 +3056,68 @@ button.overview-shortcut-chip {
   box-shadow: var(--shadow-panel);
 }
 
+.audio-heading-actions {
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 14px;
+}
+
 .audio-heading-controls .inline-switch {
   position: relative;
   min-height: 36px;
   padding: 0;
+}
+
+.chords-inline-field.audio-speaker-gain-field {
+  width: max-content;
+  grid-template-columns: max-content 56px;
+  flex: 0 0 auto;
+}
+
+.chords-inline-field.audio-speaker-gain-field > span {
+  white-space: nowrap;
+}
+
+.chords-inline-field.audio-speaker-gain-field .audio-speaker-gain-select {
+  width: 56px;
+}
+
+.chords-inline-field.audio-speaker-gain-field .custom-select-button {
+  grid-template-columns: max-content 16px;
+  justify-content: center;
+  gap: 5px;
+  padding: 0 7px;
+}
+
+.chords-inline-field.audio-speaker-gain-field .custom-select-button > span {
+  font-size: 13px;
+  font-weight: 760;
+}
+
+.chords-inline-field.audio-speaker-gain-field .custom-select-button > svg {
+  width: 16px;
+  height: 16px;
+}
+
+.audio-speaker-gain-select .custom-select-menu button {
+  grid-template-columns: max-content 14px;
+  justify-content: center;
+  gap: 4px;
+  padding: 0 7px;
+}
+
+.speaker-gain-option {
+  display: inline-flex;
+  min-width: 0;
+  align-items: center;
+}
+
+.speaker-gain-option strong {
+  color: var(--text-control);
+  font-size: 12px;
+  font-weight: 760;
 }
 
 .inline-state-badge {

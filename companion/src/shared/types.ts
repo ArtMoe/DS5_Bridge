@@ -42,6 +42,7 @@ export interface CompanionSettings {
   triggerTestMode: TriggerTestMode;
   speakerEnabled: boolean;
   speakerVolumePercent: number;
+  speakerGainLevel: number;
   micVolumePercent: number;
   micMuted: boolean;
   audioReactiveHapticsEnabled: boolean;

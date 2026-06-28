@@ -31,6 +31,10 @@ bool player_led_enabled = true;
 uint8_t cached_player_leds = 0;
 bool cached_player_leds_valid = false;
 
+uint8_t normalize_speaker_gain(uint8_t gain) {
+    return std::min<uint8_t>(7, std::max<uint8_t>(1, gain));
+}
+
 void clamp_speaker_volume() {
     if (state_data[kSpeakerVolumeOffset] > kSpeakerVolumeMax) {
         state_data[kSpeakerVolumeOffset] = kSpeakerVolumeMax;
@@ -372,13 +376,6 @@ void controller_output_state_apply_host_payload(uint8_t const *data, uint8_t len
     copy_payload_range_if_allowed(
         update,
         copy_len,
-        (update[kValidFlag1Offset] & kFlag1AudioControl2Enable) != 0,
-        kAudioControl2Offset,
-        1
-    );
-    copy_payload_range_if_allowed(
-        update,
-        copy_len,
         (update[kValidFlag1Offset] & kFlag1HapticLowPassFilterEnable) != 0,
         kHapticLowPassFilterOffset,
         1
@@ -470,6 +467,18 @@ void controller_output_state_set_player_led_enabled(bool enabled) {
     apply_current_player_led_policy(state_data);
 }
 
+void controller_output_state_set_speaker_gain(uint8_t gain) {
+    const uint8_t clamped = normalize_speaker_gain(gain);
+    state_data[kValidFlag1Offset] |= kFlag1AudioControl2Enable;
+    state_data[kAudioControl2Offset] = static_cast<uint8_t>(
+        (state_data[kAudioControl2Offset] & 0xF8) | clamped
+    );
+}
+
+uint8_t controller_output_state_speaker_gain() {
+    return normalize_speaker_gain(static_cast<uint8_t>(state_data[kAudioControl2Offset] & 0x07));
+}
+
 bool controller_output_state_copy_player_led_report(uint8_t *destination, uint16_t len) {
     if (destination == nullptr || len <= kPlayerLedsOffset) {
         return false;
@@ -515,7 +524,11 @@ void controller_output_state_copy_audio_snapshot(uint8_t *destination, bool head
     destination[kValidFlag0Offset] |= static_cast<uint8_t>(
         kFlag0AudioControlEnable | kFlag0SpeakerVolumeEnable
     );
+    destination[kValidFlag1Offset] |= kFlag1AudioControl2Enable;
     destination[kHeadphoneVolumeOffset] = kHeadphoneVolumeMax;
     destination[kSpeakerVolumeOffset] = kSpeakerVolumeMax;
     destination[kAudioControlOffset] = kAudioFlagsOutputPathSpeaker;
+    destination[kAudioControl2Offset] = static_cast<uint8_t>(
+        (destination[kAudioControl2Offset] & 0xF8) | controller_output_state_speaker_gain()
+    );
 }

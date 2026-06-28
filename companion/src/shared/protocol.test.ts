@@ -128,6 +128,7 @@ describe('companion protocol', () => {
     report[48] = 2;
     report[49] = 0x07;
     report[51] = 1;
+    report[57] = 6;
     report[60] = 1;
     report[61] = 0x68;
     report[62] = MUTE_KEYBOARD_HOLD_FLAG | MUTE_KEYBOARD_CHORD_STARTER_FLAG | 0x02;
@@ -138,6 +139,7 @@ describe('companion protocol', () => {
     expect(status.controllerType).toBe('dualsense-edge');
     expect(status.batteryPercent).toBe(80);
     expect(status.hapticsGainPercent).toBe(150);
+    expect(status.speakerGainLevel).toBe(6);
     expect(status.settingsRevision).toBe(3);
     expect(status.firmwareFlags.companion).toBe(true);
     expect(status.firmwareFlags.dse).toBe(true);
