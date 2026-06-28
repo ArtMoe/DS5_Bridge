@@ -45,6 +45,16 @@ sealed class EndpointManager
         return enumerator.GetDefaultAudioEndpoint(DataFlow.Render, Role.Multimedia);
     }
 
+    public static MMDevice SelectRenderBridgeEndpointForPersona(MMDeviceEnumerator enumerator, string? hostPersonaMode)
+    {
+        var devices = enumerator
+            .EnumerateAudioEndPoints(DataFlow.Render, DeviceState.Active)
+            .ToArray();
+
+        return FindKnownBridgeEndpointForPersona(devices, hostPersonaMode)
+            ?? throw BridgeEndpointNotFoundForPersona(devices, hostPersonaMode);
+    }
+
     public static MMDevice SelectDefaultRenderEndpoint(MMDeviceEnumerator enumerator)
     {
         return enumerator.GetDefaultAudioEndpoint(DataFlow.Render, Role.Multimedia);
@@ -70,11 +80,7 @@ sealed class EndpointManager
     public static void SetDefaultRenderBridgeEndpoint(string? hostPersonaMode)
     {
         using var enumerator = new MMDeviceEnumerator();
-        var devices = enumerator
-            .EnumerateAudioEndPoints(DataFlow.Render, DeviceState.Active)
-            .ToArray();
-        var device = FindKnownBridgeEndpointForPersona(devices, hostPersonaMode)
-            ?? throw new InvalidOperationException("No active DS5 Bridge render endpoint was found.");
+        var device = SelectRenderBridgeEndpointForPersona(enumerator, hostPersonaMode);
 
         SetDefaultRenderEndpoint(device);
         Console.Error.WriteLine($"status: default-render-set device='{device.FriendlyName}' persona='{hostPersonaMode ?? "auto"}'");
@@ -327,8 +333,18 @@ sealed class EndpointManager
         {
             "ds4" => ["Wireless Controller"],
             "xbox" => ["Xbox 360 Controller for Windows"],
-            _ => ["DS5 Bridge", "DualSense Wireless Controller"]
+            _ => ["DualSense Wireless Controller", "DS5 Bridge"]
         };
+    }
+
+    private static InvalidOperationException BridgeEndpointNotFoundForPersona(
+        MMDevice[] devices,
+        string? hostPersonaMode)
+    {
+        var expected = string.Join("' or '", BridgeEndpointAliasesForPersona(hostPersonaMode));
+        var available = string.Join(", ", devices.Select(device => $"'{device.FriendlyName}'"));
+        return new InvalidOperationException(
+            $"Render endpoint matching persona '{hostPersonaMode ?? "dualsense"}' ('{expected}') was not found. Available endpoints: {available}");
     }
 
     private static bool EndpointNameMatchesAlias(string friendlyName, string alias)

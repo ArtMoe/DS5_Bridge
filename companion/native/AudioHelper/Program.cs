@@ -129,7 +129,9 @@ static class AudioHelperTestTone
     public static void Play(HelperOptions options)
     {
         using var enumerator = new MMDeviceEnumerator();
-        var device = EndpointManager.SelectRenderEndpoint(enumerator, options.DeviceName);
+        var device = !string.IsNullOrWhiteSpace(options.BridgePersona)
+            ? EndpointManager.SelectRenderBridgeEndpointForPersona(enumerator, options.BridgePersona)
+            : EndpointManager.SelectRenderEndpoint(enumerator, options.DeviceName);
         using var output = new WasapiOut(device, AudioClientShareMode.Shared, false, 120);
         using var fileReader = OpenTestAudioFile(options.TestAudioPath);
         using var playbackStopped = new ManualResetEventSlim(false);
@@ -169,8 +171,67 @@ static class AudioHelperTestHaptics
 
     public static void Play(HelperOptions options)
     {
+        if (TryPlayViaBridgeFrames(options.HapticsGainPercent))
+        {
+            return;
+        }
+
+        PlayViaRenderEndpoint(options);
+    }
+
+    private static bool TryPlayViaBridgeFrames(int hapticsGainPercent)
+    {
+        using var transport = WinUsbBridgeTransport.TryOpen();
+        if (transport is null)
+        {
+            return false;
+        }
+
+        var frames = BuildTestFrames(hapticsGainPercent);
+        var hidReport = new byte[AudioConstants.HidReportBytes];
+        var stopwatch = Stopwatch.StartNew();
+        var nextWriteTicks = stopwatch.ElapsedTicks;
+        ushort sequence = 0;
+
+        foreach (var frame in frames)
+        {
+            WaitUntil(stopwatch, nextWriteTicks);
+            try
+            {
+                var written = LegacyFramePacketizer.WriteFastHidFragments(
+                    frame,
+                    sequence++,
+                    hidReport,
+                    report =>
+                    {
+                        transport.WriteReport(report);
+                        return true;
+                    },
+                    out _);
+                if (!written)
+                {
+                    return false;
+                }
+            }
+            catch (Exception error)
+            {
+                Console.Error.WriteLine(
+                    $"status: test-haptics-winusb-failed error='{error.GetType().Name}: {error.Message}'");
+                return false;
+            }
+            nextWriteTicks += AudioConstants.FrameIntervalTicks;
+        }
+
+        Console.Error.WriteLine("status: test-haptics-played transport=winusb");
+        return true;
+    }
+
+    private static void PlayViaRenderEndpoint(HelperOptions options)
+    {
         using var enumerator = new MMDeviceEnumerator();
-        var device = EndpointManager.SelectRenderEndpoint(enumerator, options.DeviceName);
+        var device = !string.IsNullOrWhiteSpace(options.BridgePersona)
+            ? EndpointManager.SelectRenderBridgeEndpointForPersona(enumerator, options.BridgePersona)
+            : EndpointManager.SelectRenderEndpoint(enumerator, options.DeviceName);
         var format = device.AudioClient.MixFormat;
         if (format.Channels < 4)
         {
@@ -179,19 +240,54 @@ static class AudioHelperTestHaptics
         }
 
         var pcm = BuildTestPcm(format, options.HapticsGainPercent);
-        using var stream = new MemoryStream(pcm);
-        using var waveStream = new RawSourceWaveStream(stream, format);
-        using var output = new WasapiOut(device, AudioClientShareMode.Shared, false, 80);
-        using var playbackStopped = new ManualResetEventSlim(false);
-        output.PlaybackStopped += (_, _) => playbackStopped.Set();
-        output.Init(waveStream);
-        output.Play();
-        if (!playbackStopped.Wait(TimeSpan.FromSeconds(3)))
+        var waveProvider = new BufferedWaveProvider(format)
         {
-            output.Stop();
-            playbackStopped.Wait(TimeSpan.FromMilliseconds(500));
-        }
+            BufferDuration = TimeSpan.FromSeconds(1),
+            DiscardOnBufferOverflow = false,
+            ReadFully = true
+        };
+        using var output = new WasapiOut(device, AudioClientShareMode.Shared, false, 80);
+        waveProvider.AddSamples(pcm, 0, pcm.Length);
+        output.Init(waveProvider);
+        output.Play();
+        var frameCount = pcm.Length / Math.Max(1, format.BlockAlign);
+        Thread.Sleep(TimeSpan.FromSeconds(frameCount / (double)format.SampleRate) + TimeSpan.FromMilliseconds(120));
+        output.Stop();
         Console.Error.WriteLine($"status: test-haptics-played '{device.FriendlyName}'");
+    }
+
+    internal static byte[][] BuildTestFrames(int gainPercent)
+    {
+        var packetTotal = PrerollPacketCount + PacketCount + NeutralPacketCount;
+        var frames = new byte[packetTotal][];
+        for (var index = 0; index < frames.Length; index++)
+        {
+            frames[index] = new byte[AudioConstants.CompactFrameBytes];
+        }
+
+        var gain = Math.Clamp(gainPercent, 0, MaxGainPercent);
+        for (var packet = 0; packet < PacketCount; packet++)
+        {
+            var amplitude = TestAmplitude(BaseAmplitude, gain, TestEnvelopePercent(packet, PacketCount));
+            if (amplitude <= 0)
+            {
+                continue;
+            }
+
+            var packetsRemaining = PacketCount - packet;
+            var positivePhase = (packetsRemaining & 1) != 0;
+            var left = positivePhase ? amplitude : -amplitude;
+            var right = positivePhase ? -amplitude : amplitude;
+            var frame = frames[PrerollPacketCount + packet];
+
+            for (var index = 0; index < AudioConstants.HapticBuckets * 2; index += 2)
+            {
+                frame[index] = unchecked((byte)(sbyte)left);
+                frame[index + 1] = unchecked((byte)(sbyte)right);
+            }
+        }
+
+        return frames;
     }
 
     internal static byte[] BuildTestPcm(WaveFormat format, int gainPercent)
@@ -286,6 +382,28 @@ static class AudioHelperTestHaptics
     private static short FloatToInt16(float sample)
     {
         return (short)Math.Round(Math.Clamp(sample, -1, 1) * short.MaxValue);
+    }
+
+    private static void WaitUntil(Stopwatch stopwatch, long targetTicks)
+    {
+        while (true)
+        {
+            var remainingTicks = targetTicks - stopwatch.ElapsedTicks;
+            if (remainingTicks <= 0)
+            {
+                return;
+            }
+
+            var remainingMs = remainingTicks * 1000 / Stopwatch.Frequency;
+            if (remainingMs > 2)
+            {
+                Thread.Sleep(1);
+            }
+            else
+            {
+                Thread.Yield();
+            }
+        }
     }
 }
 
@@ -690,10 +808,8 @@ sealed class AudioHelper : IDisposable
     {
         var sourceDevice = EndpointManager.SelectDefaultRenderEndpoint(enumerator);
         var sourceName = sourceDevice.FriendlyName;
-        var targetDevice = HapticsFrameOutput
-            ? null
-            : EndpointManager.SelectRenderEndpoint(enumerator, options.DeviceName ?? "DS5 Bridge");
-        var targetName = targetDevice?.FriendlyName ?? options.DeviceName ?? "frame haptics";
+        var targetDevice = HapticsFrameOutput ? null : SelectHapticsMirrorTargetEndpoint(enumerator);
+        var targetName = HapticsMirrorTargetName(targetDevice);
 
         if (
             !HapticsFrameOutput
@@ -756,10 +872,8 @@ sealed class AudioHelper : IDisposable
             return;
         }
 
-        var targetDevice = HapticsFrameOutput
-            ? null
-            : EndpointManager.SelectRenderEndpoint(enumerator, options.DeviceName ?? "DS5 Bridge");
-        var targetName = targetDevice?.FriendlyName ?? options.DeviceName ?? "frame haptics";
+        var targetDevice = HapticsFrameOutput ? null : SelectHapticsMirrorTargetEndpoint(enumerator);
+        var targetName = HapticsMirrorTargetName(targetDevice);
         var targetFormat = TryStartHapticsMirrorOutput(targetDevice, targetName);
         if (targetFormat is null)
         {
@@ -817,6 +931,25 @@ sealed class AudioHelper : IDisposable
                 $"status: capture-unavailable reason=app-loopback-unavailable processId={selectedSession.ProcessId} error='{EscapeStatusValue(error.Message)}'");
             stopped.Set();
         }
+    }
+
+    private MMDevice SelectHapticsMirrorTargetEndpoint(MMDeviceEnumerator enumerator)
+    {
+        return !string.IsNullOrWhiteSpace(options.BridgePersona)
+            ? EndpointManager.SelectRenderBridgeEndpointForPersona(enumerator, options.BridgePersona)
+            : EndpointManager.SelectRenderEndpoint(enumerator, options.DeviceName ?? "DS5 Bridge");
+    }
+
+    private string HapticsMirrorTargetName(MMDevice? targetDevice)
+    {
+        if (targetDevice is not null)
+        {
+            return targetDevice.FriendlyName;
+        }
+
+        return !string.IsNullOrWhiteSpace(options.BridgePersona)
+            ? $"persona {options.BridgePersona}"
+            : options.DeviceName ?? "frame haptics";
     }
 
     private WaveFormat? TryStartHapticsMirrorOutput(MMDevice? targetDevice, string targetName)

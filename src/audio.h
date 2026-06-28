@@ -63,6 +63,7 @@ struct audio_status {
 
 void audio_init();
 void audio_loop();
+void audio_handle_bridge_audio_report(uint8_t const *report, uint16_t len);
 void audio_test_haptics_loop();
 bool audio_schedule_test_haptics();
 bool audio_test_haptics_busy();

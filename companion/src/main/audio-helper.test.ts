@@ -54,6 +54,7 @@ vi.mock('node:fs', () => ({
 import {
   AudioHapticsSessionMonitor,
   playBridgeHapticsTestPattern,
+  playBridgeSpeakerTestTone,
   SystemAudioHapticsEngine
 } from './audio-helper';
 
@@ -80,7 +81,7 @@ describe('SystemAudioHapticsEngine app source', () => {
       response: 'strong',
       attack: 'fast',
       release: 'smooth'
-    });
+    }, 'xbox');
 
     const helper = childProcessMock.processes[0]!;
     helper.stderr.emit('data', Buffer.from('status: recording-started\n'));
@@ -94,6 +95,10 @@ describe('SystemAudioHapticsEngine app source', () => {
     expect(args).toContain('C:\\Games\\Game.exe');
     expect(args).toContain('--haptics-app-executable');
     expect(args).toContain('Game.exe');
+    expect(args).toContain('--bridge-persona');
+    expect(args).toContain('xbox');
+    expect(args).not.toContain('--device-name');
+    expect(args).not.toContain('DS5 Bridge');
     expect(args).not.toContain('--stdout-only');
 
     await engine.stop();
@@ -102,8 +107,8 @@ describe('SystemAudioHapticsEngine app source', () => {
 });
 
 describe('bridge haptics test', () => {
-  it('launches the helper against the bridge endpoint with clamped haptics gain', async () => {
-    const play = playBridgeHapticsTestPattern(500);
+  it('launches the helper against the persona bridge endpoint with clamped haptics gain', async () => {
+    const play = playBridgeHapticsTestPattern(500, 'ds4');
     const helper = childProcessMock.processes[0]!;
 
     helper.emit('exit', 0, null);
@@ -113,10 +118,32 @@ describe('bridge haptics test', () => {
     const args = childProcessMock.spawn.mock.calls[0]![1] as string[];
     expect(args).toEqual([
       '--play-test-haptics',
-      '--device-name',
-      'DS5 Bridge',
+      '--bridge-persona',
+      'ds4',
       '--haptics-gain',
       '200'
+    ]);
+  });
+});
+
+describe('bridge speaker test', () => {
+  it('launches the helper against the persona bridge endpoint', async () => {
+    const play = playBridgeSpeakerTestTone(65, 'xbox');
+    const helper = childProcessMock.processes[0]!;
+
+    helper.emit('exit', 0, null);
+    await play;
+
+    expect(childProcessMock.spawn).toHaveBeenCalledTimes(1);
+    const args = childProcessMock.spawn.mock.calls[0]![1] as string[];
+    expect(args).toEqual([
+      '--play-test-tone',
+      '--bridge-persona',
+      'xbox',
+      '--test-audio-path',
+      expect.stringContaining('test-speaker-tone-silence-tail.mp3'),
+      '--speaker-volume',
+      '65'
     ]);
   });
 });

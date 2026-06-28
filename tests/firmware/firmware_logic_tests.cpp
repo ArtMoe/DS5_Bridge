@@ -609,6 +609,35 @@ void output_state_preserves_selector_zero_and_ignores_motor_only_rumble() {
     EXPECT_EQ(snapshot[kMotorLeftOffset], 0);
 }
 
+void output_state_strip_zero_classic_rumble_only_removes_idle_selector() {
+    Payload payload = empty_payload();
+    payload[kValidFlag0Offset] = kFlag0CompatibleVibration | kFlag0HapticsSelect | kFlag0AudioControlEnable;
+    payload[kValidFlag2Offset] = kFlag2EnableImprovedRumbleEmulation | kFlag2UseRumbleNotHaptics2;
+
+    controller_output_state_strip_zero_classic_rumble(payload.data(), static_cast<uint16_t>(payload.size()));
+
+    EXPECT_FALSE((payload[kValidFlag0Offset] & kFlag0CompatibleVibration) != 0);
+    EXPECT_FALSE((payload[kValidFlag0Offset] & kFlag0HapticsSelect) != 0);
+    EXPECT_TRUE((payload[kValidFlag0Offset] & kFlag0AudioControlEnable) != 0);
+    EXPECT_FALSE((payload[kValidFlag2Offset] & kFlag2EnableImprovedRumbleEmulation) != 0);
+    EXPECT_FALSE((payload[kValidFlag2Offset] & kFlag2UseRumbleNotHaptics2) != 0);
+
+    payload = empty_payload();
+    payload[kValidFlag0Offset] = kFlag0CompatibleVibration | kFlag0HapticsSelect;
+    payload[kValidFlag2Offset] = kFlag2EnableImprovedRumbleEmulation | kFlag2UseRumbleNotHaptics2;
+    payload[kMotorRightOffset] = 9;
+    payload[kMotorLeftOffset] = 1;
+
+    controller_output_state_strip_zero_classic_rumble(payload.data(), static_cast<uint16_t>(payload.size()));
+
+    EXPECT_TRUE((payload[kValidFlag0Offset] & kFlag0CompatibleVibration) != 0);
+    EXPECT_TRUE((payload[kValidFlag0Offset] & kFlag0HapticsSelect) != 0);
+    EXPECT_TRUE((payload[kValidFlag2Offset] & kFlag2EnableImprovedRumbleEmulation) != 0);
+    EXPECT_TRUE((payload[kValidFlag2Offset] & kFlag2UseRumbleNotHaptics2) != 0);
+    EXPECT_EQ(payload[kMotorRightOffset], 9);
+    EXPECT_EQ(payload[kMotorLeftOffset], 1);
+}
+
 void output_state_clear_classic_rumble_clears_cached_selector_state() {
     reset_output_state();
 
@@ -1163,6 +1192,7 @@ std::vector<TestCase> tests{
     {"output state player led reenabled restores host indicator", output_state_player_led_reenabled_restores_host_indicator},
     {"output state player led release invalidates cached indicator", output_state_player_led_release_invalidates_cached_indicator},
     {"output state preserves selector zero and ignores motor only rumble", output_state_preserves_selector_zero_and_ignores_motor_only_rumble},
+    {"output state strip zero classic rumble only removes idle selector", output_state_strip_zero_classic_rumble_only_removes_idle_selector},
     {"output state clear classic rumble clears cached selector state", output_state_clear_classic_rumble_clears_cached_selector_state},
     {"output state preserves haptic low pass filter byte", output_state_preserves_haptic_low_pass_filter_byte},
     {"output state clear triggers removes effect bytes flags and power", output_state_clear_triggers_removes_effect_bytes_flags_and_power},

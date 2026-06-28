@@ -9,6 +9,7 @@ void controller_output_state_reset();
 void controller_output_state_apply_host_payload(uint8_t const *data, uint8_t len);
 bool controller_output_state_classic_rumble_active();
 void controller_output_state_clear_classic_rumble();
+void controller_output_state_strip_zero_classic_rumble(uint8_t *payload, uint16_t len);
 void controller_output_state_set_adaptive_trigger(
     uint8_t const *right_trigger,
     bool right_valid,

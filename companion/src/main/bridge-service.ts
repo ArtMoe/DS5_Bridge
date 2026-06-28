@@ -1321,6 +1321,12 @@ export class BridgeService extends EventEmitter {
     return Boolean(status?.controllerConnected);
   }
 
+  private currentHostPersonaMode(): HostPersonaMode {
+    return normalizeHostPersonaMode(
+      this.snapshot.status?.hostPersonaMode ?? this.settingsStore.get().hostPersonaMode
+    );
+  }
+
   private async stopAudioHapticsSessionPolling(): Promise<void> {
     this.audioHapticsSessionCache = null;
     this.audioHapticsSessionListInFlight = null;
@@ -2702,12 +2708,14 @@ export class BridgeService extends EventEmitter {
   }
 
   async testHaptics(): Promise<BridgeSnapshot> {
-    await playBridgeHapticsTestPattern(this.settingsStore.get().hapticsGainPercent);
+    const settings = this.settingsStore.get();
+    await playBridgeHapticsTestPattern(settings.hapticsGainPercent, this.currentHostPersonaMode());
     return this.getSnapshot();
   }
 
   async testSpeaker(): Promise<BridgeSnapshot> {
-    await playBridgeSpeakerTestTone(this.settingsStore.get().speakerVolumePercent);
+    const settings = this.settingsStore.get();
+    await playBridgeSpeakerTestTone(settings.speakerVolumePercent, this.currentHostPersonaMode());
     return this.getSnapshot();
   }
 
@@ -3018,7 +3026,7 @@ export class BridgeService extends EventEmitter {
     }
 
     try {
-      await this.systemAudioHapticsEngine.start(this.systemAudioHapticsConfig(settings));
+      await this.systemAudioHapticsEngine.start(this.systemAudioHapticsConfig(settings), this.currentHostPersonaMode());
       if (this.systemAudioHapticsPassthroughActive) {
         this.systemAudioHapticsPassthroughActive = false;
         await this.applyAudioReactiveHapticsSettings(settings, false);

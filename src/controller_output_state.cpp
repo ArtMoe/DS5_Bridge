@@ -231,6 +231,31 @@ void controller_output_state_clear_classic_rumble() {
     state_data[kMotorLeftOffset] = 0;
 }
 
+void controller_output_state_strip_zero_classic_rumble(uint8_t *payload, uint16_t len) {
+    if (payload == nullptr || len <= kMotorLeftOffset) {
+        return;
+    }
+
+    if ((payload[kMotorRightOffset] | payload[kMotorLeftOffset]) != 0) {
+        return;
+    }
+
+    payload[kValidFlag0Offset] = static_cast<uint8_t>(
+        payload[kValidFlag0Offset] & static_cast<uint8_t>(~(
+            kFlag0CompatibleVibration | kFlag0HapticsSelect
+        ))
+    );
+    if (len > kValidFlag2Offset) {
+        payload[kValidFlag2Offset] = static_cast<uint8_t>(
+            payload[kValidFlag2Offset] & static_cast<uint8_t>(~(
+                kFlag2EnableImprovedRumbleEmulation | kFlag2UseRumbleNotHaptics2
+            ))
+        );
+    }
+    payload[kMotorRightOffset] = 0;
+    payload[kMotorLeftOffset] = 0;
+}
+
 void controller_output_state_apply_host_payload(uint8_t const *data, uint8_t len) {
     if (data == nullptr || len < kCommonPayloadSize) {
         return;

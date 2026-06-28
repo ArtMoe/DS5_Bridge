@@ -776,9 +776,38 @@ describe('BridgeService', () => {
     await poll(service);
     const snapshot = await service.testHaptics();
 
-    expect(audioHelperMock.playBridgeHapticsTestPattern).toHaveBeenCalledWith(130);
+    expect(audioHelperMock.playBridgeHapticsTestPattern).toHaveBeenCalledWith(130, 'dualsense');
     expect(device.sentReports.some((report) => report[7] === COMMAND_ID.TEST_HAPTICS)).toBe(false);
     expect(snapshot.settings.hapticsGainPercent).toBe(130);
+  });
+
+  it.each([
+    ['ds4' as const],
+    ['xbox' as const]
+  ])('plays test haptics through the %s persona audio endpoint', async (hostPersonaMode) => {
+    const service = serviceFixture({ hapticsGainPercent: 130 });
+    const device = new MockHidDevice();
+    device.status = statusReport({ hostPersonaMode, supportedHostPersonaModesMask: 0x07 });
+    hidMock.state.devicesList = [companionDeviceInfo()];
+    hidMock.state.openDevices.set('companion-path', device);
+
+    await poll(service);
+    await service.testHaptics();
+
+    expect(audioHelperMock.playBridgeHapticsTestPattern).toHaveBeenCalledWith(130, hostPersonaMode);
+  });
+
+  it('plays test speaker through the current persona audio endpoint', async () => {
+    const service = serviceFixture({ speakerVolumePercent: 65 });
+    const device = new MockHidDevice();
+    device.status = statusReport({ hostPersonaMode: 'xbox', supportedHostPersonaModesMask: 0x07 });
+    hidMock.state.devicesList = [companionDeviceInfo()];
+    hidMock.state.openDevices.set('companion-path', device);
+
+    await poll(service);
+    await service.testSpeaker();
+
+    expect(audioHelperMock.playBridgeSpeakerTestTone).toHaveBeenCalledWith(65, 'xbox');
   });
 
   it('sends rumble test commands without rejecting busy ACKs', async () => {
@@ -1091,6 +1120,7 @@ describe('BridgeService', () => {
       audioReactiveHapticsEnabled: true
     });
     const device = new MockHidDevice();
+    device.status = statusReport({ hostPersonaMode: 'ds4', supportedHostPersonaModesMask: 0x07 });
     hidMock.state.devicesList = [companionDeviceInfo()];
     hidMock.state.openDevices.set('companion-path', device);
 
@@ -1119,7 +1149,7 @@ describe('BridgeService', () => {
     expect(start).toHaveBeenCalledWith(expect.objectContaining({
       source: 'system-audio',
       gainPercent: 100
-    }));
+    }), 'ds4');
   });
 
   it('preserves selected audio haptics app source on partial config updates', async () => {

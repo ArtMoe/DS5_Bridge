@@ -76,6 +76,11 @@
 #define HOST_MIC_PLC_TARGET_DEPTH 1
 #define HOST_MIC_PLC_RESERVOIR_BYTES (40 * HOST_MIC_USB_PACKET_BYTES)
 #define HOST_MIC_PLC_EMPTY_GRACE_US 30000
+#define BRIDGE_AUDIO_STREAM_REPORT_ID 0x07
+#define BRIDGE_AUDIO_FAST_FRAME_FRAGMENT_TYPE 0x08
+#define BRIDGE_AUDIO_FAST_PAYLOAD_BYTES 57
+#define BRIDGE_AUDIO_COMPACT_FRAME_BYTES 264
+#define BRIDGE_AUDIO_MAX_FRAGMENTS ((BRIDGE_AUDIO_COMPACT_FRAME_BYTES + BRIDGE_AUDIO_FAST_PAYLOAD_BYTES - 1) / BRIDGE_AUDIO_FAST_PAYLOAD_BYTES)
 using std::clamp;
 using std::max;
 
@@ -161,6 +166,11 @@ static uint8_t hid_output_debug_burst_remaining = 0;
 static bool audio_silence_tail_logged = false;
 static uint8_t speaker_silence_preroll_packets_remaining = 0;
 static uint32_t speaker_silence_preroll_last_packet_us = 0;
+static uint8_t bridge_audio_frame[BRIDGE_AUDIO_COMPACT_FRAME_BYTES];
+static uint16_t bridge_audio_sequence = 0;
+static uint8_t bridge_audio_next_fragment = 0;
+static uint8_t bridge_audio_expected_fragments = 0;
+static bool bridge_audio_receiving = false;
 alignas(8) static uint32_t audio_core1_stack[8192];
 queue_t audio_fifo;
 queue_t mic_fifo;
@@ -236,6 +246,7 @@ static bool audio_silence_tail_active(uint32_t now);
 static uint8_t clamp_debug_u8(uint32_t value);
 static void refresh_audio_haptics_replace_policy();
 static bool merge_test_haptics_overlay(int8_t *destination, bool carrier_paced);
+static bool haptic_samples_nonzero(int8_t const *samples);
 static bool append_resampled_haptic_sample(float left, float right, float gain);
 #if DS5_AUDIO_DEBUG_ENABLED
 static void audio_debug_log_impl(
@@ -994,6 +1005,9 @@ static bool send_audio_haptics_packet(
     if (merge_test_overlay) {
         (void)merge_test_haptics_overlay(final_haptics, include_speaker);
     }
+    if (haptic_samples_nonzero(final_haptics)) {
+        controller_output_state_strip_zero_classic_rumble(pkt + 13, ds5::output::kAudioStateSnapshotSize);
+    }
     memcpy(pkt + 78, final_haptics, SAMPLE_SIZE);
 #ifdef ENABLE_COMPANION
     companion_note_feedback_trace_samples(
@@ -1008,6 +1022,83 @@ static bool send_audio_haptics_packet(
 #endif
 
     return bt_write_audio_stream(pkt, sizeof(pkt));
+}
+
+static void bridge_audio_reset_reassembly() {
+    bridge_audio_next_fragment = 0;
+    bridge_audio_expected_fragments = 0;
+    bridge_audio_receiving = false;
+}
+
+static void process_bridge_audio_frame(uint8_t const *frame) {
+    if (frame == nullptr || quiet_mode_enabled || !bt_is_controller_connected()) {
+        return;
+    }
+
+    int8_t haptic_buf[SAMPLE_SIZE]{};
+    memcpy(haptic_buf, frame, SAMPLE_SIZE);
+    if (send_audio_haptics_packet(haptic_buf, speaker_route_active, false)) {
+        last_audio_us = time_us_32();
+    }
+}
+
+void audio_handle_bridge_audio_report(uint8_t const *report, uint16_t len) {
+    if (
+        report == nullptr
+        || len < 7
+        || report[0] != BRIDGE_AUDIO_STREAM_REPORT_ID
+        || report[1] != BRIDGE_AUDIO_FAST_FRAME_FRAGMENT_TYPE
+    ) {
+        return;
+    }
+
+    const uint16_t sequence = static_cast<uint16_t>(report[2] | (report[3] << 8));
+    const uint8_t fragment = report[4];
+    const uint8_t fragment_count = report[5];
+    const uint8_t payload_len = report[6];
+    if (
+        fragment_count == 0
+        || fragment_count > BRIDGE_AUDIO_MAX_FRAGMENTS
+        || fragment >= fragment_count
+        || payload_len > BRIDGE_AUDIO_FAST_PAYLOAD_BYTES
+        || len < static_cast<uint16_t>(7 + payload_len)
+    ) {
+        bridge_audio_reset_reassembly();
+        return;
+    }
+
+    const uint16_t offset = static_cast<uint16_t>(fragment * BRIDGE_AUDIO_FAST_PAYLOAD_BYTES);
+    if (offset + payload_len > BRIDGE_AUDIO_COMPACT_FRAME_BYTES) {
+        bridge_audio_reset_reassembly();
+        return;
+    }
+
+    if (fragment == 0) {
+        bridge_audio_sequence = sequence;
+        bridge_audio_expected_fragments = fragment_count;
+        bridge_audio_next_fragment = 0;
+        bridge_audio_receiving = true;
+    } else if (
+        !bridge_audio_receiving
+        || sequence != bridge_audio_sequence
+        || fragment_count != bridge_audio_expected_fragments
+        || fragment != bridge_audio_next_fragment
+    ) {
+        bridge_audio_reset_reassembly();
+        return;
+    }
+
+    memcpy(bridge_audio_frame + offset, report + 7, payload_len);
+    bridge_audio_next_fragment++;
+
+    if (bridge_audio_next_fragment != bridge_audio_expected_fragments) {
+        return;
+    }
+
+    if (offset + payload_len == BRIDGE_AUDIO_COMPACT_FRAME_BYTES) {
+        process_bridge_audio_frame(bridge_audio_frame);
+    }
+    bridge_audio_reset_reassembly();
 }
 
 static float audio_reactive_haptics_filter_coeff() {
@@ -1244,6 +1335,19 @@ static void mix_haptics_overlay(int8_t *destination, int8_t const *overlay) {
             clamp(static_cast<int>(destination[index]) + static_cast<int>(overlay[index]), -128, 127)
         );
     }
+}
+
+static bool haptic_samples_nonzero(int8_t const *samples) {
+    if (samples == nullptr) {
+        return false;
+    }
+
+    for (uint16_t index = 0; index < SAMPLE_SIZE; index++) {
+        if (samples[index] != 0) {
+            return true;
+        }
+    }
+    return false;
 }
 
 static bool merge_test_haptics_overlay(int8_t *destination, bool carrier_paced) {
