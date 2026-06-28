@@ -2,11 +2,20 @@ import type {
   BridgeAckPayload,
   AudioDebugStatsPayload,
   BridgeStatusPayload,
+  ChordAssignment,
+  ChordFunction,
   ButtonRemapMap,
   ButtonRemapProfile,
   ControllerProfile,
-  HostAudioStatusPayload,
+  AudioStatusPayload,
   BridgePresetId,
+  HostPersonaMode,
+  AudioReactiveHapticsSource,
+  AudioReactiveHapticsBassFocus,
+  AudioReactiveHapticsMode,
+  AudioReactiveHapticsResponse,
+  AudioReactiveHapticsAttack,
+  AudioReactiveHapticsRelease,
   MuteButtonMode,
   MuteKeyboardBehavior,
   PollingRateMode,
@@ -14,10 +23,12 @@ import type {
 } from './protocol';
 
 export type UiScalePercent = 75 | 100 | 125 | 150;
+export type UiThemePreset = 'light' | 'dark' | 'bubble-gum' | 'pomegranate' | 'kiwi';
 
 export interface CompanionSettings {
   selectedPresetId: BridgePresetId;
   uiScalePercent: UiScalePercent;
+  uiThemePreset: UiThemePreset;
   launchAtStartupEnabled: boolean;
   hapticsEnabled: boolean;
   hapticsGainPercent: number;
@@ -25,6 +36,7 @@ export interface CompanionSettings {
   hapticsBufferLength: number;
   classicRumbleEnabled: boolean;
   classicRumbleGainPercent: number;
+  classicRumbleV1Enabled: boolean;
   adaptiveTriggersEnabled: boolean;
   triggerEffectIntensityPercent: number;
   triggerTestMode: TriggerTestMode;
@@ -32,6 +44,14 @@ export interface CompanionSettings {
   speakerVolumePercent: number;
   micVolumePercent: number;
   micMuted: boolean;
+  audioReactiveHapticsEnabled: boolean;
+  audioReactiveHapticsSource: AudioReactiveHapticsSource;
+  audioReactiveHapticsMode: AudioReactiveHapticsMode;
+  audioReactiveHapticsGainPercent: number;
+  audioReactiveHapticsBassFocus: AudioReactiveHapticsBassFocus;
+  audioReactiveHapticsResponse: AudioReactiveHapticsResponse;
+  audioReactiveHapticsAttack: AudioReactiveHapticsAttack;
+  audioReactiveHapticsRelease: AudioReactiveHapticsRelease;
   lightbarEnabled: boolean;
   lightbarColor: string;
   lightbarBrightnessPercent: number;
@@ -40,16 +60,18 @@ export interface CompanionSettings {
   muteKeyboardUsage: number;
   muteKeyboardModifiers: number;
   muteKeyboardBehavior: MuteKeyboardBehavior;
+  muteKeyboardChordStarterEnabled: boolean;
   ledEnabled: boolean;
+  playerLedEnabled: boolean;
   idleDisconnectEnabled: boolean;
   idleDisconnectTimeoutMinutes: number;
   usbSuspendDisconnectEnabled: boolean;
   sleepKeybindEnabled: boolean;
   speakerVolumeShortcutEnabled: boolean;
   pollingRateMode: PollingRateMode;
+  hostPersonaMode: HostPersonaMode;
   notifyControllerConnection: boolean;
   notifyLowBattery: boolean;
-  hostEncodedAudioEnabled: boolean;
   duplexMicEnabled: boolean;
   controllerPowerSavingEnabled: boolean;
   selectedControllerProfileId: string;
@@ -57,6 +79,8 @@ export interface CompanionSettings {
   selectedButtonRemappingProfileId: string;
   buttonRemappingProfiles: ButtonRemapProfile[];
   buttonRemappingDraft: ButtonRemapMap;
+  chordFunctions: ChordFunction[];
+  chordAssignments: ChordAssignment[];
 }
 
 export interface HidDeviceSummary {
@@ -70,9 +94,24 @@ export interface HidDeviceSummary {
   interface?: number;
 }
 
+export interface AudioHapticsSession {
+  processId: number;
+  displayName: string;
+  executableName: string | null;
+  processPath: string | null;
+  iconPath: string | null;
+  iconDataUrl?: string | null;
+  sessionIdentifier: string | null;
+  sessionInstanceIdentifier: string | null;
+  state: 'active' | 'inactive' | 'expired' | string;
+  endpointName: string;
+  isSelected: boolean;
+}
+
 export type BridgeStateKind =
   | 'no-bridge'
   | 'normal-firmware'
+  | 'transitioning'
   | 'connected'
   | 'incompatible'
   | 'error';
@@ -86,8 +125,6 @@ export interface BridgeDiagnostics {
   lastError: string | null;
   lastPollAt: number | null;
   rawDevices: HidDeviceSummary[];
-  hostAudioCaptureIssue: HostAudioCaptureIssue | null;
-  hostAudioCaptureRetry: HostAudioCaptureRetry | null;
   audioDebugLogPath: string | null;
   audioDebugLogLines: string[];
   audioDebugDroppedCount: number;
@@ -96,19 +133,7 @@ export interface BridgeDiagnostics {
   triggerTraceDroppedCount: number;
   feedbackTraceLines: string[];
   feedbackTraceDroppedCount: number;
-  hostAudioStatus: HostAudioStatusPayload | null;
-}
-
-export interface HostAudioCaptureIssue {
-  reason: 'device-in-use' | 'device-invalidated' | 'unsupported-format' | 'bulk-pcm-unavailable' | 'start-timeout' | 'helper-exit';
-  message: string;
-  retryAt: number;
-}
-
-export interface HostAudioCaptureRetry {
-  reason: 'device-in-use' | 'device-invalidated' | 'unsupported-format' | 'bulk-pcm-unavailable' | 'start-timeout' | 'helper-exit';
-  message: string;
-  retryAt: number;
+  audioStatus: AudioStatusPayload | null;
 }
 
 export interface BridgeSnapshot {
@@ -117,6 +142,14 @@ export interface BridgeSnapshot {
   status: BridgeStatusPayload | null;
   settings: CompanionSettings;
   diagnostics: BridgeDiagnostics;
+  personaTransition?: HostPersonaTransition | null;
+}
+
+export interface HostPersonaTransition {
+  from: HostPersonaMode;
+  to: HostPersonaMode;
+  startedAt: number;
+  deadlineAt: number;
 }
 
 export interface WindowsDeviceCleanupResult {

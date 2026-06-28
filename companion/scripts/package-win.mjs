@@ -13,7 +13,7 @@ const outDir = path.join(companionDir, 'artifacts', `DS5 Bridge-win32-x64-${stam
 const appDir = path.join(outDir, 'resources', 'app');
 const assetDir = path.join('assets', 'controllers');
 const appIcon = path.join(repoDir, assetDir, 'ds5-bridge_app-icon-tile.ico');
-const hostAudioHelperDir = path.join(companionDir, 'native', 'HostAudioHelper', 'bin', 'publish', 'win-x64');
+const audioHelperDir = path.join(companionDir, 'native', 'AudioHelper', 'bin', 'publish', 'win-x64');
 const windowsCleanupScript = path.join(repoDir, 'tools', 'windows', 'clean-ds5bridge-devices.ps1');
 const appPackage = JSON.parse(fs.readFileSync(path.join(companionDir, 'package.json'), 'utf8'));
 const appAssets = [
@@ -95,12 +95,11 @@ if (!fs.existsSync(electronDist)) {
 if (!fs.existsSync(path.join(companionDir, 'dist'))) {
   throw new Error('Companion dist is missing. Run npm run build first.');
 }
-if (!fs.existsSync(path.join(hostAudioHelperDir, 'HostAudioHelper.exe'))) {
-  throw new Error('Host audio helper is missing. Run npm run build:host-audio first.');
+if (!fs.existsSync(path.join(audioHelperDir, 'AudioHelper.exe'))) {
+  throw new Error('Audio helper is missing. Run npm run build:audio-helper first.');
 }
 
 copyRecursive(electronDist, outDir);
-copyRecursive(path.join(repoDir, 'LICENSE'), path.join(outDir, 'LICENSE'));
 copyRecursive(path.join(repoDir, 'NOTICE'), path.join(outDir, 'NOTICE'));
 fs.writeFileSync(path.join(outDir, 'SOURCE.txt'), sourceNotice(), 'utf8');
 
@@ -128,7 +127,7 @@ copyRecursive(path.join(companionDir, 'package.json'), path.join(appDir, 'packag
 for (const asset of appAssets) {
   copyRecursive(path.join(repoDir, assetDir, asset), path.join(appDir, assetDir, asset));
 }
-copyRecursive(hostAudioHelperDir, path.join(outDir, 'resources', 'native', 'HostAudioHelper'));
+copyRecursive(audioHelperDir, path.join(outDir, 'resources', 'native', 'AudioHelper'));
 copyRecursive(windowsCleanupScript, path.join(outDir, 'resources', 'tools', 'windows', 'clean-ds5bridge-devices.ps1'));
 for (const packageName of runtimePackages) {
   copyPackage(packageName);

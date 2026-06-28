@@ -3,19 +3,36 @@ import { describe, expect, it } from 'vitest';
 
 const preloadSource = readFileSync(new URL('../preload.ts', import.meta.url), 'utf8');
 const mainSource = readFileSync(new URL('./main.ts', import.meta.url), 'utf8');
+const bridgeServiceSource = readFileSync(new URL('./bridge-service.ts', import.meta.url), 'utf8');
 
-function uniqueMatches(source: string, pattern: RegExp): string[] {
-  return [...new Set([...source.matchAll(pattern)].map((match) => match[1] ?? ''))].sort();
+function matches(source: string, pattern: RegExp): string[] {
+  return [...source.matchAll(pattern)].map((match) => match[1] ?? '');
+}
+
+function uniqueSorted(values: string[]): string[] {
+  return [...new Set(values)].sort();
+}
+
+function duplicateValues(values: string[]): string[] {
+  const seen = new Set<string>();
+  const duplicates = new Set<string>();
+  for (const value of values) {
+    if (seen.has(value)) {
+      duplicates.add(value);
+    }
+    seen.add(value);
+  }
+  return [...duplicates].sort();
 }
 
 describe('IPC contract', () => {
   it('keeps every preload invoke channel backed by exactly one main handler', () => {
-    const preloadChannels = uniqueMatches(preloadSource, /ipcRenderer\.invoke\('([^']+)'/g);
-    const mainChannels = uniqueMatches(mainSource, /ipcMain\.handle\('([^']+)'/g);
+    const preloadChannels = matches(preloadSource, /ipcRenderer\.invoke\('([^']+)'/g);
+    const mainChannels = matches(mainSource, /ipcMain\.handle\('([^']+)'/g);
 
-    expect(preloadChannels).toHaveLength(63);
-    expect(mainChannels).toHaveLength(63);
-    expect(preloadChannels).toEqual(mainChannels);
+    expect(duplicateValues(preloadChannels)).toEqual([]);
+    expect(duplicateValues(mainChannels)).toEqual([]);
+    expect(uniqueSorted(preloadChannels)).toEqual(uniqueSorted(mainChannels));
   });
 
   it('returns unsubscribe functions for renderer event subscriptions', () => {
@@ -25,5 +42,19 @@ describe('IPC contract', () => {
     expect(preloadSource).toContain("ipcRenderer.removeListener('bridge:snapshot', listener)");
     expect(mainSource).toContain("sendToMainWindow('bridge:snapshot', snapshot)");
     expect(mainSource).toContain("mainWindow.webContents.send('window:maximizedChanged', mainWindow.isMaximized())");
+  });
+
+  it('maps chord keyboard shortcuts to Windows virtual-key codes', () => {
+    const keyCodeStart = bridgeServiceSource.indexOf('const VIRTUAL_KEY_CODES');
+    expect(keyCodeStart).toBeGreaterThanOrEqual(0);
+    const keyCodeEnd = bridgeServiceSource.indexOf('const MEDIA_ACTION_KEY_CODES', keyCodeStart);
+    expect(keyCodeEnd).toBeGreaterThan(keyCodeStart);
+    const keyCodeSource = bridgeServiceSource.slice(keyCodeStart, keyCodeEnd);
+
+    expect(keyCodeSource).toContain('PRINTSCREEN: 0x2c');
+    expect(keyCodeSource).toContain('PRTSC: 0x2c');
+    expect(keyCodeSource).toContain('PRTSCN: 0x2c');
+    expect(keyCodeSource).toContain('VIRTUAL_KEY_CODES[`NUMPAD${index}`] = 0x60 + index');
+    expect(bridgeServiceSource).toContain('function normalizeVirtualKeyName');
   });
 });

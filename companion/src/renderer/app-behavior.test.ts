@@ -4,6 +4,7 @@ import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
 
 const appSource = readFileSync(path.join(path.dirname(fileURLToPath(import.meta.url)), 'App.tsx'), 'utf8');
+const stylesSource = readFileSync(path.join(path.dirname(fileURLToPath(import.meta.url)), 'styles.css'), 'utf8');
 
 function extractFunction(name: string): string {
   const start = appSource.indexOf(`function ${name}`);
@@ -13,15 +14,12 @@ function extractFunction(name: string): string {
 }
 
 describe('renderer behavior guards', () => {
-  it('requires explicit confirmation before disabling Host Encoding', () => {
-    const toggleFunction = extractFunction('toggleHostEncodedAudioEnabled');
-    const confirmFunction = extractFunction('confirmDisableHostEncoding');
-
-    expect(toggleFunction).toContain('setHostEncodingDisableConfirmVisible(true)');
-    expect(toggleFunction).not.toContain('setHostEncodedAudioEnabled(false)');
-    expect(confirmFunction).toContain('setHostEncodedAudioEnabled(false)');
-    expect(appSource).toContain('Disable Host Encoding?');
-    expect(appSource).toContain('Turning it off may cause audio stuttering.');
+  it('does not expose retired host encoder controls', () => {
+    expect(appSource).not.toContain('toggleHost' + 'EncodedAudioEnabled');
+    expect(appSource).not.toContain('setHost' + 'EncodedAudioEnabled');
+    expect(appSource).not.toContain('Disable Host ' + 'Encoding?');
+    expect(appSource).not.toContain('Enable host ' + 'encoded audio');
+    expect(appSource).toContain('Pico Local');
   });
 
   it('requires explicit confirmation and a disconnected controller before emergency device repair', () => {
@@ -42,24 +40,24 @@ describe('renderer behavior guards', () => {
   it('does not block haptic testing just because audio is active', () => {
     const start = appSource.indexOf('const testHapticsUnavailable =');
     expect(start).toBeGreaterThanOrEqual(0);
-    const end = appSource.indexOf('const hapticsTestReady =', start);
+    const end = appSource.indexOf('const hapticsStatusReady =', start);
     const unavailableSource = appSource.slice(start, end);
 
     expect(unavailableSource).not.toContain('gameStreamActive');
     expect(unavailableSource).not.toContain('audioRecent');
-    expect(unavailableSource).not.toContain('hostAudioActive');
+    expect(unavailableSource).not.toContain('host' + 'AudioActive');
     expect(unavailableSource).not.toContain('streamActive');
   });
 
   it('does not block rumble testing while game output is active', () => {
     const start = appSource.indexOf('const testRumbleUnavailable =');
     expect(start).toBeGreaterThanOrEqual(0);
-    const end = appSource.indexOf('const hapticsTestReady =', start);
+    const end = appSource.indexOf('const hapticsStatusReady =', start);
     const unavailableSource = appSource.slice(start, end);
 
     expect(unavailableSource).not.toContain('gameStreamActive');
     expect(unavailableSource).not.toContain('audioRecent');
-    expect(unavailableSource).not.toContain('hostAudioActive');
+    expect(unavailableSource).not.toContain('host' + 'AudioActive');
     expect(unavailableSource).not.toContain('streamActive');
   });
 
@@ -72,6 +70,30 @@ describe('renderer behavior guards', () => {
     expect(buttonSource).not.toContain('Audio Active');
     expect(buttonSource).toContain('testLocked');
     expect(buttonSource).toContain('snapshot.status?.testHapticsCooldown');
+  });
+
+  it('does not show generic command-pending copy in renderer status badges', () => {
+    expect(appSource).not.toContain('Command Pending');
+  });
+
+  it('dims primary feature toggles when the controller is unavailable', () => {
+    expect(appSource).toContain('const controllerControlsAvailable = connected && controllerConnected;');
+    expect(appSource).toContain("controllerControlsAvailable ? '' : 'controller-unavailable'");
+    expect(appSource).toContain('disabled={!controllerControlsAvailable || pendingAction !== null}');
+    expect(appSource).toContain('!controllerControlsAvailable || !speakerVolumeSupported || pendingAction !== null');
+    expect(appSource).toContain('!controllerControlsAvailable || !adaptiveTriggersSupported || pendingAction !== null');
+    expect(appSource).toContain('!controllerControlsAvailable || !lightbarSupported || pendingAction !== null');
+  });
+
+  it('uses the device container border instead of a compact status dot', () => {
+    expect(appSource).toContain('const sidebarDeviceTone =');
+    expect(appSource).toContain('className={`hero-main device-status-${sidebarDeviceTone}`}');
+    const start = appSource.indexOf('<div className="bridge-state compact-device-status">');
+    expect(start).toBeGreaterThanOrEqual(0);
+    const end = appSource.indexOf('</div>', start);
+    const compactStatusSource = appSource.slice(start, end);
+
+    expect(compactStatusSource).not.toContain('className={`dot');
   });
 
   it('keeps the haptics test button actionable instead of relabeling it as game-active', () => {
@@ -102,5 +124,72 @@ describe('renderer behavior guards', () => {
     expect(classicButtonSource).not.toContain('Game Active');
     expect(classicButtonSource).toContain('testLocked');
     expect(classicButtonSource).toContain('Test Rumble');
+  });
+
+  it('does not let initial status overwrite a newer live snapshot', () => {
+    const start = appSource.indexOf('let cancelled = false;');
+    expect(start).toBeGreaterThanOrEqual(0);
+    const end = appSource.indexOf('return () => {', start);
+    const startupSubscriptionSource = appSource.slice(start, end);
+
+    expect(startupSubscriptionSource).toContain('let receivedLiveSnapshot = false;');
+    expect(startupSubscriptionSource).toContain('if (!cancelled && !receivedLiveSnapshot)');
+    expect(startupSubscriptionSource).toContain('receivedLiveSnapshot = true;');
+  });
+
+  it('does not snap snapshot values back to coarse slider notches', () => {
+    const start = appSource.indexOf('function displayHapticsValue');
+    expect(start).toBeGreaterThanOrEqual(0);
+    const end = appSource.indexOf('function sliderTickClass', start);
+    expect(end).toBeGreaterThan(start);
+    const displaySource = appSource.slice(start, end);
+
+    expect(displaySource).not.toContain('snapHapticsValue');
+    expect(displaySource).not.toContain('snapLightbarBrightness');
+    expect(displaySource).not.toContain('snapTriggerEffectIntensity');
+    expect(displaySource).toContain('snapshot.settings.hapticsGainPercent');
+    expect(displaySource).toContain('snapshot.settings.lightbarBrightnessPercent');
+    expect(displaySource).toContain('snapshot.settings.triggerEffectIntensityPercent');
+  });
+
+  it('shows mute as a chord starter when chord mode or keyboard chord starter is active', () => {
+    expect(appSource).toContain("mute: { id: CHORD_MUTE_STARTER_ID, label: 'Mute Button', Icon: MicOff }");
+    expect(appSource).toContain('[CHORD_STARTERS.mute.label, CHORD_MUTE_STARTER_ID]');
+    expect(appSource).toContain('chords-starter-icon-glyph');
+    expect(appSource).toContain('<Icon size={18} />');
+    expect(appSource).toContain('function chordStarterOptionsFor(currentStarter?: ChordStarterId)');
+    expect(appSource).toContain("currentStarter === CHORD_MUTE_STARTER_ID");
+    expect(appSource).toContain('mute-starter-inactive');
+    expect(appSource).toContain('muteButtonChordStarterActive');
+    expect(appSource).toContain("snapshot?.settings.muteButtonMode === 'chord'");
+    expect(appSource).toContain("snapshot?.settings.muteButtonMode === 'keyboard'");
+    expect(appSource).toContain('snapshot.settings.muteKeyboardChordStarterEnabled');
+    expect(appSource).toContain("assignment.starter === CHORD_MUTE_STARTER_ID && !muteButtonChordStarterActive");
+    expect(appSource).toContain('Duplicate, inactive, or shortcut-shadowed chord bindings');
+    expect(stylesSource).toContain('.chords-assignment-row.mute-starter-inactive .remap-glyph-option img');
+    expect(stylesSource).toContain('opacity: var(--disabled-opacity);');
+    expect(appSource).toContain("starter === CHORD_MUTE_STARTER_ID");
+    expect(appSource).toContain('Chord Starter');
+    expect(appSource).toContain("window.bridge.setMuteButtonAction(mode, keyUsage, keyModifiers, keyBehavior, keyChordStarterEnabled)");
+    expect(appSource).toContain('Pair PS, LFN, RFN, or Mute with a button.');
+  });
+
+  it('offers Print Screen and numpad numerals as chord keyboard shortcut keys', () => {
+    const optionsStart = appSource.indexOf('const CHORD_KEYBOARD_KEY_OPTIONS');
+    expect(optionsStart).toBeGreaterThanOrEqual(0);
+    const optionsEnd = appSource.indexOf('const CHORD_KEYBOARD_KEY_MAX_LABEL_LENGTH', optionsStart);
+    expect(optionsEnd).toBeGreaterThan(optionsStart);
+    const optionsSource = appSource.slice(optionsStart, optionsEnd);
+
+    expect(optionsSource).toContain("['Print Screen', 'Print Screen']");
+    expect(optionsSource).toContain('`Numpad ${digit}`');
+    expect(optionsSource).toContain('`Numpad${digit}`');
+
+    const normalizeSource = extractFunction('normalizeChordKeyLabel');
+    expect(normalizeSource).toContain("case 'print screen':");
+    expect(normalizeSource).toContain("case 'printscreen':");
+    expect(normalizeSource).toContain("case 'prtsc':");
+    expect(normalizeSource).toContain("case 'prtscn':");
+    expect(normalizeSource).toContain("return 'Print Screen';");
   });
 });
