@@ -689,6 +689,53 @@ describe('BridgeService', () => {
     expect(device.sentReports).toHaveLength(FULL_REAPPLY_COMMANDS.length * 2);
   });
 
+  it('starts saved audio haptics after startup settings reapply', async () => {
+    const appSource = {
+      kind: 'app-session' as const,
+      processId: 4321,
+      displayName: 'Microsoft Edge',
+      executableName: 'msedge.exe',
+      processPath: 'C:\\Program Files (x86)\\Microsoft\\Edge\\Application\\msedge.exe'
+    };
+    const service = serviceFixture({
+      audioReactiveHapticsEnabled: true,
+      audioReactiveHapticsSource: appSource
+    });
+    const device = new MockHidDevice();
+    device.settingsRevision = 4;
+    device.status = statusReport({
+      controllerConnected: true,
+      hostPersonaMode: 'dualsense',
+      settingsRevision: 4,
+      uptimeSeconds: 30
+    });
+    hidMock.state.devicesList = [companionDeviceInfo()];
+    hidMock.state.openDevices.set('companion-path', device);
+
+    const start = vi.fn(async () => undefined);
+    const stop = vi.fn(async () => undefined);
+    const internals = service as unknown as {
+      systemAudioHapticsEngine: {
+        start: typeof start;
+        stop: typeof stop;
+        isActive(): boolean;
+      };
+    };
+    internals.systemAudioHapticsEngine = {
+      start,
+      stop,
+      isActive: () => false
+    };
+
+    await poll(service);
+    await flushReapply();
+
+    expect(start).toHaveBeenCalledWith(expect.objectContaining({
+      source: appSource,
+      gainPercent: 100
+    }), 'dualsense');
+  });
+
   it('ignores firmware-reported mic unmute when duplex mic is disabled', async () => {
     const service = serviceFixture({ duplexMicEnabled: false, micMuted: true });
     const device = new MockHidDevice();
@@ -1150,6 +1197,60 @@ describe('BridgeService', () => {
       source: 'system-audio',
       gainPercent: 100
     }), 'ds4');
+  });
+
+  it('restarts system audio haptics after a host persona transition completes', async () => {
+    const service = serviceFixture({
+      audioReactiveHapticsEnabled: true
+    });
+    const device = new MockHidDevice();
+    device.status = statusReport({
+      controllerConnected: false,
+      hostPersonaMode: 'dualsense',
+      supportedHostPersonaModesMask: 0x07
+    });
+    hidMock.state.devicesList = [companionDeviceInfo()];
+    hidMock.state.openDevices.set('companion-path', device);
+
+    await poll(service);
+
+    const start = vi.fn(async () => undefined);
+    const stop = vi.fn(async () => undefined);
+    const getDefaultRenderEndpointStatus = vi.fn(async () => ({
+      deviceName: 'Speakers (Yeti Classic)',
+      isBridgeEndpoint: false
+    }));
+    const internals = service as unknown as {
+      systemAudioHapticsEngine: {
+        start: typeof start;
+        stop: typeof stop;
+        isActive(): boolean;
+      };
+      getDefaultRenderEndpointStatus: typeof getDefaultRenderEndpointStatus;
+    };
+    internals.systemAudioHapticsEngine = {
+      start,
+      stop,
+      isActive: () => false
+    };
+    internals.getDefaultRenderEndpointStatus = getDefaultRenderEndpointStatus;
+
+    await service.setHostPersonaMode('xbox');
+    expect(stop).toHaveBeenCalledOnce();
+
+    stop.mockClear();
+    device.status = statusReport({
+      controllerConnected: true,
+      hostPersonaMode: 'xbox',
+      supportedHostPersonaModesMask: 0x07
+    });
+    await poll(service);
+
+    expect(stop).toHaveBeenCalledOnce();
+    expect(start).toHaveBeenCalledWith(expect.objectContaining({
+      source: 'system-audio',
+      gainPercent: 100
+    }), 'xbox');
   });
 
   it('preserves selected audio haptics app source on partial config updates', async () => {

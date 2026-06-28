@@ -1193,6 +1193,7 @@ export class BridgeService extends EventEmitter {
   private lastTriggerTraceReadAt = 0;
   private lastFeedbackTraceReadAt = 0;
   private hostPersonaTransition: HostPersonaTransitionState | null = null;
+  private completedHostPersonaMode: HostPersonaMode | null = null;
   private hostPersonaDefaultRenderRestore: HostPersonaDefaultRenderRestore | null = null;
   private controllerPowerSavingActive: boolean | null = null;
   private previousControllerConnected: boolean | null = null;
@@ -1645,6 +1646,7 @@ export class BridgeService extends EventEmitter {
         if (transition.completedAt === null) {
           transition.completedAt = now;
           transition.reconnectingUntil = now + HOST_PERSONA_RECONNECT_GRACE_MS;
+          this.completedHostPersonaMode = transition.to;
           this.clearHostPersonaTransitionPollTimer();
         }
         return null;
@@ -1698,6 +1700,19 @@ export class BridgeService extends EventEmitter {
       ...this.snapshot,
       diagnostics: this.withAudioDebugDiagnostics(this.snapshot.diagnostics)
     };
+  }
+
+  private consumeCompletedHostPersonaMode(): HostPersonaMode | null {
+    const mode = this.completedHostPersonaMode;
+    this.completedHostPersonaMode = null;
+    return mode;
+  }
+
+  private async restartSystemAudioHapticsAfterPersonaTransition(mode: HostPersonaMode): Promise<void> {
+    this.systemAudioHapticsRetryAt = 0;
+    await this.systemAudioHapticsEngine.stop();
+    await this.updateSystemAudioHapticsEngine();
+    this.appendAudioDebugLines([`[SystemHaptics] restarted after persona transition persona=${mode}`]);
   }
 
   private async readAudioDebugEvents(): Promise<void> {
@@ -2753,6 +2768,8 @@ export class BridgeService extends EventEmitter {
           this.hostPersonaDefaultRenderRestore = null;
         }
         this.beginHostPersonaTransition(normalizedMode, previousMode);
+        this.systemAudioHapticsRetryAt = 0;
+        await this.systemAudioHapticsEngine.stop();
         this.applyHostPersonaTransitionSnapshot(this.snapshot.diagnostics.rawDevices);
       }
       this.emitSnapshot();
@@ -3196,6 +3213,7 @@ export class BridgeService extends EventEmitter {
     }
 
     const transition = this.advanceHostPersonaTransition(status, now);
+    const completedHostPersonaMode = this.consumeCompletedHostPersonaMode();
     const controllerAudioReady = this.controllerAudioReady(status);
 
     if (!controllerAudioReady) {
@@ -3255,6 +3273,9 @@ export class BridgeService extends EventEmitter {
       this.scheduleHostPersonaTransitionPoll();
     }
     await this.restoreHostPersonaDefaultRenderIfReady(status);
+    if (completedHostPersonaMode) {
+      await this.restartSystemAudioHapticsAfterPersonaTransition(completedHostPersonaMode);
+    }
     await this.updateMicKeepaliveEngine(status.controllerConnected);
     await this.syncControllerPowerSavingState(settings);
 
@@ -3384,14 +3405,19 @@ export class BridgeService extends EventEmitter {
     }
 
     this.reapplyActive = true;
+    let reapplied = false;
     try {
       const settings = this.settingsStore.get();
       await this.applyCurrentSettings(settings, this.reapplyAttempt === 0);
       this.reappliedSessionKey = this.sessionKey;
+      reapplied = true;
     } catch (error) {
       this.publishError(error);
     } finally {
       this.reapplyActive = false;
+    }
+    if (reapplied) {
+      await this.updateSystemAudioHapticsEngine();
     }
   }
 
