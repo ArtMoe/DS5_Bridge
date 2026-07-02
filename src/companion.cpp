@@ -13,6 +13,7 @@
 #include "persona/host_persona.h"
 #include "pico/critical_section.h"
 #include "pico/cyw43_arch.h"
+#include "pico/bootrom.h"
 #include "pico/time.h"
 #include "usb.h"
 
@@ -136,6 +137,7 @@ enum CommandId : uint8_t {
     CommandSetPlayerLedEnabled = 0x24,
     CommandSetClassicRumbleV1 = 0x25,
     CommandSetSpeakerGain = 0x32,
+    CommandEnterBootloader = 0x33,
 };
 
 enum AckResult : uint8_t {
@@ -2288,6 +2290,15 @@ void handle_command(uint8_t const *buffer, uint16_t bufsize) {
             restore_defaults();
             settings_revision++;
             set_ack(command_id, sequence, AckOk);
+            return;
+
+        case CommandEnterBootloader:
+            if (value != 0) {
+                set_ack(command_id, sequence, AckInvalidValue);
+                return;
+            }
+            set_ack(command_id, sequence, AckOk);
+            reset_usb_boot(0, 0);
             return;
 
         default:

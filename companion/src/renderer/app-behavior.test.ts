@@ -107,6 +107,19 @@ describe('renderer behavior guards', () => {
     expect(appSource).not.toContain('Math.min(255, Math.round(length))');
   });
 
+  it('exposes Pico firmware maintenance actions in Bridge Settings', () => {
+    expect(appSource).toContain('function mountPicoBootloader()');
+    expect(appSource).toContain('function flashPicoFirmware()');
+    expect(appSource).toContain('function nukePicoFlash()');
+    expect(appSource).toContain('window.bridge.mountPicoBootloader()');
+    expect(appSource).toContain('window.bridge.flashPicoFirmware()');
+    expect(appSource).toContain('window.bridge.nukePicoFlash()');
+    expect(appSource).toContain('Pico Firmware');
+    expect(appSource).toContain('pico-firmware-dual-action');
+    expect(appSource).toContain('picoFirmwareMessage');
+    expect(appSource).toContain('picoFirmwareError');
+  });
+
   it('keeps the haptics test button actionable instead of relabeling it as game-active', () => {
     const start = appSource.indexOf('<button className="primary-action" type="button" disabled={activeFeedbackTestUnavailable}');
     expect(start).toBeGreaterThanOrEqual(0);

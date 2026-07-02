@@ -159,3 +159,15 @@ export interface WindowsDeviceCleanupResult {
   includedBluetooth: boolean;
   message: string;
 }
+
+export type PicoFirmwareAction = 'mount' | 'flash' | 'nuke';
+
+export interface PicoFirmwareActionResult {
+  ok: boolean;
+  action: PicoFirmwareAction;
+  cancelled?: boolean;
+  driveRoot?: string;
+  sourcePath?: string;
+  targetPath?: string;
+  message: string;
+}

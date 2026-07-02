@@ -1,9 +1,15 @@
-import { app, BrowserWindow, Menu, Notification, Tray, ipcMain, nativeImage, powerMonitor, screen, shell } from 'electron';
+import { app, BrowserWindow, Menu, Notification, Tray, dialog, ipcMain, nativeImage, powerMonitor, screen, shell } from 'electron';
 import { spawnSync } from 'node:child_process';
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { BridgeService } from './bridge-service';
+import {
+  PICO_UNIVERSAL_FLASH_NUKE_FILE,
+  flashPicoFirmwareUf2,
+  mountPicoBootloaderDrive,
+  nukePicoFlash as copyPicoFlashNuke
+} from './pico-firmware-updater';
 import { SettingsStore } from './settings-store';
 import type {
   AdaptiveTriggerPreviewEffect,
@@ -20,13 +26,14 @@ import type {
   TriggerTestTarget
 } from '../shared/protocol';
 import type { BridgeToast } from './bridge-service';
-import type { AudioHapticsSession, UiScalePercent, UiThemePreset } from '../shared/types';
+import type { AudioHapticsSession, PicoFirmwareActionResult, UiScalePercent, UiThemePreset } from '../shared/types';
 
 const APP_NAME = 'DS5 Bridge';
 const WINDOWS_APP_USER_MODEL_ID = 'io.github.sundaymoments.ds5bridge';
 const WINDOWS_TOAST_ACTIVATOR_CLSID = '{A8B3700D-4BB5-4E22-BF57-0C43B7C2FDF6}';
 const APP_MARK_PNG = path.join('assets', 'controllers', 'ds5-bridge_mark.png');
 const APP_ICON_ICO = path.join('assets', 'controllers', 'ds5-bridge_app-icon-tile.ico');
+const PICO_UNIVERSAL_FLASH_NUKE_RELATIVE_PATH = path.join('firmware', PICO_UNIVERSAL_FLASH_NUKE_FILE);
 const BASE_WINDOW_WIDTH = 1120;
 const BASE_WINDOW_HEIGHT = 630;
 const START_IN_TRAY_ARG = '--start-in-tray';
@@ -660,6 +667,91 @@ function stripAudioHapticsIconResourceIndex(filePath: string): string | null {
   return value.replace(/^"|"$/g, '');
 }
 
+async function selectPicoFirmwareUf2Path(): Promise<string | null> {
+  const options: Electron.OpenDialogOptions = {
+    title: 'Choose Pico firmware UF2',
+    properties: ['openFile'],
+    filters: [
+      { name: 'UF2 firmware', extensions: ['uf2'] },
+      { name: 'All files', extensions: ['*'] }
+    ]
+  };
+  const result = mainWindow && !mainWindow.isDestroyed()
+    ? await dialog.showOpenDialog(mainWindow, options)
+    : await dialog.showOpenDialog(options);
+  return result.canceled ? null : result.filePaths[0] ?? null;
+}
+
+function picoFirmwareOptions(service: BridgeService, includeNukeUf2 = false) {
+  return {
+    enterBootloader: () => service.mountPicoBootloader(),
+    ...(includeNukeUf2
+      ? {
+          nukeUf2Path: resolvePicoUniversalFlashNukePath()
+        }
+      : {})
+  };
+}
+
+function resolvePicoUniversalFlashNukePath(): string {
+  const packagedCandidate = process.resourcesPath
+    ? path.join(process.resourcesPath, PICO_UNIVERSAL_FLASH_NUKE_RELATIVE_PATH)
+    : null;
+  const candidates = [
+    packagedCandidate,
+    path.resolve(process.cwd(), PICO_UNIVERSAL_FLASH_NUKE_RELATIVE_PATH),
+    path.resolve(__dirname, '..', '..', '..', PICO_UNIVERSAL_FLASH_NUKE_RELATIVE_PATH)
+  ].filter((candidate): candidate is string => Boolean(candidate));
+
+  const nukePath = candidates.find((candidate) => fs.existsSync(candidate));
+  if (!nukePath) {
+    throw new Error('Pico flash nuke UF2 is missing. Run tools\\build-pico-universal-flash-nuke.ps1 from the repository root.');
+  }
+  return nukePath;
+}
+
+async function flashSelectedPicoFirmware(service: BridgeService): Promise<PicoFirmwareActionResult> {
+  const sourcePath = await selectPicoFirmwareUf2Path();
+  if (!sourcePath) {
+    return {
+      ok: false,
+      action: 'flash',
+      cancelled: true,
+      message: 'Firmware flash cancelled.'
+    };
+  }
+  return flashPicoFirmwareUf2(sourcePath, picoFirmwareOptions(service));
+}
+
+async function confirmPicoFlashNuke(): Promise<boolean> {
+  const options: Electron.MessageBoxOptions = {
+    type: 'warning',
+    title: 'Nuke Pico flash?',
+    message: 'Nuke Pico flash?',
+    detail: 'This copies the bundled Pico Universal Flash Nuke UF2 to the mounted Pico bootloader drive. The Pico flash will be wiped.',
+    buttons: ['Nuke Pico', 'Cancel'],
+    defaultId: 1,
+    cancelId: 1,
+    noLink: true
+  };
+  const result = mainWindow && !mainWindow.isDestroyed()
+    ? await dialog.showMessageBox(mainWindow, options)
+    : await dialog.showMessageBox(options);
+  return result.response === 0;
+}
+
+async function nukePicoFlash(service: BridgeService): Promise<PicoFirmwareActionResult> {
+  if (!await confirmPicoFlashNuke()) {
+    return {
+      ok: false,
+      action: 'nuke',
+      cancelled: true,
+      message: 'Pico flash nuke cancelled.'
+    };
+  }
+  return copyPicoFlashNuke(picoFirmwareOptions(service, true));
+}
+
 function registerIpc(service: BridgeService): void {
   ipcMain.handle('bridge:getStatus', () => service.getSnapshot());
   ipcMain.handle('bridge:listDevices', () => service.listDevices());
@@ -765,6 +857,9 @@ function registerIpc(service: BridgeService): void {
     service.setHostPersonaMode(value)
   ));
   ipcMain.handle('bridge:sleepController', () => service.sleepController());
+  ipcMain.handle('bridge:mountPicoBootloader', () => mountPicoBootloaderDrive(picoFirmwareOptions(service)));
+  ipcMain.handle('bridge:flashPicoFirmware', () => flashSelectedPicoFirmware(service));
+  ipcMain.handle('bridge:nukePicoFlash', () => nukePicoFlash(service));
   ipcMain.handle('bridge:setNotifyControllerConnection', (_event, value: boolean) => (
     service.setNotifyControllerConnection(value)
   ));

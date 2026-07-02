@@ -57,4 +57,15 @@ describe('IPC contract', () => {
     expect(keyCodeSource).toContain('VIRTUAL_KEY_CODES[`NUMPAD${index}`] = 0x60 + index');
     expect(bridgeServiceSource).toContain('function normalizeVirtualKeyName');
   });
+
+  it('exposes Pico firmware mount, flash, and nuke actions', () => {
+    expect(preloadSource).toContain("ipcRenderer.invoke('bridge:mountPicoBootloader')");
+    expect(preloadSource).toContain("ipcRenderer.invoke('bridge:flashPicoFirmware')");
+    expect(preloadSource).toContain("ipcRenderer.invoke('bridge:nukePicoFlash')");
+    expect(mainSource).toContain("ipcMain.handle('bridge:mountPicoBootloader'");
+    expect(mainSource).toContain("ipcMain.handle('bridge:flashPicoFirmware'");
+    expect(mainSource).toContain("ipcMain.handle('bridge:nukePicoFlash'");
+    expect(bridgeServiceSource).toContain('async mountPicoBootloader(): Promise<void>');
+    expect(bridgeServiceSource).toContain('COMMAND_ID.ENTER_BOOTLOADER');
+  });
 });

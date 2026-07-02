@@ -148,6 +148,8 @@ class MockHidDevice extends EventEmitter {
   ackReports: number[][] = [];
   writeError: Error | null = null;
   statusReadError: Error | null = null;
+  ackReadErrorOnce: Error | null = null;
+  closeCount = 0;
   settingsRevision = 0;
   fixedAckRevision: number | null = null;
 
@@ -165,6 +167,11 @@ class MockHidDevice extends EventEmitter {
       return [...this.status];
     }
     if (reportId === REPORT_ID.ACK) {
+      if (this.ackReadErrorOnce) {
+        const error = this.ackReadErrorOnce;
+        this.ackReadErrorOnce = null;
+        throw error;
+      }
       const queuedAck = this.ackReports.shift();
       if (queuedAck) {
         return [...queuedAck];
@@ -217,7 +224,7 @@ class MockHidDevice extends EventEmitter {
   }
 
   close(): void {
-    // No-op for tests.
+    this.closeCount += 1;
   }
 }
 
@@ -2050,6 +2057,24 @@ describe('BridgeService', () => {
     expect(command?.[7]).toBe(COMMAND_ID.SLEEP_CONTROLLER);
     expect(command?.[9]).toBe(0);
     expect(snapshot.diagnostics.lastAck?.resultCode).toBe(ACK_RESULT.OK);
+  });
+
+  it('sends Pico bootloader command and tolerates the expected transport drop', async () => {
+    const service = serviceFixture();
+    const device = new MockHidDevice();
+    hidMock.state.devicesList = [companionDeviceInfo()];
+    hidMock.state.openDevices.set('companion-path', device);
+
+    await poll(service);
+
+    device.ackReadErrorOnce = new Error('WinUSB bridge GET_REPORT failed: A device attached to the system is not functioning.');
+    await service.mountPicoBootloader();
+
+    const command = device.sentReports.at(-1);
+    expect(command?.[7]).toBe(COMMAND_ID.ENTER_BOOTLOADER);
+    expect(command?.[9]).toBe(0);
+    expect(device.closeCount).toBe(1);
+    expect(service.getSnapshot().diagnostics.lastAck?.resultCode).toBe(ACK_RESULT.OK);
   });
 
   it('stores notification preferences without sending firmware commands', async () => {

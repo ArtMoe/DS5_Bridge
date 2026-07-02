@@ -44,6 +44,7 @@ import {
   IconPlayerPlay as Play,
   IconPlus as Plus,
   IconQuestionMark,
+  IconRadioactive,
   IconRefresh as RefreshCcw,
   IconReplace,
   IconSettings as SettingsIcon,
@@ -54,6 +55,8 @@ import {
   IconTestPipe,
   IconTool,
   IconTrash as Trash2,
+  IconUpload,
+  IconUsb,
   IconVolume,
   IconVolume as Volume2,
   IconVolumeOff as VolumeX,
@@ -2850,6 +2853,8 @@ export function App() {
   const [startupTutorialSupportCountdown, setStartupTutorialSupportCountdown] = useState(5);
   const [deviceCleanupMessage, setDeviceCleanupMessage] = useState<string | null>(null);
   const [deviceCleanupError, setDeviceCleanupError] = useState<string | null>(null);
+  const [picoFirmwareMessage, setPicoFirmwareMessage] = useState<string | null>(null);
+  const [picoFirmwareError, setPicoFirmwareError] = useState<string | null>(null);
   const hapticsEditingRef = useRef(false);
   const classicRumbleEditingRef = useRef(false);
   const speakerVolumeEditingRef = useRef(false);
@@ -5728,6 +5733,44 @@ export function App() {
       }
       setPendingAction(null);
     }
+  }
+
+  async function runPicoFirmwareAction(
+    label: string,
+    action: () => Promise<{ ok: boolean; cancelled?: boolean; message: string }>
+  ) {
+    if (pendingAction !== null) {
+      return;
+    }
+    setPendingAction(label);
+    setPicoFirmwareMessage(null);
+    setPicoFirmwareError(null);
+    try {
+      const result = await action();
+      if (!result.cancelled) {
+        if (result.ok) {
+          setPicoFirmwareMessage(result.message);
+        } else {
+          setPicoFirmwareError(result.message);
+        }
+      }
+    } catch (error) {
+      setPicoFirmwareError(error instanceof Error ? error.message : 'Pico firmware action failed.');
+    } finally {
+      setPendingAction(null);
+    }
+  }
+
+  function mountPicoBootloader() {
+    void runPicoFirmwareAction('pico-firmware-mount', () => window.bridge.mountPicoBootloader());
+  }
+
+  function flashPicoFirmware() {
+    void runPicoFirmwareAction('pico-firmware-flash', () => window.bridge.flashPicoFirmware());
+  }
+
+  function nukePicoFlash() {
+    void runPicoFirmwareAction('pico-firmware-nuke', () => window.bridge.nukePicoFlash());
   }
 
   function toggleAudioEnabled() {
@@ -9435,6 +9478,52 @@ export function App() {
                   >
                     <span />
                   </button>
+                </div>
+                <div className="settings-menu-section-label">Firmware</div>
+                <div className="settings-menu-row pico-firmware-row">
+                  <div className="pico-firmware-header">
+                    <strong>Pico Firmware</strong>
+                    <div className="pico-firmware-actions">
+                      <button
+                        type="button"
+                        className="heading-action danger"
+                        disabled={pendingAction !== null}
+                        onClick={nukePicoFlash}
+                      >
+                        <IconRadioactive size={14} />
+                        {pendingAction === 'pico-firmware-nuke' ? 'Nuking...' : 'Nuke'}
+                      </button>
+                      <div className="pico-firmware-dual-action" role="group" aria-label="Pico firmware bootloader actions">
+                        <button
+                          type="button"
+                          className="heading-action"
+                          disabled={pendingAction !== null}
+                          onClick={mountPicoBootloader}
+                        >
+                          <IconUsb size={14} />
+                          {pendingAction === 'pico-firmware-mount' ? 'Mounting...' : 'Mount'}
+                        </button>
+                        <button
+                          type="button"
+                          className="heading-action"
+                          disabled={pendingAction !== null}
+                          onClick={flashPicoFirmware}
+                        >
+                          <IconUpload size={14} />
+                          {pendingAction === 'pico-firmware-flash' ? 'Flashing...' : 'Flash'}
+                        </button>
+                      </div>
+                    </div>
+                  </div>
+                  <div className="settings-menu-copy pico-firmware-copy">
+                    <span>Mount reboots the Pico into UF2 mode. Flash copies a selected firmware UF2. Nuke wipes flash with Pico Universal Flash Nuke.</span>
+                    {picoFirmwareMessage ? (
+                      <span className="pico-firmware-message good">{picoFirmwareMessage}</span>
+                    ) : null}
+                    {picoFirmwareError ? (
+                      <span className="pico-firmware-message bad">{picoFirmwareError}</span>
+                    ) : null}
+                  </div>
                 </div>
               </div>
               <div className="bridge-settings-column">

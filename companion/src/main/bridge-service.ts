@@ -43,6 +43,7 @@ import type {
   AudioReactiveHapticsSource,
   AudioDebugEventPayload,
   AudioDebugStatsPayload,
+  BridgeAckPayload,
   BridgePresetId,
   ChordAssignment,
   ChordFunction,
@@ -151,6 +152,7 @@ type CommandOptions = {
   expectSettingsRevisionChange?: boolean;
   throwOnCommandError?: boolean;
   extraPayload?: ArrayLike<number>;
+  allowAckTransportLoss?: boolean;
 };
 
 type HostPersonaTransitionState = HostPersonaTransition & {
@@ -235,6 +237,13 @@ function isSupportedFirmwareVersion(version: string): boolean {
     return false;
   }
   return major > 1 || (major === 1 && (minor > 5 || (minor === 5 && patch >= 5)));
+}
+
+function isBridgeTransportError(error: unknown): boolean {
+  const message = error instanceof Error ? error.message : String(error);
+  return /WinUSB bridge (?:GET_REPORT|SET_REPORT|sendFeatureReport|getFeatureReport) failed/i.test(message)
+    || /A device attached to the system is not functioning/i.test(message)
+    || /No companion bridge is connected/i.test(message);
 }
 
 function emptyDiagnostics(rawDevices: HidDeviceSummary[]): BridgeDiagnostics {
@@ -2726,6 +2735,12 @@ export class BridgeService extends EventEmitter {
     return this.getSnapshot();
   }
 
+  async mountPicoBootloader(): Promise<void> {
+    await this.sendCommand(COMMAND_ID.ENTER_BOOTLOADER, 0, {
+      allowAckTransportLoss: true
+    });
+  }
+
   async setNotifyControllerConnection(enabled: boolean): Promise<BridgeSnapshot> {
     this.snapshot.settings = this.settingsStore.update({ notifyControllerConnection: enabled });
     this.emitSnapshot();
@@ -3025,7 +3040,28 @@ export class BridgeService extends EventEmitter {
       const sequence = this.nextSequence();
       const previousSettingsRevision = this.snapshot.diagnostics.settingsRevision;
       await this.device.sendFeatureReport(buildCommandReport(commandId, sequence, value, options.extraPayload));
-      const ack = parseAckReport(await this.device.getFeatureReport(REPORT_ID.ACK, REPORT_LENGTH));
+      let ack: BridgeAckPayload;
+      try {
+        ack = parseAckReport(await this.device.getFeatureReport(REPORT_ID.ACK, REPORT_LENGTH));
+      } catch (error) {
+        if (!options.allowAckTransportLoss || !isBridgeTransportError(error)) {
+          throw error;
+        }
+        ack = {
+          commandId: commandId & 0xff,
+          commandSequence: sequence,
+          resultCode: ACK_RESULT.OK,
+          detailCode: 0,
+          settingsRevision: previousSettingsRevision ?? 0,
+          uptimeSeconds: this.snapshot.diagnostics.uptimeSeconds ?? 0,
+          protocolVersion: this.snapshot.diagnostics.protocolVersion ?? 'unknown'
+        };
+        this.snapshot.diagnostics.lastAck = ack;
+        this.snapshot.diagnostics.lastError = null;
+        this.emitSnapshot();
+        this.closeDevice();
+        return ack;
+      }
       this.snapshot.diagnostics.lastAck = ack;
       if (ack.commandId !== (commandId & 0xff) || ack.commandSequence !== sequence) {
         const message = `Stale companion ACK: expected command 0x${(commandId & 0xff).toString(16).padStart(2, '0')} sequence ${sequence}, received command 0x${ack.commandId.toString(16).padStart(2, '0')} sequence ${ack.commandSequence}.`;

@@ -17,6 +17,7 @@ import type {
   AudioHapticsSession,
   BridgeDiagnostics,
   BridgeSnapshot,
+  PicoFirmwareActionResult,
   UiThemePreset,
   WindowsDeviceCleanupResult
 } from './shared/types';
@@ -132,6 +133,15 @@ const api = {
     ipcRenderer.invoke('bridge:setHostPersonaMode', value)
   ),
   sleepController: (): Promise<BridgeSnapshot> => ipcRenderer.invoke('bridge:sleepController'),
+  mountPicoBootloader: (): Promise<PicoFirmwareActionResult> => (
+    ipcRenderer.invoke('bridge:mountPicoBootloader')
+  ),
+  flashPicoFirmware: (): Promise<PicoFirmwareActionResult> => (
+    ipcRenderer.invoke('bridge:flashPicoFirmware')
+  ),
+  nukePicoFlash: (): Promise<PicoFirmwareActionResult> => (
+    ipcRenderer.invoke('bridge:nukePicoFlash')
+  ),
   setNotifyControllerConnection: (value: boolean): Promise<BridgeSnapshot> => (
     ipcRenderer.invoke('bridge:setNotifyControllerConnection', value)
   ),
