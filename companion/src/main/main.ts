@@ -6,6 +6,7 @@ import { fileURLToPath } from 'node:url';
 import { BridgeService } from './bridge-service';
 import {
   PICO_UNIVERSAL_FLASH_NUKE_FILE,
+  PICO_UNIVERSAL_FLASH_NUKE_SHA256_FILE,
   flashPicoFirmwareUf2,
   mountPicoBootloaderDrive,
   nukePicoFlash as copyPicoFlashNuke
@@ -34,6 +35,7 @@ const WINDOWS_TOAST_ACTIVATOR_CLSID = '{A8B3700D-4BB5-4E22-BF57-0C43B7C2FDF6}';
 const APP_MARK_PNG = path.join('assets', 'controllers', 'ds5-bridge_mark.png');
 const APP_ICON_ICO = path.join('assets', 'controllers', 'ds5-bridge_app-icon-tile.ico');
 const PICO_UNIVERSAL_FLASH_NUKE_RELATIVE_PATH = path.join('firmware', PICO_UNIVERSAL_FLASH_NUKE_FILE);
+const PICO_UNIVERSAL_FLASH_NUKE_SHA256_RELATIVE_PATH = path.join('firmware', PICO_UNIVERSAL_FLASH_NUKE_SHA256_FILE);
 const BASE_WINDOW_WIDTH = 1120;
 const BASE_WINDOW_HEIGHT = 630;
 const START_IN_TRAY_ARG = '--start-in-tray';
@@ -687,7 +689,8 @@ function picoFirmwareOptions(service: BridgeService, includeNukeUf2 = false) {
     enterBootloader: () => service.mountPicoBootloader(),
     ...(includeNukeUf2
       ? {
-          nukeUf2Path: resolvePicoUniversalFlashNukePath()
+          nukeUf2Path: resolvePicoUniversalFlashNukePath(),
+          nukeUf2Sha256Path: resolvePicoUniversalFlashNukeSha256Path()
         }
       : {})
   };
@@ -708,6 +711,23 @@ function resolvePicoUniversalFlashNukePath(): string {
     throw new Error('Pico flash nuke UF2 is missing. Run tools\\build-pico-universal-flash-nuke.ps1 from the repository root.');
   }
   return nukePath;
+}
+
+function resolvePicoUniversalFlashNukeSha256Path(): string {
+  const packagedCandidate = process.resourcesPath
+    ? path.join(process.resourcesPath, PICO_UNIVERSAL_FLASH_NUKE_SHA256_RELATIVE_PATH)
+    : null;
+  const candidates = [
+    packagedCandidate,
+    path.resolve(process.cwd(), PICO_UNIVERSAL_FLASH_NUKE_SHA256_RELATIVE_PATH),
+    path.resolve(__dirname, '..', '..', '..', PICO_UNIVERSAL_FLASH_NUKE_SHA256_RELATIVE_PATH)
+  ].filter((candidate): candidate is string => Boolean(candidate));
+
+  const sha256Path = candidates.find((candidate) => fs.existsSync(candidate));
+  if (!sha256Path) {
+    throw new Error('Pico flash nuke SHA-256 manifest is missing. Run tools\\build-pico-universal-flash-nuke.ps1 from the repository root.');
+  }
+  return sha256Path;
 }
 
 async function flashSelectedPicoFirmware(service: BridgeService): Promise<PicoFirmwareActionResult> {

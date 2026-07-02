@@ -1,8 +1,11 @@
 import fs from 'node:fs/promises';
+import { createHash } from 'node:crypto';
 import path from 'node:path';
 import type { PicoFirmwareActionResult } from '../shared/types';
+import { PICO_UNIVERSAL_FLASH_NUKE_SHA256 } from './pico-universal-flash-nuke-hash';
 
 export const PICO_UNIVERSAL_FLASH_NUKE_FILE = 'pico-universal-flash-nuke.uf2';
+export const PICO_UNIVERSAL_FLASH_NUKE_SHA256_FILE = `${PICO_UNIVERSAL_FLASH_NUKE_FILE}.sha256`;
 
 const PICO_BOOTLOADER_WAIT_MS = 15000;
 const PICO_BOOTLOADER_POLL_MS = 250;
@@ -16,6 +19,7 @@ export interface PicoFirmwareUpdateOptions {
   enterBootloader: () => Promise<void>;
   driveRoots?: string[];
   nukeUf2Path?: string;
+  nukeUf2Sha256Path?: string;
 }
 
 function windowsDriveRoots(): string[] {
@@ -105,6 +109,57 @@ async function copyUf2ToDrive(sourcePath: string, drive: PicoBootloaderDrive): P
   return targetPath;
 }
 
+async function readUf2File(sourcePath: string): Promise<Buffer> {
+  await assertUf2File(sourcePath);
+  return fs.readFile(sourcePath);
+}
+
+async function copyUf2BytesToDrive(sourcePath: string, bytes: Buffer, drive: PicoBootloaderDrive): Promise<string> {
+  const targetPath = path.join(drive.root, path.basename(sourcePath));
+  await fs.writeFile(targetPath, bytes);
+  return targetPath;
+}
+
+function sha256Bytes(bytes: Buffer): string {
+  return createHash('sha256').update(bytes).digest('hex');
+}
+
+async function readSha256Manifest(sha256Path: string): Promise<string> {
+  const manifest = await fs.readFile(sha256Path, 'utf8');
+  const expected = manifest.match(/\b[a-fA-F0-9]{64}\b/)?.[0]?.toLowerCase();
+  if (!expected) {
+    throw new Error('Pico flash nuke SHA-256 manifest is invalid.');
+  }
+  return expected;
+}
+
+function embeddedNukeSha256(): string {
+  const expected = PICO_UNIVERSAL_FLASH_NUKE_SHA256.trim().toLowerCase();
+  if (!/^[a-f0-9]{64}$/.test(expected)) {
+    throw new Error('Embedded Pico flash nuke SHA-256 is invalid.');
+  }
+  return expected;
+}
+
+async function verifyNukeUf2Sha256(sourcePath: string, sha256Path?: string): Promise<Buffer> {
+  if (!sha256Path) {
+    throw new Error('Pico flash nuke SHA-256 manifest is missing. Run tools\\build-pico-universal-flash-nuke.ps1 from the repository root.');
+  }
+
+  const expected = embeddedNukeSha256();
+  const manifestHash = await readSha256Manifest(sha256Path);
+  if (manifestHash !== expected) {
+    throw new Error('Pico flash nuke SHA-256 manifest does not match the embedded app hash.');
+  }
+
+  const bytes = await readUf2File(sourcePath);
+  const actual = sha256Bytes(bytes);
+  if (actual !== expected) {
+    throw new Error('Pico flash nuke UF2 failed SHA-256 verification.');
+  }
+  return bytes;
+}
+
 export async function mountPicoBootloaderDrive(
   options: PicoFirmwareUpdateOptions
 ): Promise<PicoFirmwareActionResult> {
@@ -154,8 +209,9 @@ export async function nukePicoFlash(
     throw new Error('Pico flash nuke UF2 is missing. Run tools\\build-pico-universal-flash-nuke.ps1 from the repository root.');
   }
   const sourcePath = options.nukeUf2Path;
+  const verifiedBytes = await verifyNukeUf2Sha256(sourcePath, options.nukeUf2Sha256Path);
   const drive = await ensurePicoBootloaderDrive(options);
-  const targetPath = await copyUf2ToDrive(sourcePath, drive);
+  const targetPath = await copyUf2BytesToDrive(sourcePath, verifiedBytes, drive);
   return {
     ok: true,
     action: 'nuke',
