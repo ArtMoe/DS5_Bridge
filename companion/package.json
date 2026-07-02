@@ -11,11 +11,13 @@
     "dev": "npm run build && electron .",
     "typecheck": "tsc -p tsconfig.main.json --noEmit && tsc -p tsconfig.json --noEmit",
     "build:audio-helper": "dotnet publish native/AudioHelper/AudioHelper.csproj -c Release -r win-x64 --self-contained true -o native/AudioHelper/bin/publish/win-x64",
-    "build": "npm run build:audio-helper && tsc -p tsconfig.main.json && vite build",
+    "build:app": "tsc -p tsconfig.main.json && vite build",
+    "build": "npm run build:audio-helper && npm run build:app",
     "package:win": "npm run build && node scripts/package-win.mjs",
     "installer:win": "npm run build && electron-builder --win nsis --x64",
-    "test": "npm run test:companion && npm run test:native && npm run test:firmware",
+    "test": "npm run test:companion && npm run test:installer && npm run test:native && npm run test:firmware",
     "test:companion": "vitest run src",
+    "test:installer": "node scripts/check-installer-upgrade-config.mjs",
     "test:native": "dotnet test native/AudioHelper.Tests/AudioHelper.Tests.csproj --nologo",
     "test:firmware": "cmake -S ../tests/firmware -B ../build-firmware-tests -G Ninja && cmake --build ../build-firmware-tests && ctest --test-dir ../build-firmware-tests --output-on-failure",
     "visual:smoke": "npm run build && node scripts/visual-smoke.mjs",
@@ -82,12 +84,15 @@
       ]
     },
     "nsis": {
+      "guid": "40464839-1bb3-5f24-b04b-13b55106e88b",
       "oneClick": false,
       "perMachine": false,
-      "allowToChangeInstallationDirectory": true,
+      "allowToChangeInstallationDirectory": false,
+      "deleteAppDataOnUninstall": false,
       "createDesktopShortcut": true,
       "createStartMenuShortcut": true,
-      "shortcutName": "DS5 Bridge"
+      "shortcutName": "DS5 Bridge",
+      "uninstallDisplayName": "DS5 Bridge"
     }
   },
   "dependencies": {
