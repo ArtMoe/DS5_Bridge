@@ -242,6 +242,7 @@ function isSupportedFirmwareVersion(version: string): boolean {
 function isBridgeTransportError(error: unknown): boolean {
   const message = error instanceof Error ? error.message : String(error);
   return /WinUSB bridge (?:GET_REPORT|SET_REPORT|sendFeatureReport|getFeatureReport) failed/i.test(message)
+    || /WinUSB bridge helper request timed out/i.test(message)
     || /A device attached to the system is not functioning/i.test(message)
     || /No companion bridge is connected/i.test(message);
 }
@@ -3038,6 +3039,27 @@ export class BridgeService extends EventEmitter {
     return run;
   }
 
+  private acceptCommandTransportLoss(
+    commandId: number,
+    sequence: number,
+    previousSettingsRevision: number | null
+  ): BridgeAckPayload {
+    const ack = {
+      commandId: commandId & 0xff,
+      commandSequence: sequence,
+      resultCode: ACK_RESULT.OK,
+      detailCode: 0,
+      settingsRevision: previousSettingsRevision ?? 0,
+      uptimeSeconds: this.snapshot.diagnostics.uptimeSeconds ?? 0,
+      protocolVersion: this.snapshot.diagnostics.protocolVersion ?? 'unknown'
+    };
+    this.snapshot.diagnostics.lastAck = ack;
+    this.snapshot.diagnostics.lastError = null;
+    this.emitSnapshot();
+    this.closeDevice();
+    return ack;
+  }
+
   private async sendCommand(commandId: number, value: number, options: CommandOptions = {}) {
     return this.enqueueCommand(async () => {
       await this.ensureCompanionDevice();
@@ -3047,7 +3069,14 @@ export class BridgeService extends EventEmitter {
 
       const sequence = this.nextSequence();
       const previousSettingsRevision = this.snapshot.diagnostics.settingsRevision;
-      await this.device.sendFeatureReport(buildCommandReport(commandId, sequence, value, options.extraPayload));
+      try {
+        await this.device.sendFeatureReport(buildCommandReport(commandId, sequence, value, options.extraPayload));
+      } catch (error) {
+        if (!options.allowAckTransportLoss || !isBridgeTransportError(error)) {
+          throw error;
+        }
+        return this.acceptCommandTransportLoss(commandId, sequence, previousSettingsRevision);
+      }
       let ack: BridgeAckPayload;
       try {
         ack = parseAckReport(await this.device.getFeatureReport(REPORT_ID.ACK, REPORT_LENGTH));
@@ -3055,20 +3084,7 @@ export class BridgeService extends EventEmitter {
         if (!options.allowAckTransportLoss || !isBridgeTransportError(error)) {
           throw error;
         }
-        ack = {
-          commandId: commandId & 0xff,
-          commandSequence: sequence,
-          resultCode: ACK_RESULT.OK,
-          detailCode: 0,
-          settingsRevision: previousSettingsRevision ?? 0,
-          uptimeSeconds: this.snapshot.diagnostics.uptimeSeconds ?? 0,
-          protocolVersion: this.snapshot.diagnostics.protocolVersion ?? 'unknown'
-        };
-        this.snapshot.diagnostics.lastAck = ack;
-        this.snapshot.diagnostics.lastError = null;
-        this.emitSnapshot();
-        this.closeDevice();
-        return ack;
+        return this.acceptCommandTransportLoss(commandId, sequence, previousSettingsRevision);
       }
       this.snapshot.diagnostics.lastAck = ack;
       if (ack.commandId !== (commandId & 0xff) || ack.commandSequence !== sequence) {

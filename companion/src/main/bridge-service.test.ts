@@ -149,6 +149,7 @@ class MockHidDevice extends EventEmitter {
   writeError: Error | null = null;
   statusReadError: Error | null = null;
   ackReadErrorOnce: Error | null = null;
+  featureReportWriteErrorOnce: Error | null = null;
   closeCount = 0;
   settingsRevision = 0;
   fixedAckRevision: number | null = null;
@@ -208,6 +209,11 @@ class MockHidDevice extends EventEmitter {
 
   sendFeatureReport(report: number[]): number {
     this.sentReports.push([...report]);
+    if (this.featureReportWriteErrorOnce) {
+      const error = this.featureReportWriteErrorOnce;
+      this.featureReportWriteErrorOnce = null;
+      throw error;
+    }
     return report.length;
   }
 
@@ -2068,6 +2074,24 @@ describe('BridgeService', () => {
     await poll(service);
 
     device.ackReadErrorOnce = new Error('WinUSB bridge GET_REPORT failed: A device attached to the system is not functioning.');
+    await service.mountPicoBootloader();
+
+    const command = device.sentReports.at(-1);
+    expect(command?.[7]).toBe(COMMAND_ID.ENTER_BOOTLOADER);
+    expect(command?.[9]).toBe(0);
+    expect(device.closeCount).toBe(1);
+    expect(service.getSnapshot().diagnostics.lastAck?.resultCode).toBe(ACK_RESULT.OK);
+  });
+
+  it('tolerates Pico bootloader transport loss while sending the command', async () => {
+    const service = serviceFixture();
+    const device = new MockHidDevice();
+    hidMock.state.devicesList = [companionDeviceInfo()];
+    hidMock.state.openDevices.set('companion-path', device);
+
+    await poll(service);
+
+    device.featureReportWriteErrorOnce = new Error('WinUSB bridge helper request timed out.');
     await service.mountPicoBootloader();
 
     const command = device.sentReports.at(-1);
