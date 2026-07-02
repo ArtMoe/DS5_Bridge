@@ -135,6 +135,13 @@ describe('renderer behavior guards', () => {
     expect(appSource).toContain('picoFirmwareError');
   });
 
+  it('exposes the battery percentage tray icon preference in Bridge Settings', () => {
+    expect(appSource).toContain('Battery Tray Icon');
+    expect(appSource).toContain('Show controller battery percentage in the tray');
+    expect(appSource).toContain('snapshot.settings.showBatteryPercentTrayIcon');
+    expect(appSource).toContain('window.bridge.setShowBatteryPercentTrayIcon(!snapshot.settings.showBatteryPercentTrayIcon)');
+  });
+
   it('keeps the haptics test button actionable instead of relabeling it as game-active', () => {
     const start = appSource.indexOf('<button className="primary-action" type="button" disabled={activeFeedbackTestUnavailable}');
     expect(start).toBeGreaterThanOrEqual(0);

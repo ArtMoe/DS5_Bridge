@@ -51,11 +51,18 @@ const START_IN_TRAY_ARG = '--start-in-tray';
 const ALLOW_PARALLEL_AUTOMATION_INSTANCE = process.env.DS5_BRIDGE_ALLOW_PARALLEL_AUTOMATION_INSTANCE === '1';
 let mainWindow: BrowserWindow | null = null;
 let tray: Tray | null = null;
+let trayDefaultIcon: Electron.NativeImage | null = null;
 let bridgeService: BridgeService | null = null;
 let isQuitting = false;
 let shutdownComplete = false;
 const hasSingleInstanceLock = ALLOW_PARALLEL_AUTOMATION_INSTANCE || app.requestSingleInstanceLock();
 const audioHapticsIconCache = new Map<string, Promise<string | null> | string | null>();
+const TRAY_BATTERY_ICON_SIZE = 32;
+const TRAY_BATTERY_ICON_SCALE_FACTOR = 2;
+const TRAY_BATTERY_ICON_SHADOW = { red: 0, green: 0, blue: 0, alpha: 180 };
+const TRAY_BATTERY_ICON_DISCHARGING = { red: 245, green: 248, blue: 255, alpha: 255 };
+const TRAY_BATTERY_ICON_CHARGING = { red: 57, green: 215, blue: 125, alpha: 255 };
+const trayBatteryIconCache = new Map<string, Electron.NativeImage>();
 
 function windowsAppUserModelId(): string {
   return WINDOWS_APP_USER_MODEL_ID;
@@ -162,8 +169,160 @@ function trayTooltipForSnapshot(snapshot: BridgeSnapshot): string {
     : `${name} \u2014 ${snapshot.status.batteryPercent}%`;
 }
 
+type TrayBatteryIconColor = {
+  red: number;
+  green: number;
+  blue: number;
+  alpha: number;
+};
+
+const TRAY_BATTERY_DIGIT_SEGMENTS: Record<string, string> = {
+  '0': 'abcdef',
+  '1': 'bc',
+  '2': 'abdeg',
+  '3': 'abcdg',
+  '4': 'bcfg',
+  '5': 'acdfg',
+  '6': 'acdefg',
+  '7': 'abc',
+  '8': 'abcdefg',
+  '9': 'abcdfg'
+};
+
+function setTrayIconPixel(buffer: Buffer, x: number, y: number, color: TrayBatteryIconColor): void {
+  if (x < 0 || y < 0 || x >= TRAY_BATTERY_ICON_SIZE || y >= TRAY_BATTERY_ICON_SIZE) {
+    return;
+  }
+  const offset = ((y * TRAY_BATTERY_ICON_SIZE) + x) * 4;
+  buffer[offset] = color.blue;
+  buffer[offset + 1] = color.green;
+  buffer[offset + 2] = color.red;
+  buffer[offset + 3] = color.alpha;
+}
+
+function drawTrayIconRect(
+  buffer: Buffer,
+  x: number,
+  y: number,
+  width: number,
+  height: number,
+  color: TrayBatteryIconColor
+): void {
+  for (let row = y; row < y + height; row += 1) {
+    for (let column = x; column < x + width; column += 1) {
+      setTrayIconPixel(buffer, column, row, color);
+    }
+  }
+}
+
+function drawTrayIconDigit(
+  buffer: Buffer,
+  digit: string,
+  x: number,
+  y: number,
+  width: number,
+  height: number,
+  thickness: number,
+  color: TrayBatteryIconColor
+): void {
+  const segments = TRAY_BATTERY_DIGIT_SEGMENTS[digit];
+  if (!segments) {
+    return;
+  }
+
+  const middleY = Math.floor((height - thickness) / 2);
+  const lowerHeight = height - middleY - (thickness * 2);
+  const rects: Record<string, [number, number, number, number]> = {
+    a: [x + thickness, y, width - (thickness * 2), thickness],
+    b: [x + width - thickness, y + thickness, thickness, middleY - thickness],
+    c: [x + width - thickness, y + middleY + thickness, thickness, lowerHeight],
+    d: [x + thickness, y + height - thickness, width - (thickness * 2), thickness],
+    e: [x, y + middleY + thickness, thickness, lowerHeight],
+    f: [x, y + thickness, thickness, middleY - thickness],
+    g: [x + thickness, y + middleY, width - (thickness * 2), thickness]
+  };
+
+  for (const segment of segments) {
+    const [segmentX, segmentY, segmentWidth, segmentHeight] = rects[segment];
+    drawTrayIconRect(buffer, segmentX, segmentY, segmentWidth, segmentHeight, color);
+  }
+}
+
+function drawTrayIconNumber(buffer: Buffer, text: string, color: TrayBatteryIconColor, offset = 0): void {
+  const digitCount = text.length;
+  const digitWidth = digitCount === 1 ? 14 : digitCount === 2 ? 12 : 9;
+  const digitHeight = digitCount === 1 ? 24 : digitCount === 2 ? 24 : 22;
+  const thickness = digitCount === 3 ? 2 : 3;
+  const spacing = digitCount === 1 ? 0 : digitCount === 2 ? 2 : 1;
+  const totalWidth = (digitCount * digitWidth) + ((digitCount - 1) * spacing);
+  const startX = Math.floor((TRAY_BATTERY_ICON_SIZE - totalWidth) / 2) + offset;
+  const startY = Math.floor((TRAY_BATTERY_ICON_SIZE - digitHeight) / 2) + offset;
+
+  for (let index = 0; index < text.length; index += 1) {
+    drawTrayIconDigit(
+      buffer,
+      text[index],
+      startX + (index * (digitWidth + spacing)),
+      startY,
+      digitWidth,
+      digitHeight,
+      thickness,
+      color
+    );
+  }
+}
+
+function batteryTrayIcon(percent: number, charging: boolean): Electron.NativeImage {
+  const clampedPercent = Math.max(0, Math.min(100, Math.round(percent)));
+  const text = String(clampedPercent);
+  const key = `${text}:${charging ? 'charging' : 'discharging'}`;
+  const cached = trayBatteryIconCache.get(key);
+  if (cached) {
+    return cached;
+  }
+
+  const buffer = Buffer.alloc(TRAY_BATTERY_ICON_SIZE * TRAY_BATTERY_ICON_SIZE * 4);
+  drawTrayIconNumber(buffer, text, TRAY_BATTERY_ICON_SHADOW, 1);
+  drawTrayIconNumber(buffer, text, charging ? TRAY_BATTERY_ICON_CHARGING : TRAY_BATTERY_ICON_DISCHARGING);
+  const image = nativeImage.createFromBitmap(buffer, {
+    width: TRAY_BATTERY_ICON_SIZE,
+    height: TRAY_BATTERY_ICON_SIZE,
+    scaleFactor: TRAY_BATTERY_ICON_SCALE_FACTOR
+  });
+  trayBatteryIconCache.set(key, image);
+  return image;
+}
+
+function isChargingPowerState(rawPowerState: number | undefined): boolean {
+  return rawPowerState === 0x01 || rawPowerState === 0x02;
+}
+
+function trayIconForSnapshot(snapshot: BridgeSnapshot): Electron.NativeImage | null {
+  if (
+    !snapshot.settings.showBatteryPercentTrayIcon
+    || !snapshot.status?.controllerConnected
+    || snapshot.status.batteryPercent === null
+  ) {
+    return trayDefaultIcon;
+  }
+
+  return batteryTrayIcon(snapshot.status.batteryPercent, isChargingPowerState(snapshot.status.rawPowerState));
+}
+
 function updateTrayTooltip(snapshot: BridgeSnapshot): void {
   tray?.setToolTip(trayTooltipForSnapshot(snapshot));
+}
+
+function updateTrayIcon(snapshot: BridgeSnapshot): void {
+  const icon = trayIconForSnapshot(snapshot);
+  if (icon) {
+    tray?.setImage(icon);
+  }
+}
+
+function updateTrayPresentation(snapshot: BridgeSnapshot): void {
+  updateTrayTooltip(snapshot);
+  updateTrayIcon(snapshot);
 }
 
 function restoreMainWindowScale(recenter: boolean): void {
@@ -929,6 +1088,9 @@ function registerIpc(service: BridgeService): void {
     applyLaunchAtStartup(snapshot.settings.launchAtStartupEnabled);
     return snapshot;
   });
+  ipcMain.handle('bridge:setShowBatteryPercentTrayIcon', (_event, value: boolean) => (
+    service.setShowBatteryPercentTrayIcon(Boolean(value))
+  ));
   ipcMain.handle('bridge:setPollingRateMode', (_event, value: PollingRateMode) => (
     service.setPollingRateMode(value)
   ));
@@ -1051,8 +1213,9 @@ app.whenReady().then(async () => {
   powerMonitor.on('unlock-screen', () => scheduleMainWindowScaleRestore(true));
   screen.on('display-metrics-changed', () => scheduleMainWindowScaleRestore(true));
 
-  tray = new Tray(await createTrayIcon());
-  updateTrayTooltip(bridgeService.getSnapshot());
+  trayDefaultIcon = await createTrayIcon();
+  tray = new Tray(trayDefaultIcon);
+  updateTrayPresentation(bridgeService.getSnapshot());
   tray.setContextMenu(Menu.buildFromTemplate([
     { label: `Open ${APP_NAME}`, click: showWindowCentered },
     { type: 'separator' },
@@ -1061,7 +1224,7 @@ app.whenReady().then(async () => {
   tray.on('click', showWindowCentered);
 
   bridgeService.on('snapshot', (snapshot) => {
-    updateTrayTooltip(snapshot);
+    updateTrayPresentation(snapshot);
     sendToMainWindow('bridge:snapshot', snapshot);
   });
   bridgeService.on('toast', (toast) => {

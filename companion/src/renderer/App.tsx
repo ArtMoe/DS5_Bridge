@@ -9410,6 +9410,24 @@ export function App() {
                 </div>
                 <div className="settings-menu-row">
                   <div className="settings-menu-copy">
+                    <strong>Battery Tray Icon</strong>
+                    <span>Show controller battery percentage in the tray</span>
+                  </div>
+                  <button
+                    type="button"
+                    role="switch"
+                    aria-checked={snapshot.settings.showBatteryPercentTrayIcon}
+                    className={`switch ${snapshot.settings.showBatteryPercentTrayIcon ? 'on' : ''}`}
+                    disabled={pendingAction !== null}
+                    onClick={() => void runAction('battery-tray-icon', () => (
+                      window.bridge.setShowBatteryPercentTrayIcon(!snapshot.settings.showBatteryPercentTrayIcon)
+                    ))}
+                  >
+                    <span />
+                  </button>
+                </div>
+                <div className="settings-menu-row">
+                  <div className="settings-menu-copy">
                     <strong>Pico LED</strong>
                   </div>
                   <button

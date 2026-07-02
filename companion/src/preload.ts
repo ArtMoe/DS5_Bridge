@@ -122,6 +122,9 @@ const api = {
   setLaunchAtStartupEnabled: (value: boolean): Promise<BridgeSnapshot> => (
     ipcRenderer.invoke('bridge:setLaunchAtStartupEnabled', value)
   ),
+  setShowBatteryPercentTrayIcon: (value: boolean): Promise<BridgeSnapshot> => (
+    ipcRenderer.invoke('bridge:setShowBatteryPercentTrayIcon', value)
+  ),
   setUiScalePercent: (value: number): Promise<BridgeSnapshot> => ipcRenderer.invoke('bridge:setUiScalePercent', value),
   setUiThemePreset: (value: UiThemePreset): Promise<BridgeSnapshot> => (
     ipcRenderer.invoke('bridge:setUiThemePreset', value)

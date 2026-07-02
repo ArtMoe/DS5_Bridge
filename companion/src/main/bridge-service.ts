@@ -2718,6 +2718,14 @@ export class BridgeService extends EventEmitter {
     return this.getSnapshot();
   }
 
+  setShowBatteryPercentTrayIcon(enabled: boolean): BridgeSnapshot {
+    this.snapshot.settings = this.settingsStore.update({
+      showBatteryPercentTrayIcon: enabled
+    });
+    this.emitSnapshot();
+    return this.getSnapshot();
+  }
+
   async setPollingRateMode(mode: PollingRateMode): Promise<BridgeSnapshot> {
     const normalizedMode = normalizePollingRateMode(mode);
     await this.sendSettingCommand(

@@ -30,6 +30,7 @@ export interface CompanionSettings {
   uiScalePercent: UiScalePercent;
   uiThemePreset: UiThemePreset;
   launchAtStartupEnabled: boolean;
+  showBatteryPercentTrayIcon: boolean;
   hapticsEnabled: boolean;
   hapticsGainPercent: number;
   feedbackBoostEnabled: boolean;

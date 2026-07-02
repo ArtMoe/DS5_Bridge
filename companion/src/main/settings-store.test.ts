@@ -61,6 +61,7 @@ describe('SettingsStore', () => {
     expect(settings.micVolumePercent).toBe(100);
     expect(settings.micMuted).toBe(false);
     expect(settings.lightbarColor).toBe('#0000ff');
+    expect(settings.showBatteryPercentTrayIcon).toBe(false);
   });
 
   it('migrates legacy custom-only profile data without stealing selection', () => {
@@ -216,6 +217,17 @@ describe('SettingsStore', () => {
     expect(afterMutation.speakerVolumePercent).toBe(35);
     expect(afterMutation.controllerProfiles.find((profile) => profile.id === 'custom')?.settings.speakerVolumePercent).toBe(35);
     expect(afterMutation.buttonRemappingDraft.square).toBe('square');
+  });
+
+  it('persists the battery tray icon preference', () => {
+    const userDataPath = tempUserDataPath();
+    const store = new SettingsStore(userDataPath);
+
+    const updated = store.update({ showBatteryPercentTrayIcon: true });
+
+    expect(updated.showBatteryPercentTrayIcon).toBe(true);
+    expect(persistedSettings(userDataPath).showBatteryPercentTrayIcon).toBe(true);
+    expect(new SettingsStore(userDataPath).get().showBatteryPercentTrayIcon).toBe(true);
   });
 
   it('normalizes and persists chord functions and assignments', () => {
