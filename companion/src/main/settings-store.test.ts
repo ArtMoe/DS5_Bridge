@@ -412,6 +412,16 @@ describe('SettingsStore', () => {
     expect(persistedSettings(userDataPath).speakerGainLevel).toBe(6);
   });
 
+  it('clamps haptics buffer length to the firmware-safe range', () => {
+    const userDataPath = tempUserDataPath();
+    const store = new SettingsStore(userDataPath);
+
+    expect(store.update({ hapticsBufferLength: 2 }).hapticsBufferLength).toBe(16);
+    expect(store.update({ hapticsBufferLength: 44.4 }).hapticsBufferLength).toBe(44);
+    expect(store.update({ hapticsBufferLength: 255 }).hapticsBufferLength).toBe(128);
+    expect(persistedSettings(userDataPath).hapticsBufferLength).toBe(128);
+  });
+
   it('persists audio haptics app-session sources', () => {
     const userDataPath = tempUserDataPath();
     const store = new SettingsStore(userDataPath);

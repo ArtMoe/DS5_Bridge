@@ -472,6 +472,22 @@ describe('companion layout CSS', () => {
     expect(appSource).toContain('onClick={() => setHapticsPreset(presetValue)}');
   });
 
+  it('keeps the audio buffer length control compact and aligned', () => {
+    expect(appSource).toContain('className={`audio-buffer-control ${audioBufferStatusTone}`}');
+    expect(cssBlock('.audio-buffer-control', 'background: var(--surface-control-soft);')).toContain(
+      'border: 1px solid var(--surface-border);'
+    );
+    expect(cssBlock('.audio-buffer-header', 'justify-content: space-between;')).toContain(
+      'align-items: center;'
+    );
+    expect(cssBlock('.audio-buffer-slider-row', 'grid-template-columns: 28px minmax(0, 1fr) 58px;')).toContain(
+      'align-items: center;'
+    );
+    expect(cssBlock('.audio-buffer-readout', 'justify-items: end;')).toContain('text-align: right;');
+    expect(cssBlock('.audio-buffer-readout strong,', 'line-height: 1;')).toContain('line-height: 1;');
+    expect(cssBlock('.audio-buffer-readout span', 'font-size: 10px;')).toContain('line-height: 1;');
+  });
+
   it('uses solid command-chip tokens for overview status actions', () => {
     expect(cssBlock('.overview-chip', 'background: var(--command-chip-bg);')).toContain(
       'border: 1px solid var(--command-chip-border);'

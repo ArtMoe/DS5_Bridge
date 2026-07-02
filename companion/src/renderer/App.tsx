@@ -6,6 +6,8 @@ import {
   IconActivity as Activity,
   IconAdjustmentsHorizontal as Settings2,
   IconAdjustmentsHorizontal as SlidersHorizontal,
+  IconAlertHexagon,
+  IconAlertTriangle,
   IconArrowRight as ArrowRight,
   IconBatteryEco,
   IconBell as Bell,
@@ -15,6 +17,7 @@ import {
   IconBulb,
   IconCheck as Check,
   IconChevronDown as ChevronDown,
+  IconCircleCheck,
   IconCpu,
   IconDeviceFloppy as Save,
   IconDeviceGamepad2,
@@ -263,6 +266,10 @@ const STANDARD_FEEDBACK_GAIN_PERCENT = 200;
 const BOOSTED_FEEDBACK_GAIN_PERCENT = 500;
 const SPEAKER_VOLUME_STEP = 10;
 const MIC_VOLUME_STEP = 10;
+const AUDIO_BUFFER_LENGTH_MIN = 16;
+const AUDIO_BUFFER_LENGTH_MAX = 128;
+const AUDIO_BUFFER_LENGTH_HIGH_STUTTER_MAX = 44;
+const AUDIO_BUFFER_LENGTH_RISKY_MAX = 63;
 const LIGHTBAR_BRIGHTNESS_STEP = 10;
 const TRIGGER_EFFECT_STEP = 10;
 const CONTROLLER_POWER_SAVING_CAP_PERCENT = 60;
@@ -315,6 +322,10 @@ const TRIGGER_EFFECT_PRESETS: Array<[string, number]> = [
   ['High', 100]
 ];
 const PERCENT_SLIDER_TICKS = Array.from({ length: 11 }, (_, index) => index * 10);
+const AUDIO_BUFFER_LENGTH_TICKS = Array.from(
+  { length: (AUDIO_BUFFER_LENGTH_MAX - AUDIO_BUFFER_LENGTH_MIN) / 16 + 1 },
+  (_, index) => AUDIO_BUFFER_LENGTH_MIN + index * 16
+);
 const TRIGGER_LAB_SLIDER_STEP = 5;
 const TRIGGER_LAB_SLIDER_TICKS = Array.from({ length: 21 }, (_, index) => index * TRIGGER_LAB_SLIDER_STEP);
 const STANDARD_HAPTICS_SLIDER_TICKS = Array.from({ length: 11 }, (_, index) => index * 20);
@@ -832,6 +843,65 @@ function snapSpeakerVolume(value: number): number {
 
 function snapMicVolume(value: number): number {
   return Math.max(0, Math.min(100, Math.round(value / MIC_VOLUME_STEP) * MIC_VOLUME_STEP));
+}
+
+function clampAudioBufferLength(value: number): number {
+  return Math.max(AUDIO_BUFFER_LENGTH_MIN, Math.min(AUDIO_BUFFER_LENGTH_MAX, Math.round(value)));
+}
+
+function audioBufferDelayMs(value: number): number {
+  return clampAudioBufferLength(value) / 48;
+}
+
+function audioBufferDelayLabel(value: number): string {
+  return `${audioBufferDelayMs(value).toFixed(1)} ms`;
+}
+
+function audioBufferPercent(value: number): number {
+  return ((clampAudioBufferLength(value) - AUDIO_BUFFER_LENGTH_MIN) / (AUDIO_BUFFER_LENGTH_MAX - AUDIO_BUFFER_LENGTH_MIN)) * 100;
+}
+
+function audioBufferZoneLabel(value: number): string {
+  const length = clampAudioBufferLength(value);
+  if (length <= AUDIO_BUFFER_LENGTH_HIGH_STUTTER_MAX) {
+    return 'High Risk';
+  }
+  if (length <= AUDIO_BUFFER_LENGTH_RISKY_MAX) {
+    return 'Low Latency';
+  }
+  return 'Stable';
+}
+
+function audioBufferZoneTooltip(value: number): string {
+  const length = clampAudioBufferLength(value);
+  if (length <= AUDIO_BUFFER_LENGTH_HIGH_STUTTER_MAX) {
+    return 'Lowest latency, but most likely to crackle or stutter.';
+  }
+  if (length <= AUDIO_BUFFER_LENGTH_RISKY_MAX) {
+    return 'Lower latency with a moderate stutter risk.';
+  }
+  return 'More stable audio haptics with slightly more latency.';
+}
+
+function audioBufferZoneTone(value: number): 'good' | 'warn' | 'bad' {
+  const length = clampAudioBufferLength(value);
+  if (length <= AUDIO_BUFFER_LENGTH_HIGH_STUTTER_MAX) {
+    return 'bad';
+  }
+  if (length <= AUDIO_BUFFER_LENGTH_RISKY_MAX) {
+    return 'warn';
+  }
+  return 'good';
+}
+
+function audioBufferTickClass(value: number): string | undefined {
+  if (value === AUDIO_BUFFER_LENGTH_MIN || value === AUDIO_BUFFER_LENGTH_MAX) {
+    return 'milestone endpoint';
+  }
+  if (value === 64) {
+    return 'milestone';
+  }
+  return undefined;
 }
 
 function snapLightbarBrightness(value: number): number {
@@ -2286,15 +2356,20 @@ function ThemeOption({ label, value }: { label: string; value: UiThemePreset }) 
 function AudioHapticsConfigLabel({
   id,
   label,
-  tooltip
+  tooltip,
+  className = '',
+  showQuestionMark = false
 }: {
   id: string;
   label: string;
   tooltip: string;
+  className?: string;
+  showQuestionMark?: boolean;
 }) {
   return (
-    <span className="audio-haptics-config-label" tabIndex={0} aria-describedby={id}>
+    <span className={`audio-haptics-config-label ${className}`.trim()} tabIndex={0} aria-describedby={id}>
       {label}
+      {showQuestionMark ? <IconQuestionMark size={12} stroke={3} aria-hidden="true" /> : null}
       <span id={id} className="settings-shortcut-tooltip shortcut-glyph-tooltip audio-haptics-config-tooltip" role="tooltip">
         {tooltip}
       </span>
@@ -2692,6 +2767,7 @@ export function App() {
   const [classicRumbleValue, setClassicRumbleValue] = useState(100);
   const [speakerVolumeValue, setSpeakerVolumeValue] = useState(100);
   const [micVolumeValue, setMicVolumeValue] = useState(100);
+  const [audioBufferLengthValue, setAudioBufferLengthValue] = useState(64);
   const [lightbarColor, setLightbarColor] = useState('#ffff00');
   const [customLightbarColor, setCustomLightbarColor] = useState<string | null>(() => {
     const saved = window.localStorage.getItem('ds5bridge.customLightbarColor');
@@ -2764,6 +2840,7 @@ export function App() {
   const [feedbackBoostCommitPending, setFeedbackBoostCommitPending] = useState(false);
   const [speakerVolumeCommitPending, setSpeakerVolumeCommitPending] = useState(false);
   const [micVolumeCommitPending, setMicVolumeCommitPending] = useState(false);
+  const [audioBufferLengthCommitPending, setAudioBufferLengthCommitPending] = useState(false);
   const [audioReactiveHapticsCommitPending, setAudioReactiveHapticsCommitPending] = useState(false);
   const [lightbarCommitPending, setLightbarCommitPending] = useState(false);
   const [overviewSleepConfirmVisible, setOverviewSleepConfirmVisible] = useState(false);
@@ -2777,6 +2854,7 @@ export function App() {
   const classicRumbleEditingRef = useRef(false);
   const speakerVolumeEditingRef = useRef(false);
   const micVolumeEditingRef = useRef(false);
+  const audioBufferLengthEditingRef = useRef(false);
   const lightbarBrightnessEditingRef = useRef(false);
   const triggerEffectEditingRef = useRef(false);
   const notificationsRef = useRef<HTMLDivElement>(null);
@@ -3066,6 +3144,9 @@ export function App() {
     }
     if (!micVolumeEditingRef.current) {
       setMicVolumeValue(snapMicVolume(next.settings.micVolumePercent));
+    }
+    if (!audioBufferLengthEditingRef.current) {
+      setAudioBufferLengthValue(clampAudioBufferLength(next.settings.hapticsBufferLength));
     }
     const nextLightbarColor = lightbarColorFromSnapshot(next);
     setLightbarColor(nextLightbarColor);
@@ -3412,6 +3493,7 @@ export function App() {
   const sleepControllerSupported = Boolean(snapshot?.status?.firmwareFlags.sleepControllerControl);
   const pollingRateControlSupported = Boolean(snapshot?.status?.firmwareFlags.pollingRateControl);
   const hostPersonaControlSupported = Boolean(snapshot?.status?.firmwareFlags.hostPersonaControl);
+  const audioBufferLengthControlSupported = Boolean(snapshot?.status?.firmwareFlags.hapticsBufferLengthControl);
   const audioReactiveHapticsSupported = Boolean(snapshot?.status?.firmwareFlags.audioReactiveHapticsControl);
   const supportedHostPersonaModes: HostPersonaMode[] = snapshot?.status?.supportedHostPersonaModes ?? ['dualsense'];
   const hostPersonaOptions = HOST_PERSONA_OPTIONS.filter(([, mode]) => (
@@ -3527,6 +3609,26 @@ export function App() {
     ? 'Waiting for the controller to re-enumerate.'
     : audioPathLabel;
   const audioPathTone = connected && !personaTransitionActive ? 'good' : 'idle';
+  const audioBufferControlDisabled = !connected
+    || !audioBufferLengthControlSupported
+    || pendingAction !== null
+    || audioBufferLengthCommitPending;
+  const audioBufferStatusLabel = !connected
+    ? 'Unavailable'
+    : !audioBufferLengthControlSupported
+      ? 'Update Firmware'
+      : audioBufferZoneLabel(audioBufferLengthValue);
+  const audioBufferStatusTone = connected && audioBufferLengthControlSupported
+    ? audioBufferZoneTone(audioBufferLengthValue)
+    : 'idle';
+  const AudioBufferStatusIcon = audioBufferStatusTone === 'good'
+    ? IconCircleCheck
+    : audioBufferStatusTone === 'warn'
+      ? IconAlertTriangle
+      : IconAlertHexagon;
+  const audioBufferStatusTooltip = connected && audioBufferLengthControlSupported
+    ? audioBufferZoneTooltip(audioBufferLengthValue)
+    : audioBufferStatusLabel;
   const audioReactiveHapticsRouteSupported = audioReactiveHapticsSupported;
   const audioReactiveHapticsBlocked = !connected
     || !audioReactiveHapticsSupported
@@ -4247,6 +4349,36 @@ export function App() {
     micVolumeEditingRef.current = true;
     setMicVolumeValue(snappedValue);
     void commitMicVolume(snappedValue);
+  }
+
+  async function commitAudioBufferLength(value = audioBufferLengthValue) {
+    const snappedValue = clampAudioBufferLength(value);
+    if (
+      !snapshot
+      || snapshot.state !== 'connected'
+      || !audioBufferLengthControlSupported
+      || snappedValue === snapshot.settings.hapticsBufferLength
+      || audioBufferLengthCommitPending
+    ) {
+      audioBufferLengthEditingRef.current = false;
+      setAudioBufferLengthValue(snappedValue);
+      return;
+    }
+
+    setAudioBufferLengthCommitPending(true);
+    audioBufferLengthEditingRef.current = true;
+    try {
+      const next = await window.bridge.setHapticsBufferLength(snappedValue);
+      setSnapshot(next);
+      setAudioBufferLengthValue(clampAudioBufferLength(next.settings.hapticsBufferLength));
+    } catch {
+      const next = await window.bridge.getStatus();
+      setSnapshot(next);
+      setAudioBufferLengthValue(clampAudioBufferLength(next.settings.hapticsBufferLength));
+    } finally {
+      setAudioBufferLengthCommitPending(false);
+      audioBufferLengthEditingRef.current = false;
+    }
   }
 
   async function commitAudioReactiveHapticsConfig(config: Partial<AudioReactiveHapticsConfig>): Promise<BridgeSnapshot | null> {
@@ -7230,6 +7362,63 @@ export function App() {
                       </div>
                       <strong>{showMicrophoneControl ? micVolumeValue : speakerVolumeValue}%</strong>
                     </label>
+                  </div>
+                  <div className="audio-secondary-controls">
+                    <section className={`audio-buffer-control ${audioBufferStatusTone}`} aria-label="Audio buffer length">
+                      <div className="audio-buffer-header">
+                        <AudioHapticsConfigLabel
+                          id="audio-buffer-length-tooltip"
+                          label="Audio Buffer Length"
+                          tooltip="Controls the audio haptics packet buffer. Lower values reduce latency; higher values smooth over timing jitter."
+                          className="audio-buffer-label"
+                          showQuestionMark={true}
+                        />
+                        <span className={`audio-buffer-status-icon ${audioBufferStatusTone}`} title={audioBufferStatusTooltip}>
+                          <AudioBufferStatusIcon size={14} />
+                          <span>{audioBufferStatusLabel}</span>
+                        </span>
+                      </div>
+                      <label className="audio-buffer-slider-row">
+                        <span>{AUDIO_BUFFER_LENGTH_MIN}</span>
+                        <div className="range-control audio-buffer-range-control">
+                          <input
+                            type="range"
+                            min={AUDIO_BUFFER_LENGTH_MIN}
+                            max={AUDIO_BUFFER_LENGTH_MAX}
+                            step={1}
+                            value={audioBufferLengthValue}
+                            disabled={audioBufferControlDisabled}
+                            style={{ '--range-fill': `${audioBufferPercent(audioBufferLengthValue)}%` } as CSSProperties}
+                            aria-label="Audio buffer length"
+                            onPointerDown={() => {
+                              audioBufferLengthEditingRef.current = true;
+                            }}
+                            onChange={(event) => setAudioBufferLengthValue(clampAudioBufferLength(Number(event.currentTarget.value)))}
+                            onPointerUp={() => void commitAudioBufferLength()}
+                            onKeyDown={(event) => {
+                              if (event.key === 'ArrowLeft' || event.key === 'ArrowRight' || event.key === 'Home' || event.key === 'End') {
+                                audioBufferLengthEditingRef.current = true;
+                              }
+                            }}
+                            onKeyUp={(event) => {
+                              if (event.key === 'ArrowLeft' || event.key === 'ArrowRight' || event.key === 'Home' || event.key === 'End') {
+                                void commitAudioBufferLength();
+                              }
+                            }}
+                            onBlur={() => void commitAudioBufferLength()}
+                          />
+                          <div className="range-ticks" aria-hidden="true">
+                            {AUDIO_BUFFER_LENGTH_TICKS.map((value) => (
+                              <span key={value} className={audioBufferTickClass(value)} />
+                            ))}
+                          </div>
+                        </div>
+                        <span className="audio-buffer-readout">
+                          <strong>{audioBufferLengthValue}</strong>
+                          <span>{audioBufferDelayLabel(audioBufferLengthValue)}</span>
+                        </span>
+                      </label>
+                    </section>
                   </div>
                   {showMicrophoneControl ? (
                     <>

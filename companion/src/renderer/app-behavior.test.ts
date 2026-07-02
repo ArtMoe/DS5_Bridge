@@ -96,6 +96,17 @@ describe('renderer behavior guards', () => {
     expect(compactStatusSource).not.toContain('className={`dot');
   });
 
+  it('exposes the firmware-gated audio buffer length control', () => {
+    expect(appSource).toContain('const AUDIO_BUFFER_LENGTH_MIN = 16;');
+    expect(appSource).toContain('const AUDIO_BUFFER_LENGTH_MAX = 128;');
+    expect(appSource).toContain('audioBufferLengthControlSupported');
+    expect(appSource).toContain('firmwareFlags.hapticsBufferLengthControl');
+    expect(appSource).toContain('window.bridge.setHapticsBufferLength(snappedValue)');
+    expect(appSource).toContain('Audio Buffer Length');
+    expect(appSource).toContain('audio-buffer-readout');
+    expect(appSource).not.toContain('Math.min(255, Math.round(length))');
+  });
+
   it('keeps the haptics test button actionable instead of relabeling it as game-active', () => {
     const start = appSource.indexOf('<button className="primary-action" type="button" disabled={activeFeedbackTestUnavailable}');
     expect(start).toBeGreaterThanOrEqual(0);

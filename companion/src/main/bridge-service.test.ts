@@ -1025,7 +1025,7 @@ describe('BridgeService', () => {
     expect(snapshot.settings.muteKeyboardChordStarterEnabled).toBe(false);
   });
 
-  it('sends and stores haptics buffer length', async () => {
+  it('sends and stores clamped haptics buffer length', async () => {
     const service = serviceFixture();
     const device = new MockHidDevice();
     device.status = statusReport({ controllerConnected: false, firmwareFlags: 0x41 });
@@ -1033,12 +1033,26 @@ describe('BridgeService', () => {
     hidMock.state.openDevices.set('companion-path', device);
 
     await poll(service);
-    const snapshot = await service.setHapticsBufferLength(64);
+    let snapshot = await service.setHapticsBufferLength(2);
 
-    const command = device.sentReports.at(-1);
+    let command = device.sentReports.at(-1);
+    expect(command?.[7]).toBe(COMMAND_ID.SET_HAPTICS_BUFFER_LENGTH);
+    expect(command?.[9]).toBe(16);
+    expect(snapshot.settings.hapticsBufferLength).toBe(16);
+
+    snapshot = await service.setHapticsBufferLength(64);
+
+    command = device.sentReports.at(-1);
     expect(command?.[7]).toBe(COMMAND_ID.SET_HAPTICS_BUFFER_LENGTH);
     expect(command?.[9]).toBe(64);
     expect(snapshot.settings.hapticsBufferLength).toBe(64);
+
+    snapshot = await service.setHapticsBufferLength(255);
+
+    command = device.sentReports.at(-1);
+    expect(command?.[7]).toBe(COMMAND_ID.SET_HAPTICS_BUFFER_LENGTH);
+    expect(command?.[9]).toBe(128);
+    expect(snapshot.settings.hapticsBufferLength).toBe(128);
   });
 
   it('sends and stores adaptive trigger intensity', async () => {
