@@ -473,19 +473,27 @@ describe('companion layout CSS', () => {
   });
 
   it('keeps the audio buffer length control compact and aligned', () => {
-    expect(appSource).toContain('className={`audio-buffer-control ${audioBufferStatusTone}`}');
-    expect(cssBlock('.audio-buffer-control', 'background: var(--surface-control-soft);')).toContain(
-      'border: 1px solid var(--surface-border);'
+    expect(appSource).toContain("className={`audio-buffer-control framed-slider ${audioBufferLengthControlDisabled ? 'disabled' : ''}`}");
+    expect(cssBlock('.audio-buffer-control', 'padding: 14px 18px;')).toContain('overflow: visible;');
+    expect(cssBlock('.audio-buffer-control.disabled', 'opacity: 0.58;')).toContain('opacity: 0.58;');
+    expect(cssBlock('.audio-buffer-header', 'grid-template-columns: minmax(0, 1fr) minmax(92px, auto) 30px;')).toContain(
+      'display: grid;'
     );
-    expect(cssBlock('.audio-buffer-header', 'justify-content: space-between;')).toContain(
-      'align-items: center;'
+    expect(cssBlock('.audio-buffer-title', 'text-decoration-style: dotted;')).toContain('white-space: nowrap;');
+    expect(cssBlock('.audio-buffer-title .audio-haptics-config-tooltip', 'right: auto;')).toContain(
+      'width: var(--audio-buffer-tooltip-width);'
     );
-    expect(cssBlock('.audio-buffer-slider-row', 'grid-template-columns: 28px minmax(0, 1fr) 58px;')).toContain(
-      'align-items: center;'
+    expect(cssBlock('.audio-buffer-readout', 'display: inline-flex;')).toContain('gap: 9px;');
+    expect(cssBlock('.audio-buffer-status-icon', 'width: 26px;')).toContain('cursor: help;');
+    expect(cssBlock('.audio-buffer-zone-tooltip', 'right: 0;')).toContain('width: 250px;');
+    expect(cssBlock('.audio-buffer-slider-row', 'gap: 2px;')).toContain('gap: 2px;');
+    expect(cssBlock('.audio-buffer-range-control', 'gap: 0;')).toContain('min-width: 0;');
+    expect(cssBlock('.audio-buffer-control input[type="range"]::-webkit-slider-runnable-track', 'height: 5px;')).toContain(
+      'var(--range-track-rest)'
     );
-    expect(cssBlock('.audio-buffer-readout', 'justify-items: end;')).toContain('text-align: right;');
-    expect(cssBlock('.audio-buffer-readout strong,', 'line-height: 1;')).toContain('line-height: 1;');
-    expect(cssBlock('.audio-buffer-readout span', 'font-size: 10px;')).toContain('line-height: 1;');
+    expect(cssBlock('.audio-buffer-control input[type="range"]::-webkit-slider-thumb', 'width: 22px;')).toContain(
+      'margin-top: -8.5px;'
+    );
   });
 
   it('keeps Pico firmware maintenance actions compact inside Bridge Settings', () => {
