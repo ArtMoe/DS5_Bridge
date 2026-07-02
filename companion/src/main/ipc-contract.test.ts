@@ -4,6 +4,8 @@ import { describe, expect, it } from 'vitest';
 const preloadSource = readFileSync(new URL('../preload.ts', import.meta.url), 'utf8');
 const mainSource = readFileSync(new URL('./main.ts', import.meta.url), 'utf8');
 const bridgeServiceSource = readFileSync(new URL('./bridge-service.ts', import.meta.url), 'utf8');
+const packageSource = readFileSync(new URL('../../package.json', import.meta.url), 'utf8');
+const packageWinSource = readFileSync(new URL('../../scripts/package-win.mjs', import.meta.url), 'utf8');
 
 function matches(source: string, pattern: RegExp): string[] {
   return [...source.matchAll(pattern)].map((match) => match[1] ?? '');
@@ -80,5 +82,15 @@ describe('IPC contract', () => {
     expect(mainSource).toContain('updateTrayTooltip(bridgeService.getSnapshot())');
     expect(mainSource).toContain("bridgeService.on('snapshot', (snapshot) => {");
     expect(mainSource).toContain('updateTrayTooltip(snapshot);');
+  });
+
+  it('loads the high-resolution tray mark icon without forcing a 16px resize', () => {
+    expect(mainSource).toContain("const APP_TRAY_ICON_ICO = path.join('assets', 'controllers', 'ds5-bridge_mark.ico');");
+    expect(mainSource).toContain("const APP_TRAY_ICON_PNG = path.join('assets', 'controllers', 'ds5-bridge_mark.png');");
+    expect(mainSource).toContain('const icon = createImageAsset(APP_TRAY_ICON_ICO);');
+    expect(mainSource).toContain('const pngIcon = createImageAsset(APP_TRAY_ICON_PNG);');
+    expect(mainSource).not.toContain('return icon.resize({ width: 16');
+    expect(packageSource).toContain('"ds5-bridge_mark.ico"');
+    expect(packageWinSource).toContain("'ds5-bridge_mark.ico'");
   });
 });

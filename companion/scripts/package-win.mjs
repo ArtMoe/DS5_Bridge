@@ -21,6 +21,7 @@ const appPackage = JSON.parse(fs.readFileSync(path.join(companionDir, 'package.j
 const appAssets = [
   'ds5-bridge_app-icon-tile.ico',
   'ds5-bridge_app-icon-tile.png',
+  'ds5-bridge_mark.ico',
   'ds5-bridge_mark.png'
 ];
 

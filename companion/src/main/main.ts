@@ -40,6 +40,8 @@ const APP_NAME = 'DS5 Bridge';
 const WINDOWS_APP_USER_MODEL_ID = 'io.github.sundaymoments.ds5bridge';
 const WINDOWS_TOAST_ACTIVATOR_CLSID = '{A8B3700D-4BB5-4E22-BF57-0C43B7C2FDF6}';
 const APP_MARK_PNG = path.join('assets', 'controllers', 'ds5-bridge_mark.png');
+const APP_TRAY_ICON_ICO = path.join('assets', 'controllers', 'ds5-bridge_mark.ico');
+const APP_TRAY_ICON_PNG = path.join('assets', 'controllers', 'ds5-bridge_mark.png');
 const APP_ICON_ICO = path.join('assets', 'controllers', 'ds5-bridge_app-icon-tile.ico');
 const PICO_UNIVERSAL_FLASH_NUKE_RELATIVE_PATH = path.join('firmware', PICO_UNIVERSAL_FLASH_NUKE_FILE);
 const PICO_UNIVERSAL_FLASH_NUKE_SHA256_RELATIVE_PATH = path.join('firmware', PICO_UNIVERSAL_FLASH_NUKE_SHA256_FILE);
@@ -93,17 +95,13 @@ function sendToMainWindow(channel: string, ...args: unknown[]): void {
 }
 
 async function createTrayIcon(): Promise<Electron.NativeImage> {
-  const icon = createRuntimeIcon();
+  const icon = createImageAsset(APP_TRAY_ICON_ICO);
   if (!icon.isEmpty()) {
-    return icon.resize({ width: 16, height: 16, quality: 'best' });
+    return icon;
   }
 
-  try {
-    const fileIcon = await app.getFileIcon(process.execPath, { size: 'normal' });
-    return fileIcon.isEmpty() ? nativeImage.createEmpty() : fileIcon;
-  } catch {
-    return nativeImage.createEmpty();
-  }
+  const pngIcon = createImageAsset(APP_TRAY_ICON_PNG);
+  return pngIcon.isEmpty() ? nativeImage.createEmpty() : pngIcon;
 }
 
 function scaledWindowSize(uiScalePercent: UiScalePercent): { width: number; height: number } {
