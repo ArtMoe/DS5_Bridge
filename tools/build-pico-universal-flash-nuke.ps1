@@ -25,6 +25,23 @@ function Invoke-Checked {
   }
 }
 
+function Get-Sha256Hex {
+  param([string] $Path)
+
+  $stream = [System.IO.File]::OpenRead($Path)
+  try {
+    $sha256 = [System.Security.Cryptography.SHA256]::Create()
+    try {
+      $bytes = $sha256.ComputeHash($stream)
+      return [System.BitConverter]::ToString($bytes).Replace('-', '').ToLowerInvariant()
+    } finally {
+      $sha256.Dispose()
+    }
+  } finally {
+    $stream.Dispose()
+  }
+}
+
 Invoke-Checked @('cmake', '-S', $sourceDir, '-B', $rp2040Build, '-G', 'Ninja', '-DPICO_BOARD=pico', '-DCMAKE_BUILD_TYPE=Release')
 Invoke-Checked @('cmake', '--build', $rp2040Build, '--target', 'flash_nuke')
 Invoke-Checked @('cmake', '-S', $sourceDir, '-B', $rp2350Build, '-G', 'Ninja', '-DPICO_BOARD=pico2', '-DCMAKE_BUILD_TYPE=Release')
@@ -56,8 +73,7 @@ try {
 
 $item = Get-Item -LiteralPath $OutputPath
 $hashPath = "$OutputPath.sha256"
-$hash = Get-FileHash -LiteralPath $OutputPath -Algorithm SHA256
-$hashLower = $hash.Hash.ToLowerInvariant()
+$hashLower = Get-Sha256Hex $OutputPath
 Set-Content -LiteralPath $hashPath -Value "$hashLower  $($item.Name)" -Encoding ascii
 $hashSourcePath = Join-Path $repoRoot 'companion\src\main\pico-universal-flash-nuke-hash.ts'
 Set-Content -LiteralPath $hashSourcePath -Value @(
