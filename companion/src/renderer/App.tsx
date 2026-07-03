@@ -6,6 +6,8 @@ import {
   IconActivity as Activity,
   IconAdjustmentsHorizontal as Settings2,
   IconAdjustmentsHorizontal as SlidersHorizontal,
+  IconAlertHexagon,
+  IconAlertTriangle,
   IconArrowRight as ArrowRight,
   IconBatteryEco,
   IconBell as Bell,
@@ -15,6 +17,7 @@ import {
   IconBulb,
   IconCheck as Check,
   IconChevronDown as ChevronDown,
+  IconCircleCheck,
   IconCpu,
   IconDeviceFloppy as Save,
   IconDeviceGamepad2,
@@ -41,6 +44,7 @@ import {
   IconPlayerPlay as Play,
   IconPlus as Plus,
   IconQuestionMark,
+  IconRadioactive,
   IconRefresh as RefreshCcw,
   IconReplace,
   IconSettings as SettingsIcon,
@@ -51,6 +55,8 @@ import {
   IconTestPipe,
   IconTool,
   IconTrash as Trash2,
+  IconUpload,
+  IconUsb,
   IconVolume,
   IconVolume as Volume2,
   IconVolumeOff as VolumeX,
@@ -263,6 +269,10 @@ const STANDARD_FEEDBACK_GAIN_PERCENT = 200;
 const BOOSTED_FEEDBACK_GAIN_PERCENT = 500;
 const SPEAKER_VOLUME_STEP = 10;
 const MIC_VOLUME_STEP = 10;
+const AUDIO_BUFFER_LENGTH_MIN = 16;
+const AUDIO_BUFFER_LENGTH_MAX = 128;
+const AUDIO_BUFFER_LENGTH_HIGH_STUTTER_MAX = 44;
+const AUDIO_BUFFER_LENGTH_RISKY_MAX = 63;
 const LIGHTBAR_BRIGHTNESS_STEP = 10;
 const TRIGGER_EFFECT_STEP = 10;
 const CONTROLLER_POWER_SAVING_CAP_PERCENT = 60;
@@ -832,6 +842,58 @@ function snapSpeakerVolume(value: number): number {
 
 function snapMicVolume(value: number): number {
   return Math.max(0, Math.min(100, Math.round(value / MIC_VOLUME_STEP) * MIC_VOLUME_STEP));
+}
+
+function clampAudioBufferLength(value: number): number {
+  if (!Number.isFinite(value)) {
+    return 64;
+  }
+  return Math.max(AUDIO_BUFFER_LENGTH_MIN, Math.min(AUDIO_BUFFER_LENGTH_MAX, Math.round(value)));
+}
+
+function audioBufferDelayMs(value: number): number {
+  return clampAudioBufferLength(value) / 3;
+}
+
+function audioBufferDelayLabel(value: number): string {
+  return `${audioBufferDelayMs(value).toFixed(1)} ms`;
+}
+
+function audioBufferPercent(value: number): number {
+  return ((clampAudioBufferLength(value) - AUDIO_BUFFER_LENGTH_MIN) / (AUDIO_BUFFER_LENGTH_MAX - AUDIO_BUFFER_LENGTH_MIN)) * 100;
+}
+
+function audioBufferZoneLabel(value: number): string {
+  const bufferLength = clampAudioBufferLength(value);
+  if (bufferLength <= AUDIO_BUFFER_LENGTH_HIGH_STUTTER_MAX) {
+    return 'High stutter';
+  }
+  if (bufferLength <= AUDIO_BUFFER_LENGTH_RISKY_MAX) {
+    return 'Risky';
+  }
+  return 'Safe';
+}
+
+function audioBufferZoneTooltip(value: number): string {
+  const bufferLength = clampAudioBufferLength(value);
+  if (bufferLength <= AUDIO_BUFFER_LENGTH_HIGH_STUTTER_MAX) {
+    return 'Danger: lowest haptic delay, but speaker audio is likely to stutter or underrun.';
+  }
+  if (bufferLength <= AUDIO_BUFFER_LENGTH_RISKY_MAX) {
+    return 'Warning: lower haptic delay, with a minimal chance of speaker stutter under load.';
+  }
+  return 'Safe: more speaker buffer headroom, with higher DualSense haptic delay.';
+}
+
+function audioBufferZoneTone(value: number): 'stutter' | 'risky' | 'safe' {
+  const bufferLength = clampAudioBufferLength(value);
+  if (bufferLength <= AUDIO_BUFFER_LENGTH_HIGH_STUTTER_MAX) {
+    return 'stutter';
+  }
+  if (bufferLength <= AUDIO_BUFFER_LENGTH_RISKY_MAX) {
+    return 'risky';
+  }
+  return 'safe';
 }
 
 function snapLightbarBrightness(value: number): number {
@@ -1698,8 +1760,15 @@ function controllerName(type: string | undefined): string {
 
 function healthLabel(snapshot: BridgeSnapshot | null | undefined): string {
   if (!snapshot) return 'Unavailable';
-  if (snapshot.state !== 'connected') return snapshot.message;
+  if (snapshot.state !== 'connected') {
+    return /^Firmware .+ update required$/i.test(snapshot.message)
+      ? 'Update required: Bridge Settings > Firmware'
+      : snapshot.message;
+  }
   if (snapshot.diagnostics.lastError) return snapshot.diagnostics.lastError;
+  if (snapshot.diagnostics.firmwareUpdateAvailable) {
+    return `Firmware ${snapshot.diagnostics.firmwareUpdateAvailable.availableVersion} available`;
+  }
   return 'All systems normal';
 }
 
@@ -2286,15 +2355,20 @@ function ThemeOption({ label, value }: { label: string; value: UiThemePreset }) 
 function AudioHapticsConfigLabel({
   id,
   label,
-  tooltip
+  tooltip,
+  className = '',
+  showQuestionMark = false
 }: {
   id: string;
   label: string;
   tooltip: string;
+  className?: string;
+  showQuestionMark?: boolean;
 }) {
   return (
-    <span className="audio-haptics-config-label" tabIndex={0} aria-describedby={id}>
+    <span className={`audio-haptics-config-label ${className}`.trim()} tabIndex={0} aria-describedby={id}>
       {label}
+      {showQuestionMark ? <IconQuestionMark size={12} stroke={3} aria-hidden="true" /> : null}
       <span id={id} className="settings-shortcut-tooltip shortcut-glyph-tooltip audio-haptics-config-tooltip" role="tooltip">
         {tooltip}
       </span>
@@ -2692,6 +2766,7 @@ export function App() {
   const [classicRumbleValue, setClassicRumbleValue] = useState(100);
   const [speakerVolumeValue, setSpeakerVolumeValue] = useState(100);
   const [micVolumeValue, setMicVolumeValue] = useState(100);
+  const [audioBufferLengthValue, setAudioBufferLengthValue] = useState(64);
   const [lightbarColor, setLightbarColor] = useState('#ffff00');
   const [customLightbarColor, setCustomLightbarColor] = useState<string | null>(() => {
     const saved = window.localStorage.getItem('ds5bridge.customLightbarColor');
@@ -2764,6 +2839,7 @@ export function App() {
   const [feedbackBoostCommitPending, setFeedbackBoostCommitPending] = useState(false);
   const [speakerVolumeCommitPending, setSpeakerVolumeCommitPending] = useState(false);
   const [micVolumeCommitPending, setMicVolumeCommitPending] = useState(false);
+  const [audioBufferLengthCommitPending, setAudioBufferLengthCommitPending] = useState(false);
   const [audioReactiveHapticsCommitPending, setAudioReactiveHapticsCommitPending] = useState(false);
   const [lightbarCommitPending, setLightbarCommitPending] = useState(false);
   const [overviewSleepConfirmVisible, setOverviewSleepConfirmVisible] = useState(false);
@@ -2773,10 +2849,13 @@ export function App() {
   const [startupTutorialSupportCountdown, setStartupTutorialSupportCountdown] = useState(5);
   const [deviceCleanupMessage, setDeviceCleanupMessage] = useState<string | null>(null);
   const [deviceCleanupError, setDeviceCleanupError] = useState<string | null>(null);
+  const [picoFirmwareMessage, setPicoFirmwareMessage] = useState<string | null>(null);
+  const [picoFirmwareError, setPicoFirmwareError] = useState<string | null>(null);
   const hapticsEditingRef = useRef(false);
   const classicRumbleEditingRef = useRef(false);
   const speakerVolumeEditingRef = useRef(false);
   const micVolumeEditingRef = useRef(false);
+  const audioBufferLengthEditingRef = useRef(false);
   const lightbarBrightnessEditingRef = useRef(false);
   const triggerEffectEditingRef = useRef(false);
   const notificationsRef = useRef<HTMLDivElement>(null);
@@ -3066,6 +3145,9 @@ export function App() {
     }
     if (!micVolumeEditingRef.current) {
       setMicVolumeValue(snapMicVolume(next.settings.micVolumePercent));
+    }
+    if (!audioBufferLengthEditingRef.current) {
+      setAudioBufferLengthValue(clampAudioBufferLength(next.settings.hapticsBufferLength));
     }
     const nextLightbarColor = lightbarColorFromSnapshot(next);
     setLightbarColor(nextLightbarColor);
@@ -3412,6 +3494,7 @@ export function App() {
   const sleepControllerSupported = Boolean(snapshot?.status?.firmwareFlags.sleepControllerControl);
   const pollingRateControlSupported = Boolean(snapshot?.status?.firmwareFlags.pollingRateControl);
   const hostPersonaControlSupported = Boolean(snapshot?.status?.firmwareFlags.hostPersonaControl);
+  const audioBufferLengthControlSupported = Boolean(snapshot?.status?.firmwareFlags.hapticsBufferLengthControl);
   const audioReactiveHapticsSupported = Boolean(snapshot?.status?.firmwareFlags.audioReactiveHapticsControl);
   const supportedHostPersonaModes: HostPersonaMode[] = snapshot?.status?.supportedHostPersonaModes ?? ['dualsense'];
   const hostPersonaOptions = HOST_PERSONA_OPTIONS.filter(([, mode]) => (
@@ -3527,6 +3610,10 @@ export function App() {
     ? 'Waiting for the controller to re-enumerate.'
     : audioPathLabel;
   const audioPathTone = connected && !personaTransitionActive ? 'good' : 'idle';
+  const audioBufferLengthControlDisabled = !connected
+    || !audioBufferLengthControlSupported
+    || pendingAction !== null
+    || audioBufferLengthCommitPending;
   const audioReactiveHapticsRouteSupported = audioReactiveHapticsSupported;
   const audioReactiveHapticsBlocked = !connected
     || !audioReactiveHapticsSupported
@@ -3705,16 +3792,26 @@ export function App() {
   const pollingRateLabel = POLLING_RATE_OPTIONS.find(([, mode]) => mode === snapshot?.settings.pollingRateMode)?.[0]
     .replace(' / Real-time', '')
     ?? '--';
+  const firmwareUpdateAvailable = Boolean(snapshot?.diagnostics.firmwareUpdateAvailable);
   const overviewHealthLabel = healthLabel(snapshot);
   const overviewHealthTone = personaTransitionActive
     ? 'warn'
     : snapshot?.diagnostics.lastError
     ? 'bad'
+    : firmwareUpdateAvailable
+    ? 'warn'
     : connected && controllerConnected
       ? 'good'
       : connected
         ? 'warn'
         : 'idle';
+  const systemHealthTone = personaTransitionActive
+    ? 'warn'
+    : snapshot?.diagnostics.lastError
+      ? 'bad'
+      : firmwareUpdateAvailable
+        ? 'warn'
+        : 'good';
   const overviewConnectionStatus = personaTransitionActive
     ? 'Switching'
     : connected && controllerConnected
@@ -4247,6 +4344,36 @@ export function App() {
     micVolumeEditingRef.current = true;
     setMicVolumeValue(snappedValue);
     void commitMicVolume(snappedValue);
+  }
+
+  async function commitAudioBufferLength(value = audioBufferLengthValue) {
+    const snappedValue = clampAudioBufferLength(value);
+    if (
+      !snapshot
+      || snapshot.state !== 'connected'
+      || !audioBufferLengthControlSupported
+      || snappedValue === snapshot.settings.hapticsBufferLength
+      || audioBufferLengthCommitPending
+    ) {
+      audioBufferLengthEditingRef.current = false;
+      setAudioBufferLengthValue(snappedValue);
+      return;
+    }
+
+    setAudioBufferLengthCommitPending(true);
+    audioBufferLengthEditingRef.current = true;
+    try {
+      const next = await window.bridge.setHapticsBufferLength(snappedValue);
+      setSnapshot(next);
+      setAudioBufferLengthValue(clampAudioBufferLength(next.settings.hapticsBufferLength));
+    } catch {
+      const next = await window.bridge.getStatus();
+      setSnapshot(next);
+      setAudioBufferLengthValue(clampAudioBufferLength(next.settings.hapticsBufferLength));
+    } finally {
+      setAudioBufferLengthCommitPending(false);
+      audioBufferLengthEditingRef.current = false;
+    }
   }
 
   async function commitAudioReactiveHapticsConfig(config: Partial<AudioReactiveHapticsConfig>): Promise<BridgeSnapshot | null> {
@@ -5596,6 +5723,44 @@ export function App() {
       }
       setPendingAction(null);
     }
+  }
+
+  async function runPicoFirmwareAction(
+    label: string,
+    action: () => Promise<{ ok: boolean; cancelled?: boolean; message: string }>
+  ) {
+    if (pendingAction !== null) {
+      return;
+    }
+    setPendingAction(label);
+    setPicoFirmwareMessage(null);
+    setPicoFirmwareError(null);
+    try {
+      const result = await action();
+      if (!result.cancelled) {
+        if (result.ok) {
+          setPicoFirmwareMessage(result.message);
+        } else {
+          setPicoFirmwareError(result.message);
+        }
+      }
+    } catch (error) {
+      setPicoFirmwareError(error instanceof Error ? error.message : 'Pico firmware action failed.');
+    } finally {
+      setPendingAction(null);
+    }
+  }
+
+  function mountPicoBootloader() {
+    void runPicoFirmwareAction('pico-firmware-mount', () => window.bridge.mountPicoBootloader());
+  }
+
+  function flashPicoFirmware() {
+    void runPicoFirmwareAction('pico-firmware-flash', () => window.bridge.flashPicoFirmware());
+  }
+
+  function nukePicoFlash() {
+    void runPicoFirmwareAction('pico-firmware-nuke', () => window.bridge.nukePicoFlash());
   }
 
   function toggleAudioEnabled() {
@@ -7274,6 +7439,82 @@ export function App() {
                           </button>
                         ))}
                       </div>
+                      <div className="audio-secondary-controls">
+                        <div
+                          className={`audio-buffer-control framed-slider ${audioBufferLengthControlDisabled ? 'disabled' : ''}`}
+                          style={{ '--range-fill': `${audioBufferPercent(audioBufferLengthValue)}%` } as CSSProperties}
+                        >
+                          <div className="audio-buffer-header">
+                            <AudioHapticsConfigLabel
+                              id="audio-buffer-length-tooltip"
+                              label="Audio Buffer Length"
+                              tooltip="Sets the DualSense audio buffer value. Lower values reduce haptic delay but increase stutter risk; higher values improve speaker stability at the cost of latency."
+                              className="audio-buffer-title"
+                            />
+                            <div className="audio-buffer-readout">
+                              <strong>{audioBufferLengthValue}</strong>
+                              <span>{audioBufferDelayLabel(audioBufferLengthValue)}</span>
+                            </div>
+                            <div
+                              className={`audio-buffer-status-icon ${audioBufferZoneTone(audioBufferLengthValue)}`}
+                              aria-label={audioBufferZoneLabel(audioBufferLengthValue)}
+                              aria-describedby="audio-buffer-zone-tooltip"
+                              tabIndex={0}
+                            >
+                              {audioBufferZoneTone(audioBufferLengthValue) === 'safe' && (
+                                <IconCircleCheck size={18} stroke={2.35} aria-hidden="true" />
+                              )}
+                              {audioBufferZoneTone(audioBufferLengthValue) === 'risky' && (
+                                <IconAlertTriangle size={18} stroke={2.35} aria-hidden="true" />
+                              )}
+                              {audioBufferZoneTone(audioBufferLengthValue) === 'stutter' && (
+                                <IconAlertHexagon size={18} stroke={2.35} aria-hidden="true" />
+                              )}
+                              <span
+                                id="audio-buffer-zone-tooltip"
+                                className="settings-shortcut-tooltip shortcut-glyph-tooltip audio-buffer-zone-tooltip"
+                                role="tooltip"
+                              >
+                                {audioBufferZoneTooltip(audioBufferLengthValue)}
+                              </span>
+                            </div>
+                          </div>
+                          <label className="audio-slider-row audio-buffer-slider-row">
+                            <div className="range-control audio-buffer-range-control">
+                              <input
+                                type="range"
+                                min={AUDIO_BUFFER_LENGTH_MIN}
+                                max={AUDIO_BUFFER_LENGTH_MAX}
+                                step="1"
+                                value={audioBufferLengthValue}
+                                aria-label="Audio buffer length"
+                                aria-valuetext={`${audioBufferLengthValue}, ${audioBufferDelayLabel(audioBufferLengthValue)}, ${audioBufferZoneLabel(audioBufferLengthValue)}`}
+                                disabled={audioBufferLengthControlDisabled}
+                                onPointerDown={() => {
+                                  audioBufferLengthEditingRef.current = true;
+                                }}
+                                onPointerCancel={() => void commitAudioBufferLength()}
+                                onChange={(event) => {
+                                  audioBufferLengthEditingRef.current = true;
+                                  setAudioBufferLengthValue(clampAudioBufferLength(Number(event.currentTarget.value)));
+                                }}
+                                onPointerUp={() => void commitAudioBufferLength()}
+                                onKeyDown={(event) => {
+                                  if (event.key === 'ArrowLeft' || event.key === 'ArrowRight' || event.key === 'Home' || event.key === 'End') {
+                                    audioBufferLengthEditingRef.current = true;
+                                  }
+                                }}
+                                onKeyUp={(event) => {
+                                  if (event.key === 'ArrowLeft' || event.key === 'ArrowRight' || event.key === 'Home' || event.key === 'End') {
+                                    void commitAudioBufferLength();
+                                  }
+                                }}
+                                onBlur={() => void commitAudioBufferLength()}
+                              />
+                            </div>
+                          </label>
+                        </div>
+                      </div>
                     </>
                   )}
                 </section>
@@ -8687,8 +8928,8 @@ export function App() {
                       </div>
                       <div className="device-row device-status-row">
                         <span>Status</span>
-                        <strong className={`health-label ${personaTransitionActive ? 'warn' : snapshot.diagnostics.lastError ? 'bad' : 'good'}`}>
-                          <span className={`dot ${personaTransitionActive ? 'warn' : snapshot.diagnostics.lastError ? 'bad' : statusTone}`} />
+                        <strong className={`health-label ${systemHealthTone}`}>
+                          <span className={`dot ${systemHealthTone === 'good' ? statusTone : systemHealthTone}`} />
                           {healthLabel(snapshot)}
                         </strong>
                       </div>
@@ -9186,6 +9427,24 @@ export function App() {
                 </div>
                 <div className="settings-menu-row">
                   <div className="settings-menu-copy">
+                    <strong>Battery Tray Icon</strong>
+                    <span>Show controller battery percentage in the tray</span>
+                  </div>
+                  <button
+                    type="button"
+                    role="switch"
+                    aria-checked={snapshot.settings.showBatteryPercentTrayIcon}
+                    className={`switch ${snapshot.settings.showBatteryPercentTrayIcon ? 'on' : ''}`}
+                    disabled={pendingAction !== null}
+                    onClick={() => void runAction('battery-tray-icon', () => (
+                      window.bridge.setShowBatteryPercentTrayIcon(!snapshot.settings.showBatteryPercentTrayIcon)
+                    ))}
+                  >
+                    <span />
+                  </button>
+                </div>
+                <div className="settings-menu-row">
+                  <div className="settings-menu-copy">
                     <strong>Pico LED</strong>
                   </div>
                   <button
@@ -9246,6 +9505,51 @@ export function App() {
                   >
                     <span />
                   </button>
+                </div>
+                <div className="settings-menu-row pico-firmware-row">
+                  <div className="pico-firmware-header">
+                    <strong>Firmware</strong>
+                    <div className="pico-firmware-actions">
+                      <button
+                        type="button"
+                        className="heading-action danger"
+                        disabled={pendingAction !== null}
+                        onClick={nukePicoFlash}
+                      >
+                        <IconRadioactive size={14} />
+                        {pendingAction === 'pico-firmware-nuke' ? 'Nuking...' : 'Nuke'}
+                      </button>
+                      <div className="pico-firmware-dual-action" role="group" aria-label="Pico firmware bootloader actions">
+                        <button
+                          type="button"
+                          className="heading-action"
+                          disabled={pendingAction !== null}
+                          onClick={mountPicoBootloader}
+                        >
+                          <IconUsb size={14} />
+                          {pendingAction === 'pico-firmware-mount' ? 'Mounting...' : 'Mount'}
+                        </button>
+                        <button
+                          type="button"
+                          className="heading-action"
+                          disabled={pendingAction !== null}
+                          onClick={flashPicoFirmware}
+                        >
+                          <IconUpload size={14} />
+                          {pendingAction === 'pico-firmware-flash' ? 'Flashing...' : 'Flash'}
+                        </button>
+                      </div>
+                    </div>
+                  </div>
+                  <div className="settings-menu-copy pico-firmware-copy">
+                    <span>Mount reboots the Pico into UF2 mode. Flash copies a selected firmware UF2. Nuke wipes flash with Pico Universal Flash Nuke.</span>
+                    {picoFirmwareMessage ? (
+                      <span className="pico-firmware-message good">{picoFirmwareMessage}</span>
+                    ) : null}
+                    {picoFirmwareError ? (
+                      <span className="pico-firmware-message bad">{picoFirmwareError}</span>
+                    ) : null}
+                  </div>
                 </div>
               </div>
               <div className="bridge-settings-column">

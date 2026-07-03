@@ -7,6 +7,8 @@ import {
   ACK_RESULT,
   AUDIO_DEBUG_EVENT,
   COMMAND_ID,
+  PROTOCOL_MAJOR,
+  PROTOCOL_MINOR,
   REPORT_ID,
   REPORT_LENGTH,
   CHORD_FUNCTION_EVENT_BASE,
@@ -25,6 +27,7 @@ import {
   parseTriggerTraceReport,
   parseFeedbackTraceReport,
   parseStatusReport,
+  readReportProtocolVersion,
   SHORTCUT_EVENT,
   buildButtonRemapPayload,
   hostPersonaModeValue,
@@ -43,6 +46,7 @@ import type {
   AudioReactiveHapticsSource,
   AudioDebugEventPayload,
   AudioDebugStatsPayload,
+  BridgeAckPayload,
   BridgePresetId,
   ChordAssignment,
   ChordFunction,
@@ -55,6 +59,7 @@ import type {
   MuteButtonMode,
   MuteKeyboardBehavior,
   PollingRateMode,
+  ReportProtocolVersion,
   ShortcutEvent,
   TriggerTestMode,
   TriggerTestTarget
@@ -101,7 +106,8 @@ const SYSTEM_AUDIO_HAPTICS_RETRY_MS = 5000;
 const SYSTEM_AUDIO_HAPTICS_BYPASS_RETRY_MS = 2000;
 const AUDIO_HAPTICS_SESSION_CACHE_MS = 2500;
 const LOW_BATTERY_PERCENT = 20;
-const MIN_SUPPORTED_FIRMWARE_VERSION = '1.5.5';
+const BUNDLED_FIRMWARE_VERSION = '1.6.3';
+const MIN_SUPPORTED_FIRMWARE_VERSION = '1.6.1';
 const FIRMWARE_UPDATE_REQUIRED_MESSAGE = `Firmware ${MIN_SUPPORTED_FIRMWARE_VERSION} update required`;
 const AUDIO_DEBUG_LOG_LINE_LIMIT = 300;
 const TRIGGER_TRACE_LOG_LINE_LIMIT = 300;
@@ -151,6 +157,8 @@ type CommandOptions = {
   expectSettingsRevisionChange?: boolean;
   throwOnCommandError?: boolean;
   extraPayload?: ArrayLike<number>;
+  allowAckTransportLoss?: boolean;
+  allowProtocolMismatch?: boolean;
 };
 
 type HostPersonaTransitionState = HostPersonaTransition & {
@@ -229,12 +237,57 @@ function isDualSenseDevice(device: HidDeviceSummary): boolean {
     && /DualSense/i.test(device.product ?? '');
 }
 
-function isSupportedFirmwareVersion(version: string): boolean {
+function parseFirmwareVersion(version: string): { major: number; minor: number; patch: number } | null {
   const [major = 0, minor = 0, patch = 0] = version.split('.').map((part) => Number.parseInt(part, 10));
   if (![major, minor, patch].every(Number.isFinite)) {
-    return false;
+    return null;
   }
-  return major > 1 || (major === 1 && (minor > 5 || (minor === 5 && patch >= 5)));
+  return { major, minor, patch };
+}
+
+function compareFirmwareVersions(left: string, right: string): number | null {
+  const leftVersion = parseFirmwareVersion(left);
+  const rightVersion = parseFirmwareVersion(right);
+  if (!leftVersion || !rightVersion) {
+    return null;
+  }
+  for (const part of ['major', 'minor', 'patch'] as const) {
+    const delta = leftVersion[part] - rightVersion[part];
+    if (delta !== 0) {
+      return delta;
+    }
+  }
+  return 0;
+}
+
+function isSupportedFirmwareVersion(version: string): boolean {
+  const comparison = compareFirmwareVersions(version, MIN_SUPPORTED_FIRMWARE_VERSION);
+  return comparison !== null && comparison >= 0;
+}
+
+function firmwareUpdateAvailable(
+  version: string
+): BridgeDiagnostics['firmwareUpdateAvailable'] {
+  const comparison = compareFirmwareVersions(version, BUNDLED_FIRMWARE_VERSION);
+  if (comparison === null || comparison >= 0) {
+    return null;
+  }
+  return {
+    currentVersion: version,
+    availableVersion: BUNDLED_FIRMWARE_VERSION
+  };
+}
+
+function isBridgeTransportError(error: unknown): boolean {
+  const message = error instanceof Error ? error.message : String(error);
+  return /WinUSB bridge (?:GET_REPORT|SET_REPORT|sendFeatureReport|getFeatureReport) failed/i.test(message)
+    || /WinUSB bridge helper request timed out/i.test(message)
+    || /A device attached to the system is not functioning/i.test(message)
+    || /No companion bridge is connected/i.test(message);
+}
+
+function isProtocolMismatch(error: unknown): error is ProtocolError {
+  return error instanceof ProtocolError && error.code === 'bad-version';
 }
 
 function emptyDiagnostics(rawDevices: HidDeviceSummary[]): BridgeDiagnostics {
@@ -245,6 +298,7 @@ function emptyDiagnostics(rawDevices: HidDeviceSummary[]): BridgeDiagnostics {
     settingsRevision: null,
     lastAck: null,
     lastError: null,
+    firmwareUpdateAvailable: null,
     lastPollAt: null,
     rawDevices,
     audioDebugLogPath: null,
@@ -1184,6 +1238,7 @@ export class BridgeService extends EventEmitter {
   private feedbackTraceDroppedCount = 0;
   private feedbackTraceSupported: boolean | null = null;
   private audioStatus: AudioStatusPayload | null = null;
+  private incompatibleCompanionProtocolVersion: ReportProtocolVersion | null = null;
   private lastAudioStatsSignature: string | null = null;
   private systemAudioHapticsRetryAt = 0;
   private systemAudioHapticsPassthroughActive = false;
@@ -2085,7 +2140,7 @@ export class BridgeService extends EventEmitter {
   }
 
   async setHapticsBufferLength(length: number): Promise<BridgeSnapshot> {
-    const value = Math.max(1, Math.min(255, Math.round(length)));
+    const value = Math.max(16, Math.min(128, Math.round(length)));
     await this.sendSettingCommand(COMMAND_ID.SET_HAPTICS_BUFFER_LENGTH, value, { hapticsBufferLength: value });
     return this.getSnapshot();
   }
@@ -2709,6 +2764,14 @@ export class BridgeService extends EventEmitter {
     return this.getSnapshot();
   }
 
+  setShowBatteryPercentTrayIcon(enabled: boolean): BridgeSnapshot {
+    this.snapshot.settings = this.settingsStore.update({
+      showBatteryPercentTrayIcon: enabled
+    });
+    this.emitSnapshot();
+    return this.getSnapshot();
+  }
+
   async setPollingRateMode(mode: PollingRateMode): Promise<BridgeSnapshot> {
     const normalizedMode = normalizePollingRateMode(mode);
     await this.sendSettingCommand(
@@ -2724,6 +2787,13 @@ export class BridgeService extends EventEmitter {
       throwOnCommandError: false
     });
     return this.getSnapshot();
+  }
+
+  async mountPicoBootloader(): Promise<void> {
+    await this.sendCommand(COMMAND_ID.ENTER_BOOTLOADER, 0, {
+      allowAckTransportLoss: true,
+      allowProtocolMismatch: true
+    });
   }
 
   async setNotifyControllerConnection(enabled: boolean): Promise<BridgeSnapshot> {
@@ -3015,17 +3085,60 @@ export class BridgeService extends EventEmitter {
     return run;
   }
 
+  private acceptCommandTransportLoss(
+    commandId: number,
+    sequence: number,
+    previousSettingsRevision: number | null
+  ): BridgeAckPayload {
+    const ack = {
+      commandId: commandId & 0xff,
+      commandSequence: sequence,
+      resultCode: ACK_RESULT.OK,
+      detailCode: 0,
+      settingsRevision: previousSettingsRevision ?? 0,
+      uptimeSeconds: this.snapshot.diagnostics.uptimeSeconds ?? 0,
+      protocolVersion: this.snapshot.diagnostics.protocolVersion ?? 'unknown'
+    };
+    this.snapshot.diagnostics.lastAck = ack;
+    this.snapshot.diagnostics.lastError = null;
+    this.emitSnapshot();
+    this.closeDevice();
+    return ack;
+  }
+
   private async sendCommand(commandId: number, value: number, options: CommandOptions = {}) {
     return this.enqueueCommand(async () => {
-      await this.ensureCompanionDevice();
+      await this.ensureCompanionDevice(options.allowProtocolMismatch ? { allowProtocolMismatch: true } : undefined);
       if (!this.device) {
         throw new Error('No companion bridge is connected.');
       }
 
       const sequence = this.nextSequence();
+      const protocolMinor = this.commandProtocolMinorFor(options);
       const previousSettingsRevision = this.snapshot.diagnostics.settingsRevision;
-      await this.device.sendFeatureReport(buildCommandReport(commandId, sequence, value, options.extraPayload));
-      const ack = parseAckReport(await this.device.getFeatureReport(REPORT_ID.ACK, REPORT_LENGTH));
+      try {
+        const commandReport = protocolMinor === undefined
+          ? buildCommandReport(commandId, sequence, value, options.extraPayload)
+          : buildCommandReport(commandId, sequence, value, options.extraPayload, { protocolMinor });
+        await this.device.sendFeatureReport(commandReport);
+      } catch (error) {
+        if (!options.allowAckTransportLoss || !isBridgeTransportError(error)) {
+          throw error;
+        }
+        return this.acceptCommandTransportLoss(commandId, sequence, previousSettingsRevision);
+      }
+      let ack: BridgeAckPayload;
+      try {
+        const rawAckReport = await this.device.getFeatureReport(REPORT_ID.ACK, REPORT_LENGTH);
+        ack = options.allowProtocolMismatch
+          ? parseAckReport(rawAckReport, { allowProtocolMismatch: true })
+          : parseAckReport(rawAckReport);
+      } catch (error) {
+        if (!options.allowAckTransportLoss || !isBridgeTransportError(error)) {
+          throw error;
+        }
+        return this.acceptCommandTransportLoss(commandId, sequence, previousSettingsRevision);
+      }
       this.snapshot.diagnostics.lastAck = ack;
       if (ack.commandId !== (commandId & 0xff) || ack.commandSequence !== sequence) {
         const message = `Stale companion ACK: expected command 0x${(commandId & 0xff).toString(16).padStart(2, '0')} sequence ${sequence}, received command 0x${ack.commandId.toString(16).padStart(2, '0')} sequence ${ack.commandSequence}.`;
@@ -3242,6 +3355,7 @@ export class BridgeService extends EventEmitter {
           settingsRevision: status.settingsRevision,
           lastAck: this.snapshot.diagnostics.lastAck,
           lastError: `Firmware ${status.firmwareVersion} is too old for this companion app. Update the bridge firmware to ${MIN_SUPPORTED_FIRMWARE_VERSION} or newer.`,
+          firmwareUpdateAvailable: null,
           lastPollAt: Date.now(),
           rawDevices
         })
@@ -3301,6 +3415,7 @@ export class BridgeService extends EventEmitter {
         settingsRevision: status.settingsRevision,
         lastAck: this.snapshot.diagnostics.lastAck,
         lastError: null,
+        firmwareUpdateAvailable: firmwareUpdateAvailable(status.firmwareVersion),
         lastPollAt: Date.now(),
         rawDevices
       }),
@@ -3330,11 +3445,36 @@ export class BridgeService extends EventEmitter {
     await this.pollShortcutEvent();
   }
 
-  private async ensureCompanionDevice(): Promise<void> {
+  private commandProtocolMinorFor(options: CommandOptions): number | undefined {
+    if (!options.allowProtocolMismatch) {
+      return undefined;
+    }
+    const version = this.incompatibleCompanionProtocolVersion;
+    return version?.major === PROTOCOL_MAJOR && version.minor <= PROTOCOL_MINOR
+      ? version.minor
+      : undefined;
+  }
+
+  private rememberIncompatibleProtocolVersion(report: ArrayLike<number>): void {
+    try {
+      this.incompatibleCompanionProtocolVersion = readReportProtocolVersion(report, REPORT_ID.STATUS);
+    } catch {
+      this.incompatibleCompanionProtocolVersion = null;
+    }
+  }
+
+  private async ensureCompanionDevice(options: { allowProtocolMismatch?: boolean } = {}): Promise<void> {
     if (this.device) {
       return;
     }
-    await this.openAndReadStatus();
+    try {
+      await this.openAndReadStatus();
+    } catch (error) {
+      if (options.allowProtocolMismatch && isProtocolMismatch(error) && this.device) {
+        return;
+      }
+      throw error;
+    }
   }
 
   private async openAndReadStatus() {
@@ -3355,7 +3495,17 @@ export class BridgeService extends EventEmitter {
         this.sessionPath = null;
         this.resetStartupReapplyState();
       }
-      const status = parseStatusReport(await this.device.getFeatureReport(REPORT_ID.STATUS, REPORT_LENGTH));
+      const rawStatusReport = await this.device.getFeatureReport(REPORT_ID.STATUS, REPORT_LENGTH);
+      let status: BridgeStatusPayload;
+      try {
+        status = parseStatusReport(rawStatusReport);
+        this.incompatibleCompanionProtocolVersion = null;
+      } catch (error) {
+        if (isProtocolMismatch(error)) {
+          this.rememberIncompatibleProtocolVersion(rawStatusReport);
+        }
+        throw error;
+      }
       return status;
     } catch (error) {
       if (error instanceof ProtocolError) {
@@ -3606,6 +3756,7 @@ export class BridgeService extends EventEmitter {
       diagnostics: {
         ...this.snapshot.diagnostics,
         lastError: message,
+        firmwareUpdateAvailable: null,
         lastPollAt: Date.now()
       }
     };
@@ -3625,6 +3776,7 @@ export class BridgeService extends EventEmitter {
     }
     this.devicePath = null;
     this.audioStatus = null;
+    this.incompatibleCompanionProtocolVersion = null;
     this.triggerTraceSupported = null;
     this.feedbackTraceSupported = null;
     this.controllerPowerSavingActive = null;
@@ -3681,6 +3833,7 @@ export class BridgeService extends EventEmitter {
         settingsRevision: this.snapshot.diagnostics.settingsRevision,
         lastAck: this.snapshot.diagnostics.lastAck,
         lastError: this.snapshot.diagnostics.lastError,
+        firmwareUpdateAvailable: this.snapshot.diagnostics.firmwareUpdateAvailable,
         audioDebugLogPath: this.snapshot.diagnostics.audioDebugLogPath,
         audioDebugLogLineCount: this.snapshot.diagnostics.audioDebugLogLines.length,
         audioDebugLogTail: this.snapshot.diagnostics.audioDebugLogLines.at(-1) ?? null,

@@ -96,6 +96,52 @@ describe('renderer behavior guards', () => {
     expect(compactStatusSource).not.toContain('className={`dot');
   });
 
+  it('exposes the firmware-gated audio buffer length control', () => {
+    expect(appSource).toContain('const AUDIO_BUFFER_LENGTH_MIN = 16;');
+    expect(appSource).toContain('const AUDIO_BUFFER_LENGTH_MAX = 128;');
+    expect(appSource).toContain('audioBufferLengthControlSupported');
+    expect(appSource).toContain('firmwareFlags.hapticsBufferLengthControl');
+    expect(appSource).toContain('window.bridge.setHapticsBufferLength(snappedValue)');
+    expect(appSource).toContain('Audio Buffer Length');
+    expect(appSource).toContain('audio-buffer-readout');
+    expect(appSource).toContain("className={`audio-buffer-control framed-slider ${audioBufferLengthControlDisabled ? 'disabled' : ''}`}");
+    expect(appSource).toContain('className="audio-buffer-title"');
+    expect(appSource).toContain('aria-valuetext={`${audioBufferLengthValue}, ${audioBufferDelayLabel(audioBufferLengthValue)}, ${audioBufferZoneLabel(audioBufferLengthValue)}`}');
+    const micPresetIndex = appSource.indexOf('{MIC_VOLUME_PRESETS.map(([label, value]) => (');
+    const speakerPresetIndex = appSource.indexOf('{SPEAKER_VOLUME_PRESETS.map(([label, value]) => (');
+    const bufferControlIndex = appSource.indexOf('className={`audio-buffer-control framed-slider');
+    const testCardIndex = appSource.indexOf('<section className="feature-card test-card">', speakerPresetIndex);
+    const bufferControlSource = appSource.slice(bufferControlIndex, testCardIndex);
+    expect(micPresetIndex).toBeGreaterThanOrEqual(0);
+    expect(speakerPresetIndex).toBeGreaterThan(micPresetIndex);
+    expect(bufferControlIndex).toBeGreaterThan(speakerPresetIndex);
+    expect(bufferControlIndex).toBeLessThan(testCardIndex);
+    expect(bufferControlSource).not.toContain('showQuestionMark={true}');
+    expect(appSource.slice(micPresetIndex, speakerPresetIndex)).not.toContain('audio-buffer-control');
+    expect(appSource).not.toContain('Math.min(255, Math.round(length))');
+  });
+
+  it('exposes Pico firmware maintenance actions in Bridge Settings', () => {
+    expect(appSource).toContain('function mountPicoBootloader()');
+    expect(appSource).toContain('function flashPicoFirmware()');
+    expect(appSource).toContain('function nukePicoFlash()');
+    expect(appSource).toContain('window.bridge.mountPicoBootloader()');
+    expect(appSource).toContain('window.bridge.flashPicoFirmware()');
+    expect(appSource).toContain('window.bridge.nukePicoFlash()');
+    expect(appSource).toContain('<strong>Firmware</strong>');
+    expect(appSource).not.toContain('<strong>Pico Firmware</strong>');
+    expect(appSource).toContain('pico-firmware-dual-action');
+    expect(appSource).toContain('picoFirmwareMessage');
+    expect(appSource).toContain('picoFirmwareError');
+  });
+
+  it('exposes the battery percentage tray icon preference in Bridge Settings', () => {
+    expect(appSource).toContain('Battery Tray Icon');
+    expect(appSource).toContain('Show controller battery percentage in the tray');
+    expect(appSource).toContain('snapshot.settings.showBatteryPercentTrayIcon');
+    expect(appSource).toContain('window.bridge.setShowBatteryPercentTrayIcon(!snapshot.settings.showBatteryPercentTrayIcon)');
+  });
+
   it('keeps the haptics test button actionable instead of relabeling it as game-active', () => {
     const start = appSource.indexOf('<button className="primary-action" type="button" disabled={activeFeedbackTestUnavailable}');
     expect(start).toBeGreaterThanOrEqual(0);

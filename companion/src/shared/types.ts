@@ -30,6 +30,7 @@ export interface CompanionSettings {
   uiScalePercent: UiScalePercent;
   uiThemePreset: UiThemePreset;
   launchAtStartupEnabled: boolean;
+  showBatteryPercentTrayIcon: boolean;
   hapticsEnabled: boolean;
   hapticsGainPercent: number;
   feedbackBoostEnabled: boolean;
@@ -124,6 +125,10 @@ export interface BridgeDiagnostics {
   settingsRevision: number | null;
   lastAck: BridgeAckPayload | null;
   lastError: string | null;
+  firmwareUpdateAvailable: {
+    currentVersion: string;
+    availableVersion: string;
+  } | null;
   lastPollAt: number | null;
   rawDevices: HidDeviceSummary[];
   audioDebugLogPath: string | null;
@@ -157,5 +162,17 @@ export interface WindowsDeviceCleanupResult {
   scriptPath: string;
   logPath: string;
   includedBluetooth: boolean;
+  message: string;
+}
+
+export type PicoFirmwareAction = 'mount' | 'flash' | 'nuke';
+
+export interface PicoFirmwareActionResult {
+  ok: boolean;
+  action: PicoFirmwareAction;
+  cancelled?: boolean;
+  driveRoot?: string;
+  sourcePath?: string;
+  targetPath?: string;
   message: string;
 }

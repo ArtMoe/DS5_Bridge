@@ -141,6 +141,7 @@ export const DEFAULT_SETTINGS: CompanionSettings = {
   uiScalePercent: 100,
   uiThemePreset: 'dark',
   launchAtStartupEnabled: false,
+  showBatteryPercentTrayIcon: false,
   hapticsEnabled: DEFAULT_CONTROLLER_PROFILE_SETTINGS.hapticsEnabled,
   hapticsGainPercent: DEFAULT_CONTROLLER_PROFILE_SETTINGS.hapticsGainPercent,
   feedbackBoostEnabled: DEFAULT_CONTROLLER_PROFILE_SETTINGS.feedbackBoostEnabled,
@@ -858,6 +859,9 @@ function normalizeSettings(value: Partial<CompanionSettings> | null | undefined)
     launchAtStartupEnabled: typeof value?.launchAtStartupEnabled === 'boolean'
       ? value.launchAtStartupEnabled
       : DEFAULT_SETTINGS.launchAtStartupEnabled,
+    showBatteryPercentTrayIcon: typeof value?.showBatteryPercentTrayIcon === 'boolean'
+      ? value.showBatteryPercentTrayIcon
+      : DEFAULT_SETTINGS.showBatteryPercentTrayIcon,
     hapticsEnabled: typeof value?.hapticsEnabled === 'boolean'
       ? value.hapticsEnabled
       : DEFAULT_SETTINGS.hapticsEnabled,
@@ -868,7 +872,7 @@ function normalizeSettings(value: Partial<CompanionSettings> | null | undefined)
       ? value.feedbackBoostEnabled
       : DEFAULT_SETTINGS.feedbackBoostEnabled,
     hapticsBufferLength: Number.isFinite(value?.hapticsBufferLength)
-      ? Math.max(64, Math.min(255, Math.round(value!.hapticsBufferLength!)))
+      ? Math.max(16, Math.min(128, Math.round(value!.hapticsBufferLength!)))
       : DEFAULT_SETTINGS.hapticsBufferLength,
     classicRumbleEnabled: typeof value?.classicRumbleEnabled === 'boolean'
       ? value.classicRumbleEnabled

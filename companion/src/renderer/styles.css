@@ -1980,6 +1980,99 @@ button {
   line-height: 1.18;
 }
 
+.pico-firmware-row {
+  display: grid;
+  align-items: stretch;
+  grid-template-columns: minmax(0, 1fr);
+  gap: 7px;
+}
+
+.pico-firmware-header {
+  min-width: 0;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 10px;
+}
+
+.pico-firmware-header strong {
+  min-width: 0;
+  line-height: 1.15;
+}
+
+.pico-firmware-actions {
+  display: inline-flex;
+  flex: 0 0 auto;
+  align-items: stretch;
+  justify-content: flex-end;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.pico-firmware-actions .heading-action {
+  min-height: 30px;
+  gap: 6px;
+  padding: 0 10px;
+  font-size: 11px;
+  font-weight: 850;
+  white-space: nowrap;
+}
+
+.pico-firmware-actions .heading-action svg {
+  flex: 0 0 auto;
+}
+
+.pico-firmware-actions .heading-action.danger {
+  color: var(--danger-selected-text);
+  border-color: var(--danger-border-strong);
+  background: var(--danger-selected);
+  box-shadow: inset 0 -2px 0 var(--danger-border-strong);
+}
+
+.pico-firmware-actions .heading-action.danger:hover {
+  color: var(--danger-selected-text);
+  border-color: var(--danger-border-strong);
+  background: var(--danger-selected);
+}
+
+.pico-firmware-dual-action {
+  display: inline-flex;
+  min-width: 0;
+}
+
+.pico-firmware-dual-action .heading-action {
+  border-radius: 0;
+}
+
+.pico-firmware-dual-action .heading-action:first-child {
+  border-top-left-radius: var(--control-radius);
+  border-bottom-left-radius: var(--control-radius);
+}
+
+.pico-firmware-dual-action .heading-action:last-child {
+  margin-left: -1px;
+  border-top-right-radius: var(--control-radius);
+  border-bottom-right-radius: var(--control-radius);
+}
+
+.pico-firmware-copy {
+  width: 100%;
+}
+
+.pico-firmware-copy > span {
+  max-width: 100%;
+  overflow-wrap: anywhere;
+  text-wrap: pretty;
+}
+
+.pico-firmware-message.good {
+  color: var(--success);
+}
+
+.pico-firmware-message.bad {
+  color: var(--danger);
+}
+
 .settings-menu-row .switch {
   flex: 0 0 48px;
 }
@@ -4529,6 +4622,221 @@ button.feature-icon {
   white-space: normal;
   overflow-wrap: anywhere;
   transform: translate(-50%, -4px);
+}
+
+.audio-secondary-controls {
+  min-width: 0;
+  min-height: 0;
+  display: grid;
+  align-content: stretch;
+  gap: 10px;
+  margin-top: 8px;
+}
+
+.audio-buffer-control {
+  min-width: 0;
+  width: 100%;
+  max-width: 100%;
+  box-sizing: border-box;
+  display: grid;
+  align-content: center;
+  gap: 9px;
+  margin: 2px 0 0;
+  padding: 14px 18px;
+  overflow: visible;
+}
+
+.audio-buffer-control.disabled {
+  opacity: 0.58;
+}
+
+.audio-buffer-header {
+  min-width: 0;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(92px, auto) 30px;
+  align-items: center;
+  gap: 10px;
+}
+
+.audio-buffer-title {
+  position: relative;
+  min-width: 0;
+  width: max-content;
+  max-width: 100%;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  justify-self: start;
+  color: var(--text-primary);
+  overflow: visible;
+  font-size: 14px;
+  font-weight: 780;
+  line-height: 1.18;
+  letter-spacing: 0;
+  outline: none;
+  white-space: nowrap;
+  cursor: help;
+  text-decoration-line: underline;
+  text-decoration-style: dotted;
+  text-decoration-color: var(--surface-border-strong);
+  text-underline-offset: 3px;
+}
+
+.audio-buffer-title svg {
+  flex: 0 0 auto;
+  color: var(--text-secondary);
+}
+
+.audio-buffer-title:hover,
+.audio-buffer-title:focus-visible {
+  color: var(--text-strong);
+  text-decoration-color: var(--accent-border-strong);
+}
+
+.audio-buffer-title:focus-visible {
+  border-radius: 4px;
+  box-shadow: 0 0 0 3px var(--accent-soft);
+}
+
+.audio-buffer-title:hover .audio-haptics-config-tooltip,
+.audio-buffer-title:focus-visible .audio-haptics-config-tooltip {
+  opacity: 1;
+  transform: translate(0, 0);
+}
+
+.audio-buffer-title .audio-haptics-config-tooltip {
+  --audio-buffer-tooltip-width: min(360px, calc(100vw - 72px));
+  top: calc(100% + 10px);
+  left: 0;
+  right: auto;
+  z-index: 70;
+  width: var(--audio-buffer-tooltip-width);
+  max-width: var(--audio-buffer-tooltip-width);
+  display: block;
+  color: var(--text-control);
+  font-size: 12px;
+  font-weight: 700;
+  line-height: 1.25;
+  text-align: left;
+  white-space: normal;
+  overflow-wrap: anywhere;
+  transform: translate(0, 0);
+}
+
+.audio-buffer-readout {
+  display: inline-flex;
+  align-items: baseline;
+  justify-content: flex-end;
+  gap: 9px;
+  min-width: 92px;
+  white-space: nowrap;
+}
+
+.audio-buffer-readout strong {
+  color: var(--accent);
+  font-size: 14px;
+  font-weight: 780;
+  line-height: 1;
+}
+
+.audio-buffer-readout span {
+  color: var(--text-secondary);
+  font-size: 14px;
+  font-weight: 760;
+  line-height: 1;
+}
+
+.audio-buffer-status-icon {
+  position: relative;
+  justify-self: end;
+  width: 26px;
+  height: 26px;
+  border: 1px solid var(--surface-border-strong);
+  border-radius: var(--control-radius);
+  display: grid;
+  place-items: center;
+  background: var(--surface-control-soft);
+  outline: none;
+  cursor: help;
+}
+
+.audio-buffer-status-icon svg {
+  display: block;
+}
+
+.audio-buffer-status-icon:focus-visible {
+  box-shadow: 0 0 0 3px var(--accent-soft);
+}
+
+.audio-buffer-status-icon:hover .audio-buffer-zone-tooltip,
+.audio-buffer-status-icon:focus-visible .audio-buffer-zone-tooltip {
+  opacity: 1;
+  transform: translate(0, 0);
+}
+
+.audio-buffer-zone-tooltip {
+  top: calc(100% + 8px);
+  left: auto;
+  right: 0;
+  z-index: 75;
+  width: 250px;
+  max-width: min(250px, calc(100vw - 72px));
+  display: block;
+  color: var(--text-control);
+  font-size: 12px;
+  font-weight: 700;
+  line-height: 1.25;
+  text-align: left;
+  white-space: normal;
+  overflow-wrap: anywhere;
+  transform: translate(0, 0);
+}
+
+.audio-buffer-status-icon.stutter {
+  color: #ff6b66;
+}
+
+.audio-buffer-status-icon.risky {
+  color: #ffc23f;
+}
+
+.audio-buffer-status-icon.safe {
+  color: #39d77d;
+}
+
+.audio-buffer-slider-row {
+  gap: 2px;
+}
+
+.audio-buffer-range-control {
+  min-width: 0;
+  gap: 0;
+}
+
+.audio-buffer-control input[type="range"] {
+  height: 24px;
+}
+
+.audio-buffer-control input[type="range"]::-webkit-slider-runnable-track {
+  height: 5px;
+  border-radius: 2px;
+  background: linear-gradient(90deg, var(--accent) 0%, var(--accent) var(--range-fill, 50%), var(--range-track-rest) var(--range-fill, 50%));
+  box-shadow: 0 0 0 1px rgba(0, 0, 0, 0.16);
+}
+
+.audio-buffer-control input[type="range"]::-webkit-slider-thumb {
+  width: 22px;
+  height: 22px;
+  margin-top: -8.5px;
+  border: 0;
+  background: var(--text-control);
+  box-shadow:
+    0 0 0 1px rgba(0, 0, 0, 0.2),
+    0 4px 14px rgba(0, 0, 0, 0.35);
+}
+
+.audio-buffer-control input[type="range"]:disabled::-webkit-slider-runnable-track {
+  background: var(--range-disabled-track);
 }
 
 .audio-haptics-select .custom-select-button {

@@ -13,6 +13,7 @@
 #include "persona/host_persona.h"
 #include "pico/critical_section.h"
 #include "pico/cyw43_arch.h"
+#include "pico/bootrom.h"
 #include "pico/time.h"
 #include "usb.h"
 
@@ -24,7 +25,7 @@ constexpr uint8_t kProtocolMinor = 16;
 constexpr uint8_t kProtocolMinSupportedMinor = 7;
 constexpr uint8_t kFirmwareMajor = 1;
 constexpr uint8_t kFirmwareMinor = 6;
-constexpr uint8_t kFirmwarePatch = 2;
+constexpr uint8_t kFirmwarePatch = 3;
 constexpr uint8_t kAudioReactiveHapticsModeMask = 0x7f;
 constexpr uint8_t kAudioReactiveHapticsSuppressClassicRumbleFlag = 0x80;
 constexpr uint8_t kTriangleButtonBit = 0x80;
@@ -60,6 +61,8 @@ constexpr uint8_t kDpadLeft = 0x06;
 constexpr uint8_t kDpadUpLeft = 0x07;
 constexpr uint8_t kDpadNeutral = 0x08;
 constexpr uint32_t kShortcutRepeatUs = 180000;
+constexpr uint32_t kHomeChordSuppressUs = 250000;
+constexpr uint32_t kHomeChordFallbackReplayUs = 80000;
 constexpr uint8_t kDefaultMuteKeyboardUsage = 0x68; // F13
 constexpr uint8_t kMuteKeyboardModifierMask = 0x0F;
 constexpr uint8_t kMuteKeyboardChordStarterFlag = 0x10;
@@ -136,6 +139,7 @@ enum CommandId : uint8_t {
     CommandSetPlayerLedEnabled = 0x24,
     CommandSetClassicRumbleV1 = 0x25,
     CommandSetSpeakerGain = 0x32,
+    CommandEnterBootloader = 0x33,
 };
 
 enum AckResult : uint8_t {
@@ -233,6 +237,11 @@ struct DynamicChordBinding {
     bool last_pressed;
 };
 
+struct DynamicChordProcessingResult {
+    bool home_chord_consumed;
+    bool mute_chord_pressed;
+};
+
 critical_section_t companion_report_cs;
 uint8_t last_controller_report[63]{};
 bool have_controller_report = false;
@@ -308,6 +317,9 @@ bool sleep_keybind_enabled = false;
 bool speaker_volume_shortcut_enabled = false;
 bool shortcut_binding_last_pressed[kShortcutBindingCount]{};
 uint32_t shortcut_binding_last_step_us[kShortcutBindingCount]{};
+bool home_chord_gate_active = false;
+uint32_t home_chord_gate_until_us = 0;
+uint32_t home_chord_replay_until_us = 0;
 uint8_t shortcut_event_queue[kShortcutEventQueueDepth]{};
 uint8_t shortcut_event_head = 0;
 uint8_t shortcut_event_tail = 0;
@@ -730,6 +742,9 @@ void restore_defaults() {
     speaker_volume_shortcut_enabled = false;
     std::fill(shortcut_binding_last_pressed, shortcut_binding_last_pressed + kShortcutBindingCount, false);
     std::fill(shortcut_binding_last_step_us, shortcut_binding_last_step_us + kShortcutBindingCount, 0);
+    home_chord_gate_active = false;
+    home_chord_gate_until_us = 0;
+    home_chord_replay_until_us = 0;
     clear_dynamic_chord_bindings();
     clear_shortcut_events();
     mute_keyboard_pending = false;
@@ -2290,6 +2305,15 @@ void handle_command(uint8_t const *buffer, uint16_t bufsize) {
             set_ack(command_id, sequence, AckOk);
             return;
 
+        case CommandEnterBootloader:
+            if (value != 0) {
+                set_ack(command_id, sequence, AckInvalidValue);
+                return;
+            }
+            set_ack(command_id, sequence, AckOk);
+            reset_usb_boot(0, 0);
+            return;
+
         default:
             set_ack(command_id, sequence, AckUnknownCommand);
             return;
@@ -2341,13 +2365,19 @@ void suppress_shortcut_input(const ShortcutBinding &binding, uint8_t *report) {
     }
 }
 
-void process_shortcut_bindings(uint8_t *report) {
+bool time_us_reached(uint32_t now, uint32_t target) {
+    return static_cast<int32_t>(now - target) >= 0;
+}
+
+bool process_shortcut_bindings(uint8_t *report) {
     const uint32_t now = time_us_32();
+    bool consumed = false;
     for (size_t i = 0; i < kShortcutBindingCount; i++) {
         const ShortcutBinding &binding = kShortcutBindings[i];
         const bool pressed = shortcut_setting_enabled(binding.setting) && shortcut_combo_pressed(binding, report);
         if (pressed) {
             suppress_shortcut_input(binding, report);
+            consumed = true;
             const bool should_emit = binding.trigger == ShortcutTriggerPressed
                 ? !shortcut_binding_last_pressed[i]
                 : (!shortcut_binding_last_pressed[i]
@@ -2360,6 +2390,70 @@ void process_shortcut_bindings(uint8_t *report) {
             shortcut_binding_last_step_us[i] = 0;
         }
         shortcut_binding_last_pressed[i] = pressed;
+    }
+    return consumed;
+}
+
+bool home_chord_gate_enabled() {
+    if (sleep_keybind_enabled || speaker_volume_shortcut_enabled) {
+        return true;
+    }
+    for (uint8_t i = 0; i < dynamic_chord_binding_count; i++) {
+        if (dynamic_chord_bindings[i].starter == kChordStarterHome) {
+            return true;
+        }
+    }
+    return false;
+}
+
+void clear_home_chord_gate() {
+    home_chord_gate_active = false;
+    home_chord_gate_until_us = 0;
+    home_chord_replay_until_us = 0;
+}
+
+void apply_home_chord_gate(uint8_t *report, uint16_t len, bool physical_home_pressed, bool home_chord_consumed) {
+    if (report == nullptr || len <= 9) {
+        return;
+    }
+
+    if (home_chord_consumed) {
+        clear_home_chord_gate();
+        report[9] &= static_cast<uint8_t>(~kHomeButtonBit);
+        return;
+    }
+
+    if (!home_chord_gate_enabled()) {
+        clear_home_chord_gate();
+        return;
+    }
+
+    const uint32_t now = time_us_32();
+    if (physical_home_pressed) {
+        home_chord_replay_until_us = 0;
+        if (!home_chord_gate_active) {
+            home_chord_gate_active = true;
+            home_chord_gate_until_us = now + kHomeChordSuppressUs;
+        }
+        if (!time_us_reached(now, home_chord_gate_until_us)) {
+            report[9] &= static_cast<uint8_t>(~kHomeButtonBit);
+            return;
+        }
+        home_chord_gate_active = false;
+        home_chord_gate_until_us = 0;
+        return;
+    }
+
+    if (home_chord_gate_active) {
+        home_chord_gate_active = false;
+        home_chord_gate_until_us = 0;
+        home_chord_replay_until_us = now + kHomeChordFallbackReplayUs;
+    }
+
+    if (home_chord_replay_until_us != 0 && !time_us_reached(now, home_chord_replay_until_us)) {
+        report[9] |= kHomeButtonBit;
+    } else {
+        home_chord_replay_until_us = 0;
     }
 }
 
@@ -2568,15 +2662,15 @@ void suppress_chord_starter(uint8_t *report, uint16_t len, uint8_t starter) {
     }
 }
 
-bool process_dynamic_chord_bindings(uint8_t *report, uint16_t len) {
+DynamicChordProcessingResult process_dynamic_chord_bindings(uint8_t *report, uint16_t len) {
+    DynamicChordProcessingResult result{};
     if (report == nullptr || len <= 9 || dynamic_chord_binding_count == 0) {
-        return false;
+        return result;
     }
 
     uint8_t source_report[63]{};
     const uint16_t source_len = std::min<uint16_t>(len, sizeof(source_report));
     memcpy(source_report, report, source_len);
-    bool mute_chord_pressed = false;
 
     for (uint8_t i = 0; i < dynamic_chord_binding_count; i++) {
         DynamicChordBinding &binding = dynamic_chord_bindings[i];
@@ -2587,14 +2681,19 @@ bool process_dynamic_chord_bindings(uint8_t *report, uint16_t len) {
         if (pressed) {
             suppress_remap_button(report, len, binding.button);
             suppress_chord_starter(report, len, binding.starter);
-            mute_chord_pressed = mute_chord_pressed || binding.starter == kChordStarterMute;
+            if (binding.starter == kChordStarterHome) {
+                result.home_chord_consumed = true;
+            }
+            if (binding.starter == kChordStarterMute) {
+                result.mute_chord_pressed = true;
+            }
             if (!binding.last_pressed) {
                 queue_shortcut_event(binding.event);
             }
         }
         binding.last_pressed = pressed;
     }
-    return mute_chord_pressed;
+    return result;
 }
 
 void apply_button_remap(uint8_t *report, uint16_t len) {
@@ -2714,11 +2813,13 @@ void companion_process_controller_report(uint8_t *report, uint16_t len) {
     if (mute_pressed && !mute_button_last_pressed && mute_keyboard_chord_starter_enabled()) {
         begin_mute_keyboard_chord_window(now);
     }
-    const bool mute_chord_pressed = process_dynamic_chord_bindings(report, len);
-    if (mute_chord_pressed) {
+    const DynamicChordProcessingResult dynamic_chord_result = process_dynamic_chord_bindings(report, len);
+    if (dynamic_chord_result.mute_chord_pressed) {
         cancel_mute_keyboard_chord_window();
     }
-    process_shortcut_bindings(report);
+    const bool shortcut_home_chord_consumed = process_shortcut_bindings(report);
+    const bool home_chord_consumed = dynamic_chord_result.home_chord_consumed || shortcut_home_chord_consumed;
+    apply_home_chord_gate(report, len, home_pressed, home_chord_consumed);
     if (home_pressed && dpad_pressed) {
         report[9] &= static_cast<uint8_t>(~kHomeButtonBit);
     }

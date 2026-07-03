@@ -148,6 +148,9 @@ class MockHidDevice extends EventEmitter {
   ackReports: number[][] = [];
   writeError: Error | null = null;
   statusReadError: Error | null = null;
+  ackReadErrorOnce: Error | null = null;
+  featureReportWriteErrorOnce: Error | null = null;
+  closeCount = 0;
   settingsRevision = 0;
   fixedAckRevision: number | null = null;
 
@@ -165,6 +168,11 @@ class MockHidDevice extends EventEmitter {
       return [...this.status];
     }
     if (reportId === REPORT_ID.ACK) {
+      if (this.ackReadErrorOnce) {
+        const error = this.ackReadErrorOnce;
+        this.ackReadErrorOnce = null;
+        throw error;
+      }
       const queuedAck = this.ackReports.shift();
       if (queuedAck) {
         return [...queuedAck];
@@ -201,6 +209,11 @@ class MockHidDevice extends EventEmitter {
 
   sendFeatureReport(report: number[]): number {
     this.sentReports.push([...report]);
+    if (this.featureReportWriteErrorOnce) {
+      const error = this.featureReportWriteErrorOnce;
+      this.featureReportWriteErrorOnce = null;
+      throw error;
+    }
     return report.length;
   }
 
@@ -217,7 +230,7 @@ class MockHidDevice extends EventEmitter {
   }
 
   close(): void {
-    // No-op for tests.
+    this.closeCount += 1;
   }
 }
 
@@ -291,8 +304,8 @@ function statusReport(overrides: StatusOverrides = {}): number[] {
   report[20] = overrides.statusFlags ?? 0xb0;
   writeU32(report, 21, overrides.uptimeSeconds ?? 10);
   report[25] = overrides.firmwareMajor ?? 1;
-  report[26] = overrides.firmwareMinor ?? 5;
-  report[27] = overrides.firmwarePatch ?? 5;
+  report[26] = overrides.firmwareMinor ?? 6;
+  report[27] = overrides.firmwarePatch ?? 3;
   report[28] = overrides.firmwareFlags ?? 1;
   writeU16(report, 29, overrides.speakerVolumePercent ?? 30);
   writeU16(report, 43, overrides.idleDisconnectTimeoutMinutes ?? 15);
@@ -308,11 +321,14 @@ function ackReport(options: {
   sequence: number;
   result: number;
   settingsRevision: number;
+  protocolMajor?: number;
+  protocolMinor?: number;
 }): number[] {
   const report = new Array<number>(REPORT_LENGTH).fill(0);
   report[0] = REPORT_ID.ACK;
   writeMagic(report);
-  writeVersion(report);
+  report[5] = options.protocolMajor ?? PROTOCOL_MAJOR;
+  report[6] = options.protocolMinor ?? PROTOCOL_MINOR;
   report[7] = options.commandId;
   report[8] = options.sequence;
   report[9] = options.result;
@@ -638,11 +654,11 @@ describe('BridgeService', () => {
     await pollAndPublishErrors(badVersionService);
 
     expect(badVersionService.getSnapshot().state).toBe('incompatible');
-    expect(badVersionService.getSnapshot().message).toBe('Firmware 1.5.5 update required');
+    expect(badVersionService.getSnapshot().message).toBe('Firmware 1.6.1 update required');
     expect(badVersionService.getSnapshot().diagnostics.lastError).toContain('Firmware update required');
   });
 
-  it('requires users to update pre-1.5 bridge firmware', async () => {
+  it('requires users to update pre-1.6.1 bridge firmware', async () => {
     const service = serviceFixture();
     const device = new MockHidDevice();
     device.status = statusReport({ firmwareMajor: 0, firmwareMinor: 5, firmwarePatch: 15 });
@@ -653,10 +669,45 @@ describe('BridgeService', () => {
 
     const snapshot = service.getSnapshot();
     expect(snapshot.state).toBe('incompatible');
-    expect(snapshot.message).toBe('Firmware 1.5.5 update required');
+    expect(snapshot.message).toBe('Firmware 1.6.1 update required');
     expect(snapshot.status?.firmwareVersion).toBe('0.5.15');
-    expect(snapshot.diagnostics.lastError).toContain('Update the bridge firmware to 1.5.5 or newer');
+    expect(snapshot.diagnostics.lastError).toContain('Update the bridge firmware to 1.6.1 or newer');
+    expect(snapshot.diagnostics.firmwareUpdateAvailable).toBeNull();
     expect(device.sentReports).toEqual([]);
+  });
+
+  it('surfaces a compatible older bridge firmware as an available update', async () => {
+    const service = serviceFixture();
+    const device = new MockHidDevice();
+    device.status = statusReport({ firmwareMajor: 1, firmwareMinor: 6, firmwarePatch: 2 });
+    hidMock.state.devicesList = [companionDeviceInfo()];
+    hidMock.state.openDevices.set('companion-path', device);
+
+    await poll(service);
+
+    const snapshot = service.getSnapshot();
+    expect(snapshot.state).toBe('connected');
+    expect(snapshot.status?.firmwareVersion).toBe('1.6.2');
+    expect(snapshot.diagnostics.lastError).toBeNull();
+    expect(snapshot.diagnostics.firmwareUpdateAvailable).toEqual({
+      currentVersion: '1.6.2',
+      availableVersion: '1.6.3'
+    });
+  });
+
+  it('does not surface an available update for the bundled bridge firmware', async () => {
+    const service = serviceFixture();
+    const device = new MockHidDevice();
+    device.status = statusReport({ firmwareMajor: 1, firmwareMinor: 6, firmwarePatch: 3 });
+    hidMock.state.devicesList = [companionDeviceInfo()];
+    hidMock.state.openDevices.set('companion-path', device);
+
+    await poll(service);
+
+    const snapshot = service.getSnapshot();
+    expect(snapshot.state).toBe('connected');
+    expect(snapshot.status?.firmwareVersion).toBe('1.6.3');
+    expect(snapshot.diagnostics.firmwareUpdateAvailable).toBeNull();
   });
 
   it('reapplies saved settings once per companion session and again after uptime drops', async () => {
@@ -1025,7 +1076,7 @@ describe('BridgeService', () => {
     expect(snapshot.settings.muteKeyboardChordStarterEnabled).toBe(false);
   });
 
-  it('sends and stores haptics buffer length', async () => {
+  it('sends and stores clamped haptics buffer length', async () => {
     const service = serviceFixture();
     const device = new MockHidDevice();
     device.status = statusReport({ controllerConnected: false, firmwareFlags: 0x41 });
@@ -1033,12 +1084,26 @@ describe('BridgeService', () => {
     hidMock.state.openDevices.set('companion-path', device);
 
     await poll(service);
-    const snapshot = await service.setHapticsBufferLength(64);
+    let snapshot = await service.setHapticsBufferLength(2);
 
-    const command = device.sentReports.at(-1);
+    let command = device.sentReports.at(-1);
+    expect(command?.[7]).toBe(COMMAND_ID.SET_HAPTICS_BUFFER_LENGTH);
+    expect(command?.[9]).toBe(16);
+    expect(snapshot.settings.hapticsBufferLength).toBe(16);
+
+    snapshot = await service.setHapticsBufferLength(64);
+
+    command = device.sentReports.at(-1);
     expect(command?.[7]).toBe(COMMAND_ID.SET_HAPTICS_BUFFER_LENGTH);
     expect(command?.[9]).toBe(64);
     expect(snapshot.settings.hapticsBufferLength).toBe(64);
+
+    snapshot = await service.setHapticsBufferLength(255);
+
+    command = device.sentReports.at(-1);
+    expect(command?.[7]).toBe(COMMAND_ID.SET_HAPTICS_BUFFER_LENGTH);
+    expect(command?.[9]).toBe(128);
+    expect(snapshot.settings.hapticsBufferLength).toBe(128);
   });
 
   it('sends and stores adaptive trigger intensity', async () => {
@@ -2036,6 +2101,70 @@ describe('BridgeService', () => {
     expect(command?.[7]).toBe(COMMAND_ID.SLEEP_CONTROLLER);
     expect(command?.[9]).toBe(0);
     expect(snapshot.diagnostics.lastAck?.resultCode).toBe(ACK_RESULT.OK);
+  });
+
+  it('sends Pico bootloader command and tolerates the expected transport drop', async () => {
+    const service = serviceFixture();
+    const device = new MockHidDevice();
+    hidMock.state.devicesList = [companionDeviceInfo()];
+    hidMock.state.openDevices.set('companion-path', device);
+
+    await poll(service);
+
+    device.ackReadErrorOnce = new Error('WinUSB bridge GET_REPORT failed: A device attached to the system is not functioning.');
+    await service.mountPicoBootloader();
+
+    const command = device.sentReports.at(-1);
+    expect(command?.[7]).toBe(COMMAND_ID.ENTER_BOOTLOADER);
+    expect(command?.[9]).toBe(0);
+    expect(device.closeCount).toBe(1);
+    expect(service.getSnapshot().diagnostics.lastAck?.resultCode).toBe(ACK_RESULT.OK);
+  });
+
+  it('sends Pico bootloader command using an older incompatible firmware protocol minor', async () => {
+    const service = serviceFixture();
+    const device = new MockHidDevice();
+    const oldMinor = PROTOCOL_MINOR - 1;
+    device.status = statusReport({ protocolMinor: oldMinor });
+    device.ackReports.push(ackReport({
+      commandId: COMMAND_ID.ENTER_BOOTLOADER,
+      sequence: 1,
+      result: ACK_RESULT.OK,
+      settingsRevision: 0,
+      protocolMinor: oldMinor
+    }));
+    hidMock.state.devicesList = [companionDeviceInfo()];
+    hidMock.state.openDevices.set('companion-path', device);
+
+    await poll(service);
+    expect(service.getSnapshot().state).toBe('incompatible');
+
+    await service.mountPicoBootloader();
+
+    const command = device.sentReports.find((report) => report[7] === COMMAND_ID.ENTER_BOOTLOADER);
+    expect(command?.[5]).toBe(PROTOCOL_MAJOR);
+    expect(command?.[6]).toBe(oldMinor);
+    expect(command?.[7]).toBe(COMMAND_ID.ENTER_BOOTLOADER);
+    expect(command?.[9]).toBe(0);
+    expect(service.getSnapshot().diagnostics.lastAck?.protocolVersion).toBe(`${PROTOCOL_MAJOR}.${oldMinor}`);
+  });
+
+  it('tolerates Pico bootloader transport loss while sending the command', async () => {
+    const service = serviceFixture();
+    const device = new MockHidDevice();
+    hidMock.state.devicesList = [companionDeviceInfo()];
+    hidMock.state.openDevices.set('companion-path', device);
+
+    await poll(service);
+
+    device.featureReportWriteErrorOnce = new Error('WinUSB bridge helper request timed out.');
+    await service.mountPicoBootloader();
+
+    const command = device.sentReports.at(-1);
+    expect(command?.[7]).toBe(COMMAND_ID.ENTER_BOOTLOADER);
+    expect(command?.[9]).toBe(0);
+    expect(device.closeCount).toBe(1);
+    expect(service.getSnapshot().diagnostics.lastAck?.resultCode).toBe(ACK_RESULT.OK);
   });
 
   it('stores notification preferences without sending firmware commands', async () => {

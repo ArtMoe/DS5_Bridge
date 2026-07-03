@@ -61,6 +61,7 @@ describe('SettingsStore', () => {
     expect(settings.micVolumePercent).toBe(100);
     expect(settings.micMuted).toBe(false);
     expect(settings.lightbarColor).toBe('#0000ff');
+    expect(settings.showBatteryPercentTrayIcon).toBe(false);
   });
 
   it('migrates legacy custom-only profile data without stealing selection', () => {
@@ -216,6 +217,17 @@ describe('SettingsStore', () => {
     expect(afterMutation.speakerVolumePercent).toBe(35);
     expect(afterMutation.controllerProfiles.find((profile) => profile.id === 'custom')?.settings.speakerVolumePercent).toBe(35);
     expect(afterMutation.buttonRemappingDraft.square).toBe('square');
+  });
+
+  it('persists the battery tray icon preference', () => {
+    const userDataPath = tempUserDataPath();
+    const store = new SettingsStore(userDataPath);
+
+    const updated = store.update({ showBatteryPercentTrayIcon: true });
+
+    expect(updated.showBatteryPercentTrayIcon).toBe(true);
+    expect(persistedSettings(userDataPath).showBatteryPercentTrayIcon).toBe(true);
+    expect(new SettingsStore(userDataPath).get().showBatteryPercentTrayIcon).toBe(true);
   });
 
   it('normalizes and persists chord functions and assignments', () => {
@@ -410,6 +422,16 @@ describe('SettingsStore', () => {
     expect(updated.speakerGainLevel).toBe(6);
     expect(updated.controllerProfiles[0]?.settings).not.toHaveProperty('speakerGainLevel');
     expect(persistedSettings(userDataPath).speakerGainLevel).toBe(6);
+  });
+
+  it('clamps haptics buffer length to the firmware-safe range', () => {
+    const userDataPath = tempUserDataPath();
+    const store = new SettingsStore(userDataPath);
+
+    expect(store.update({ hapticsBufferLength: 2 }).hapticsBufferLength).toBe(16);
+    expect(store.update({ hapticsBufferLength: 44.4 }).hapticsBufferLength).toBe(44);
+    expect(store.update({ hapticsBufferLength: 255 }).hapticsBufferLength).toBe(128);
+    expect(persistedSettings(userDataPath).hapticsBufferLength).toBe(128);
   });
 
   it('persists audio haptics app-session sources', () => {
