@@ -1,4 +1,4 @@
-//
+﻿//
 // Created by awalol on 2026/3/4.
 // Modified for DS5 Bridge companion firmware and app integration.
 //
@@ -7,6 +7,8 @@
 #define DS5_BRIDGE_BT_H
 
 #include <cstdint>
+
+#include "player_led_mode.h"
 #include <vector>
 
 enum CHANNEL_TYPE {
@@ -54,7 +56,7 @@ struct bt_output_debug_stats {
 };
 void bt_get_output_debug_stats(bt_output_debug_stats *stats);
 void bt_set_lightbar_color(uint8_t red, uint8_t green, uint8_t blue, uint8_t brightness_percent);
-void bt_set_player_led_enabled(bool enabled);
+void bt_set_player_led_mode(PlayerLedMode mode);
 void bt_set_mute_led(bool enabled);
 void bt_set_microphone_state(uint8_t volume_percent, bool muted, bool control_mute_led, bool mute_led);
 void bt_set_speaker_output_gain(uint8_t gain);
@@ -106,3 +108,4 @@ void init_feature();
 void set_feature_data(uint8_t reportId, uint8_t const* data,uint16_t len);
 
 #endif //DS5_BRIDGE_BT_H
+
