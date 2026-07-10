@@ -238,17 +238,38 @@ bool controller_output_policy_sanitize_host_lightbar_payload(
     uint16_t len,
     bool lightbar_override
 ) {
+    if (!lightbar_override || payload == nullptr) {
+        return false;
+    }
+
     bool changed = false;
 
-    if (lightbar_override && len > kValidFlag1Offset) {
-        const uint8_t sanitized = payload[kValidFlag1Offset] & static_cast<uint8_t>(~kHostLedControlMask);
-        if (payload[kValidFlag1Offset] != sanitized) {
+    if (len > kValidFlag1Offset) {
+        const uint8_t original = payload[kValidFlag1Offset];
+        uint8_t sanitized = static_cast<uint8_t>(
+            original & static_cast<uint8_t>(~kFlag1LightbarControlEnable)
+        );
+
+        // ReleaseLeds affects both lighting systems. Preserve its Player LED
+        // meaning as an explicit off command while withholding Lightbar release.
+        if ((original & kFlag1ReleaseLeds) != 0) {
+            sanitized = static_cast<uint8_t>(
+                (sanitized & static_cast<uint8_t>(~kFlag1ReleaseLeds))
+                | kFlag1PlayerIndicatorControlEnable
+            );
+            if (len > kPlayerLedsOffset && payload[kPlayerLedsOffset] != kPlayerLedOff) {
+                payload[kPlayerLedsOffset] = kPlayerLedOff;
+                changed = true;
+            }
+        }
+
+        if (original != sanitized) {
             payload[kValidFlag1Offset] = sanitized;
             changed = true;
         }
     }
 
-    if (lightbar_override && len > kValidFlag2Offset) {
+    if (len > kValidFlag2Offset) {
         const uint8_t sanitized = payload[kValidFlag2Offset] & static_cast<uint8_t>(~kHostLightbarSetupMask);
         if (payload[kValidFlag2Offset] != sanitized) {
             payload[kValidFlag2Offset] = sanitized;

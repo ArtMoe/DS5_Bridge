@@ -21,7 +21,7 @@ namespace {
 
 constexpr uint8_t kMagic[] = {'D', 'S', '5', 'B'};
 constexpr uint8_t kProtocolMajor = 1;
-constexpr uint8_t kProtocolMinor = 16;
+constexpr uint8_t kProtocolMinor = 17;
 constexpr uint8_t kProtocolMinSupportedMinor = 7;
 constexpr uint8_t kFirmwareMajor = 1;
 constexpr uint8_t kFirmwareMinor = 6;
@@ -136,7 +136,7 @@ enum CommandId : uint8_t {
     CommandSetHostPersona = 0x21,
     CommandSetAudioReactiveHaptics = 0x22,
     CommandSetChordBindings = 0x23,
-    CommandSetPlayerLedEnabled = 0x24,
+    CommandSetPlayerLedMode = 0x24,
     CommandSetClassicRumbleV1 = 0x25,
     CommandSetSpeakerGain = 0x32,
     CommandEnterBootloader = 0x33,
@@ -686,8 +686,8 @@ void clear_shortcut_events() {
     critical_section_exit(&companion_report_cs);
 }
 
-void set_player_led_enabled(bool enabled) {
-    bt_set_player_led_enabled(enabled);
+void set_player_led_mode(PlayerLedMode mode) {
+    bt_set_player_led_mode(mode);
 }
 
 void clear_dynamic_chord_bindings() {
@@ -774,7 +774,7 @@ void restore_defaults() {
     lightbar_override_enabled = false;
     set_lightbar_color(0x00, 0x00, 0xff, 100);
     set_led_enabled(true);
-    set_player_led_enabled(true);
+    set_player_led_mode(PlayerLedModeFollowGame);
     set_idle_disconnect_enabled(true);
     bt_set_idle_disconnect_timeout_minutes(15);
     usb_set_suspend_disconnect_enabled(true);
@@ -2105,12 +2105,12 @@ void handle_command(uint8_t const *buffer, uint16_t bufsize) {
             set_ack(command_id, sequence, AckOk);
             return;
 
-        case CommandSetPlayerLedEnabled:
-            if (value > 1) {
+        case CommandSetPlayerLedMode:
+            if (value > static_cast<uint16_t>(PlayerLedModeP4)) {
                 set_ack(command_id, sequence, AckInvalidValue);
                 return;
             }
-            set_player_led_enabled(value == 1);
+            set_player_led_mode(static_cast<PlayerLedMode>(value));
             settings_revision++;
             set_ack(command_id, sequence, AckOk);
             return;
@@ -3097,3 +3097,5 @@ void companion_set_report(uint8_t report_id, hid_report_type_t report_type, uint
 
     handle_command(buffer, bufsize);
 }
+
+

@@ -222,6 +222,7 @@ static bool headset_audio_send_window_closed_locked(uint32_t now);
 static bool state_send_blocked_by_audio_locked(uint32_t now);
 static void request_control_if_audio_window_open_locked(uint32_t now, bool &should_request_control);
 static void init_state_report(uint8_t *report);
+static void apply_player_led_policy_to_payload(uint8_t *payload, uint16_t payload_len);
 static bool select_next_output_packet_locked(output_packet &packet, uint32_t now);
 static bool audio_output_route_protected();
 static bool output_report_payload(
@@ -231,6 +232,7 @@ static bool output_report_payload(
     uint16_t &payload_len
 );
 static void mirror_pending_classic_rumble_locked(uint8_t const *data, uint16_t len);
+static void rewrite_pending_player_led_reports_locked();
 
 static btstack_packet_callback_registration_t hci_event_callback_registration, l2cap_event_callback_registration;
 static bd_addr_t current_device_addr;
@@ -276,7 +278,7 @@ static uint8_t saved_lightbar_red = 0xff;
 static uint8_t saved_lightbar_green = 0xd7;
 static uint8_t saved_lightbar_blue = 0x00;
 static uint8_t saved_lightbar_brightness = 100;
-static bool player_led_enabled = true;
+static PlayerLedMode player_led_mode = PlayerLedModeFollowGame;
 static bool lightbar_restore_pending = false;
 static uint32_t lightbar_restore_at_us = 0;
 static uint8_t state_report_seq = 0;
@@ -824,10 +826,7 @@ void bt_set_lightbar_color(uint8_t red, uint8_t green, uint8_t blue, uint8_t bri
     uint8_t report[DS_OUTPUT_REPORT_BT_SIZE];
     init_state_report(report);
     report[3 + 1] = DS_OUTPUT_VALID_FLAG1_LIGHTBAR_CONTROL_ENABLE;
-    if (!player_led_enabled) {
-        report[3 + 1] |= DS_OUTPUT_VALID_FLAG1_PLAYER_INDICATOR_CONTROL_ENABLE;
-        report[3 + 43] = 0;
-    }
+    apply_player_led_policy_to_payload(report + 3, DS_OUTPUT_REPORT_COMMON_SIZE);
     report[3 + OUTPUT_PAYLOAD_LED_BRIGHTNESS_OFFSET] = 0x01;
     report[3 + 44] = scale_lightbar_channel(saved_lightbar_red, saved_lightbar_brightness);
     report[3 + 45] = scale_lightbar_channel(saved_lightbar_green, saved_lightbar_brightness);
@@ -835,13 +834,22 @@ void bt_set_lightbar_color(uint8_t red, uint8_t green, uint8_t blue, uint8_t bri
     bt_write(report, sizeof(report));
 }
 
-void bt_set_player_led_enabled(bool enabled) {
-    player_led_enabled = enabled;
-    controller_output_state_set_player_led_enabled(enabled);
+void bt_set_player_led_mode(PlayerLedMode mode) {
+    player_led_mode = player_led_mode_is_valid(static_cast<uint8_t>(mode))
+        ? mode
+        : PlayerLedModeFollowGame;
+    controller_output_state_set_player_led_mode(player_led_mode);
 
     if (hid_interrupt_cid == 0) {
         return;
     }
+
+    // Reports already waiting in the scheduler may contain the previous mode's
+    // Player LED bits. Rewrite them in place so a queued audio/state packet
+    // cannot briefly undo the newly selected mode after this command returns.
+    critical_section_enter_blocking(&queue_lock);
+    rewrite_pending_player_led_reports_locked();
+    critical_section_exit(&queue_lock);
 
     uint8_t report[DS_OUTPUT_REPORT_BT_SIZE];
     init_state_report(report);
@@ -857,6 +865,13 @@ void bt_set_mute_led(bool enabled) {
         return;
     }
 
+    // Reports already waiting in the scheduler may contain the previous mode's
+    // Player LED bits. Rewrite them in place so a queued audio/state packet
+    // cannot briefly undo the newly selected mode after this command returns.
+    critical_section_enter_blocking(&queue_lock);
+    rewrite_pending_player_led_reports_locked();
+    critical_section_exit(&queue_lock);
+
     uint8_t report[DS_OUTPUT_REPORT_BT_SIZE];
     init_state_report(report);
     report[3 + 1] = DS_OUTPUT_VALID_FLAG1_MIC_MUTE_LED_CONTROL_ENABLE;
@@ -870,6 +885,13 @@ void bt_set_microphone_state(uint8_t volume_percent, bool muted, bool control_mu
     if (hid_interrupt_cid == 0) {
         return;
     }
+
+    // Reports already waiting in the scheduler may contain the previous mode's
+    // Player LED bits. Rewrite them in place so a queued audio/state packet
+    // cannot briefly undo the newly selected mode after this command returns.
+    critical_section_enter_blocking(&queue_lock);
+    rewrite_pending_player_led_reports_locked();
+    critical_section_exit(&queue_lock);
 
     uint8_t report[DS_OUTPUT_REPORT_BT_SIZE];
     init_state_report(report);
@@ -1896,8 +1918,24 @@ static bool make_output_packet(
 }
 
 static bool enqueue_urgent_output(uint8_t *data, uint16_t len, uint8_t reason) {
+    if (data == nullptr) {
+        return false;
+    }
+
+    vector<uint8_t> effective_report(data, data + len);
+    if (
+        effective_report.size() >= 3 + DS_OUTPUT_REPORT_COMMON_SIZE
+        && effective_report[0] == DS_OUTPUT_REPORT_BT
+        && effective_report[2] == DS_OUTPUT_TAG
+    ) {
+        apply_player_led_policy_to_payload(
+            effective_report.data() + 3,
+            static_cast<uint16_t>(effective_report.size() - 3)
+        );
+    }
+
     output_packet packet{};
-    if (!make_output_packet(data, len, OutputPacketUrgent, reason, packet)) {
+    if (!make_output_packet(effective_report.data(), len, OutputPacketUrgent, reason, packet)) {
         return false;
     }
 
@@ -2161,15 +2199,62 @@ static void mirror_pending_classic_rumble_locked(uint8_t const *data, uint16_t l
     mirror_packet_queue_classic_rumble_locked(audio_queue, data, len);
 }
 
+static bool rewrite_player_led_in_report(uint8_t *report, uint16_t report_len, bool update_checksum) {
+    uint8_t *payload = nullptr;
+    uint16_t payload_len = 0;
+    if (
+        !output_report_payload(report, report_len, payload, payload_len)
+        || !controller_output_state_copy_player_led_report(payload, payload_len)
+    ) {
+        return false;
+    }
+    return !update_checksum || fill_output_report_checksum(report, report_len);
+}
+
+static bool rewrite_player_led_in_packet(output_packet &packet) {
+    if (packet.data.size() < 2 || packet.data[0] != 0xA2) {
+        return false;
+    }
+
+    uint8_t *report = packet.data.data() + 1;
+    const uint16_t report_len = static_cast<uint16_t>(packet.data.size() - 1);
+    return rewrite_player_led_in_report(report, report_len, true);
+}
+
+static void rewrite_packet_queue_player_leds_locked(queue<output_packet> &packets) {
+    queue<output_packet> rewritten;
+    while (!packets.empty()) {
+        output_packet packet = std::move(packets.front());
+        packets.pop();
+        (void)rewrite_player_led_in_packet(packet);
+        rewritten.push(std::move(packet));
+    }
+    packets = std::move(rewritten);
+}
+
+static void rewrite_pending_player_led_reports_locked() {
+    if (state_pending) {
+        // The coalesced state report receives its CRC only when selected.
+        (void)rewrite_player_led_in_report(state_pending_report, sizeof(state_pending_report), false);
+    }
+    rewrite_packet_queue_player_leds_locked(urgent_queue);
+    rewrite_packet_queue_player_leds_locked(audio_queue);
+}
+
 static void apply_player_led_policy_to_payload(uint8_t *payload, uint16_t payload_len) {
-    if (payload == nullptr || payload_len <= OUTPUT_PAYLOAD_PLAYER_LEDS_OFFSET) {
+    if (
+        payload == nullptr
+        || payload_len <= OUTPUT_PAYLOAD_PLAYER_LEDS_OFFSET
+        || player_led_mode_follows_game(player_led_mode)
+    ) {
         return;
     }
-    if (player_led_enabled) {
-        return;
-    }
-    payload[OUTPUT_PAYLOAD_VALID_FLAG1_OFFSET] |= DS_OUTPUT_VALID_FLAG1_PLAYER_INDICATOR_CONTROL_ENABLE;
-    payload[OUTPUT_PAYLOAD_PLAYER_LEDS_OFFSET] = 0;
+    payload[OUTPUT_PAYLOAD_VALID_FLAG1_OFFSET] = static_cast<uint8_t>(
+        (payload[OUTPUT_PAYLOAD_VALID_FLAG1_OFFSET]
+            & static_cast<uint8_t>(~DS_OUTPUT_VALID_FLAG1_RELEASE_LEDS))
+        | DS_OUTPUT_VALID_FLAG1_PLAYER_INDICATOR_CONTROL_ENABLE
+    );
+    payload[OUTPUT_PAYLOAD_PLAYER_LEDS_OFFSET] = player_led_mode_pattern(player_led_mode);
 }
 
 static bool has_unclassified_state_payload_data(uint8_t const *payload, uint16_t payload_len) {
@@ -2644,7 +2729,7 @@ static void merge_state_output_locked(uint8_t const *data, uint16_t len, uint32_
             dst[OUTPUT_PAYLOAD_LIGHTBAR_BLUE_OFFSET] = src[OUTPUT_PAYLOAD_LIGHTBAR_BLUE_OFFSET];
         }
         if (led_flags & DS_OUTPUT_VALID_FLAG1_PLAYER_INDICATOR_CONTROL_ENABLE) {
-            dst[OUTPUT_PAYLOAD_PLAYER_LEDS_OFFSET] = player_led_enabled ? src[OUTPUT_PAYLOAD_PLAYER_LEDS_OFFSET] : 0;
+            dst[OUTPUT_PAYLOAD_PLAYER_LEDS_OFFSET] = src[OUTPUT_PAYLOAD_PLAYER_LEDS_OFFSET];
         }
         apply_player_led_policy_to_payload(dst, DS_OUTPUT_REPORT_COMMON_SIZE);
     }
@@ -2922,3 +3007,4 @@ void init_feature() {
     get_feature_data(0x70, 64);
     feature_prefetch_active = false;
 }
+

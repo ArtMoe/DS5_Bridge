@@ -27,7 +27,7 @@ bool cached_right_trigger_valid = false;
 bool cached_left_trigger_valid = false;
 uint8_t cached_trigger_power = 0;
 bool cached_trigger_power_valid = false;
-bool player_led_enabled = true;
+PlayerLedMode player_led_mode = PlayerLedModeFollowGame;
 uint8_t cached_player_leds = 0;
 bool cached_player_leds_valid = false;
 
@@ -71,14 +71,14 @@ uint8_t scale_lightbar_channel(uint8_t channel, uint8_t brightness_percent) {
 }
 
 void apply_player_led_policy(uint8_t *payload) {
-    if (payload == nullptr) {
+    if (payload == nullptr || player_led_mode_follows_game(player_led_mode)) {
         return;
     }
-    if (player_led_enabled) {
-        return;
-    }
-    payload[kValidFlag1Offset] |= kFlag1PlayerIndicatorControlEnable;
-    payload[kPlayerLedsOffset] = 0;
+    payload[kValidFlag1Offset] = static_cast<uint8_t>(
+        (payload[kValidFlag1Offset] & static_cast<uint8_t>(~kFlag1ReleaseLeds))
+        | kFlag1PlayerIndicatorControlEnable
+    );
+    payload[kPlayerLedsOffset] = player_led_mode_pattern(player_led_mode);
 }
 
 void cache_player_leds_from_payload(uint8_t const *payload, uint8_t len) {
@@ -126,7 +126,7 @@ void restore_player_led_policy(uint8_t *payload) {
 }
 
 void apply_current_player_led_policy(uint8_t *payload) {
-    if (player_led_enabled) {
+    if (player_led_mode_follows_game(player_led_mode)) {
         restore_player_led_policy(payload);
     } else {
         apply_player_led_policy(payload);
@@ -213,7 +213,7 @@ void controller_output_state_reset() {
     std::memcpy(state_data, defaults, sizeof(state_data));
     controller_output_state_reset_cached_triggers();
     controller_output_state_reset_cached_player_leds();
-    player_led_enabled = true;
+    player_led_mode = PlayerLedModeFollowGame;
 }
 
 bool controller_output_state_classic_rumble_active() {
@@ -409,7 +409,7 @@ void controller_output_state_apply_host_payload(uint8_t const *data, uint8_t len
         3
     );
 
-    cache_player_leds_from_payload(state_data, sizeof(state_data));
+    cache_player_leds_from_payload(update, copy_len);
     clear_mic_control(state_data);
     clamp_speaker_volume();
     apply_current_player_led_policy(state_data);
@@ -462,8 +462,10 @@ void controller_output_state_set_lightbar(uint8_t red, uint8_t green, uint8_t bl
     state_data[kLightbarBlueOffset] = scale_lightbar_channel(blue, brightness);
 }
 
-void controller_output_state_set_player_led_enabled(bool enabled) {
-    player_led_enabled = enabled;
+void controller_output_state_set_player_led_mode(PlayerLedMode mode) {
+    player_led_mode = player_led_mode_is_valid(static_cast<uint8_t>(mode))
+        ? mode
+        : PlayerLedModeFollowGame;
     apply_current_player_led_policy(state_data);
 }
 
@@ -484,21 +486,20 @@ bool controller_output_state_copy_player_led_report(uint8_t *destination, uint16
         return false;
     }
 
-    if (!player_led_enabled) {
-        destination[kValidFlag1Offset] |= kFlag1PlayerIndicatorControlEnable;
-        destination[kPlayerLedsOffset] = 0;
+    if (!player_led_mode_follows_game(player_led_mode)) {
+        destination[kValidFlag1Offset] = static_cast<uint8_t>(
+            (destination[kValidFlag1Offset] & static_cast<uint8_t>(~kFlag1ReleaseLeds))
+            | kFlag1PlayerIndicatorControlEnable
+        );
+        destination[kPlayerLedsOffset] = player_led_mode_pattern(player_led_mode);
         return true;
-    }
-
-    if (!cached_player_leds_valid) {
-        return false;
     }
 
     destination[kValidFlag1Offset] = static_cast<uint8_t>(
         (destination[kValidFlag1Offset] & static_cast<uint8_t>(~kFlag1ReleaseLeds))
         | kFlag1PlayerIndicatorControlEnable
     );
-    destination[kPlayerLedsOffset] = cached_player_leds;
+    destination[kPlayerLedsOffset] = cached_player_leds_valid ? cached_player_leds : kPlayerLedOff;
     return true;
 }
 
@@ -532,3 +533,4 @@ void controller_output_state_copy_audio_snapshot(uint8_t *destination, bool head
         (destination[kAudioControl2Offset] & 0xF8) | controller_output_state_speaker_gain()
     );
 }
+

@@ -129,8 +129,8 @@ void controller_output_submit_usb_payload(uint8_t const *payload, uint16_t paylo
     if (payloadLen > 0) {
         memcpy(audioStateData, outputData + 3, payloadLen);
     }
-    // 0x36 carries an audio-state snapshot while speaker streaming. Strip
-    // game LEDs only when the companion lightbar override is explicitly on.
+    // 0x36 carries an audio-state snapshot while speaker streaming. Sanitize
+    // Companion-owned Lightbar fields without suppressing game Player LEDs.
     controller_output_policy_sanitize_host_lightbar_payload(
         audioStateData,
         payloadLen,

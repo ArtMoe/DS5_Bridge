@@ -43,7 +43,11 @@ constexpr uint8_t kHeadphoneVolumeMax = 0x7f;
 constexpr uint8_t kSpeakerVolumeMax = 0x64;
 constexpr uint8_t kMicVolumeMax = 0x40;
 constexpr uint8_t kLightbarSetupLightOut = 0x02;
+constexpr uint8_t kPlayerLedOff = 0x00;
 constexpr uint8_t kPlayerLed1Instant = 0x24;
+constexpr uint8_t kPlayerLed2Instant = 0x2A;
+constexpr uint8_t kPlayerLed3Instant = 0x35;
+constexpr uint8_t kPlayerLed4Instant = 0x3B;
 
 constexpr uint8_t kTriggerEffectSize = 11;
 constexpr uint8_t kTriggerEffectRightOffset = 10;
@@ -125,3 +129,4 @@ inline uint8_t scaled_percent(uint8_t value, uint8_t percent) {
 } // namespace ds5::output
 
 #endif // DS5_BRIDGE_DUALSENSE_OUTPUT_H
+
