@@ -376,24 +376,57 @@ void mic_sanitizer_removes_mute_led_and_only_mic_power_save_bit() {
     EXPECT_EQ(payload[kPowerSaveControlOffset], 0);
 }
 
-void lightbar_override_removes_host_led_claims_without_mutating_color_bytes() {
+void lightbar_override_removes_only_host_lightbar_claims() {
     auto payload = empty_payload();
-    payload[kValidFlag1Offset] = kHostLedControlMask | kFlag1AudioControl2Enable;
+    payload[kValidFlag1Offset] = static_cast<uint8_t>(
+        kFlag1LightbarControlEnable
+        | kFlag1PlayerIndicatorControlEnable
+        | kFlag1AudioControl2Enable
+    );
     payload[kValidFlag2Offset] = kHostLightbarSetupMask | kFlag2EnableImprovedRumbleEmulation;
+    payload[kPlayerLedsOffset] = 0x2a;
     payload[kLightbarRedOffset] = 9;
     payload[kLightbarGreenOffset] = 8;
     payload[kLightbarBlueOffset] = 7;
 
     EXPECT_FALSE(controller_output_policy_sanitize_host_lightbar_payload(payload.data(), payload.size(), false));
-    EXPECT_EQ(payload[kValidFlag1Offset], static_cast<uint8_t>(kHostLedControlMask | kFlag1AudioControl2Enable));
+    EXPECT_EQ(
+        payload[kValidFlag1Offset],
+        static_cast<uint8_t>(
+            kFlag1LightbarControlEnable
+            | kFlag1PlayerIndicatorControlEnable
+            | kFlag1AudioControl2Enable
+        )
+    );
     EXPECT_EQ(payload[kValidFlag2Offset], static_cast<uint8_t>(kHostLightbarSetupMask | kFlag2EnableImprovedRumbleEmulation));
 
     EXPECT_TRUE(controller_output_policy_sanitize_host_lightbar_payload(payload.data(), payload.size(), true));
-    EXPECT_EQ(payload[kValidFlag1Offset], kFlag1AudioControl2Enable);
+    EXPECT_EQ(
+        payload[kValidFlag1Offset],
+        static_cast<uint8_t>(kFlag1PlayerIndicatorControlEnable | kFlag1AudioControl2Enable)
+    );
     EXPECT_EQ(payload[kValidFlag2Offset], kFlag2EnableImprovedRumbleEmulation);
+    EXPECT_EQ(payload[kPlayerLedsOffset], 0x2a);
     EXPECT_EQ(payload[kLightbarRedOffset], 9);
     EXPECT_EQ(payload[kLightbarGreenOffset], 8);
     EXPECT_EQ(payload[kLightbarBlueOffset], 7);
+
+    auto release_payload = empty_payload();
+    release_payload[kValidFlag1Offset] = static_cast<uint8_t>(
+        kFlag1LightbarControlEnable | kFlag1ReleaseLeds | kFlag1AudioControl2Enable
+    );
+    release_payload[kPlayerLedsOffset] = 0x2f;
+
+    EXPECT_TRUE(controller_output_policy_sanitize_host_lightbar_payload(
+        release_payload.data(),
+        release_payload.size(),
+        true
+    ));
+    EXPECT_EQ(
+        release_payload[kValidFlag1Offset],
+        static_cast<uint8_t>(kFlag1PlayerIndicatorControlEnable | kFlag1AudioControl2Enable)
+    );
+    EXPECT_EQ(release_payload[kPlayerLedsOffset], kPlayerLedOff);
 }
 
 void host_led_clear_detection_covers_release_player_and_lightbar_paths() {
@@ -502,7 +535,7 @@ void output_state_lightbar_override_is_scaled_and_survives_audio_snapshot() {
     EXPECT_EQ(snapshot[kLightbarBlueOffset], 20);
 }
 
-void output_state_player_led_enabled_preserves_host_indicator() {
+void output_state_player_led_follow_game_preserves_host_indicator() {
     reset_output_state();
     auto payload = empty_payload();
     payload[kValidFlag1Offset] = kFlag1PlayerIndicatorControlEnable;
@@ -516,40 +549,129 @@ void output_state_player_led_enabled_preserves_host_indicator() {
     EXPECT_EQ(snapshot[kPlayerLedsOffset], 0x2f);
 }
 
-void output_state_player_led_disabled_suppresses_host_indicator() {
+void output_state_player_led_follow_game_without_cache_emits_off_report() {
     reset_output_state();
-    auto payload = empty_payload();
-    payload[kValidFlag1Offset] = kFlag1PlayerIndicatorControlEnable;
-    payload[kPlayerLedsOffset] = 0x2f;
-    controller_output_state_apply_host_payload(payload.data(), static_cast<uint8_t>(payload.size()));
-    controller_output_state_set_player_led_enabled(false);
+    Payload report{};
+    report[kValidFlag1Offset] = kFlag1ReleaseLeds;
+    report[kPlayerLedsOffset] = 0x2f;
 
-    AudioSnapshot snapshot{};
-    controller_output_state_copy_audio_snapshot(snapshot.data(), false);
-
-    EXPECT_TRUE((snapshot[kValidFlag1Offset] & kFlag1PlayerIndicatorControlEnable) != 0);
-    EXPECT_EQ(snapshot[kPlayerLedsOffset], 0);
+    EXPECT_TRUE(controller_output_state_copy_player_led_report(
+        report.data(),
+        static_cast<uint16_t>(report.size())
+    ));
+    EXPECT_FALSE((report[kValidFlag1Offset] & kFlag1ReleaseLeds) != 0);
+    EXPECT_TRUE((report[kValidFlag1Offset] & kFlag1PlayerIndicatorControlEnable) != 0);
+    EXPECT_EQ(report[kPlayerLedsOffset], kPlayerLedOff);
 }
 
-void output_state_player_led_reenabled_restores_host_indicator() {
+void output_state_player_led_forced_modes_override_host_indicator() {
+    struct ForcedModeCase {
+        PlayerLedMode mode;
+        uint8_t pattern;
+    };
+    const ForcedModeCase cases[] = {
+        {PlayerLedModeOff, kPlayerLedOff},
+        {PlayerLedModeP1, kPlayerLed1Instant},
+        {PlayerLedModeP2, kPlayerLed2Instant},
+        {PlayerLedModeP3, kPlayerLed3Instant},
+        {PlayerLedModeP4, kPlayerLed4Instant},
+    };
+
+    for (auto const &test_case : cases) {
+        reset_output_state();
+        auto payload = empty_payload();
+        payload[kValidFlag1Offset] = kFlag1PlayerIndicatorControlEnable;
+        payload[kPlayerLedsOffset] = 0x2f;
+        controller_output_state_apply_host_payload(payload.data(), static_cast<uint8_t>(payload.size()));
+        controller_output_state_set_player_led_mode(test_case.mode);
+
+        AudioSnapshot snapshot{};
+        controller_output_state_copy_audio_snapshot(snapshot.data(), false);
+
+        EXPECT_FALSE((snapshot[kValidFlag1Offset] & kFlag1ReleaseLeds) != 0);
+        EXPECT_TRUE((snapshot[kValidFlag1Offset] & kFlag1PlayerIndicatorControlEnable) != 0);
+        EXPECT_EQ(snapshot[kPlayerLedsOffset], test_case.pattern);
+
+        Payload report{};
+        report[kValidFlag1Offset] = kFlag1ReleaseLeds;
+        EXPECT_TRUE(controller_output_state_copy_player_led_report(
+            report.data(),
+            static_cast<uint16_t>(report.size())
+        ));
+        EXPECT_FALSE((report[kValidFlag1Offset] & kFlag1ReleaseLeds) != 0);
+        EXPECT_TRUE((report[kValidFlag1Offset] & kFlag1PlayerIndicatorControlEnable) != 0);
+        EXPECT_EQ(report[kPlayerLedsOffset], test_case.pattern);
+    }
+}
+
+void output_state_player_led_force_survives_game_updates_and_restores_latest_cache() {
+    reset_output_state();
+    auto initial_payload = empty_payload();
+    initial_payload[kValidFlag1Offset] = kFlag1PlayerIndicatorControlEnable;
+    initial_payload[kPlayerLedsOffset] = 0x2f;
+    controller_output_state_apply_host_payload(
+        initial_payload.data(),
+        static_cast<uint8_t>(initial_payload.size())
+    );
+    controller_output_state_set_player_led_mode(PlayerLedModeP1);
+
+    auto updated_payload = empty_payload();
+    updated_payload[kValidFlag1Offset] = kFlag1PlayerIndicatorControlEnable;
+    updated_payload[kPlayerLedsOffset] = 0x15;
+    controller_output_state_apply_host_payload(
+        updated_payload.data(),
+        static_cast<uint8_t>(updated_payload.size())
+    );
+
+    auto unrelated_payload = empty_payload();
+    unrelated_payload[kValidFlag0Offset] = kFlag0CompatibleVibration | kFlag0HapticsSelect;
+    unrelated_payload[kMotorRightOffset] = 0x20;
+    unrelated_payload[kMotorLeftOffset] = 0x40;
+    controller_output_state_apply_host_payload(
+        unrelated_payload.data(),
+        static_cast<uint8_t>(unrelated_payload.size())
+    );
+
+    AudioSnapshot forced_snapshot{};
+    controller_output_state_copy_audio_snapshot(forced_snapshot.data(), false);
+    EXPECT_EQ(forced_snapshot[kPlayerLedsOffset], kPlayerLed1Instant);
+
+    controller_output_state_set_player_led_mode(PlayerLedModeFollowGame);
+    AudioSnapshot restored_snapshot{};
+    controller_output_state_copy_audio_snapshot(restored_snapshot.data(), false);
+
+    EXPECT_TRUE((restored_snapshot[kValidFlag1Offset] & kFlag1PlayerIndicatorControlEnable) != 0);
+    EXPECT_EQ(restored_snapshot[kPlayerLedsOffset], 0x15);
+}
+
+void output_state_player_led_force_blocks_game_release() {
     reset_output_state();
     auto payload = empty_payload();
     payload[kValidFlag1Offset] = kFlag1PlayerIndicatorControlEnable;
     payload[kPlayerLedsOffset] = 0x2f;
     controller_output_state_apply_host_payload(payload.data(), static_cast<uint8_t>(payload.size()));
-    controller_output_state_set_player_led_enabled(false);
-    controller_output_state_set_player_led_enabled(true);
+    controller_output_state_set_player_led_mode(PlayerLedModeP4);
+
+    auto release_payload = empty_payload();
+    release_payload[kValidFlag1Offset] = kFlag1ReleaseLeds;
+    controller_output_state_apply_host_payload(release_payload.data(), static_cast<uint8_t>(release_payload.size()));
 
     AudioSnapshot snapshot{};
     controller_output_state_copy_audio_snapshot(snapshot.data(), false);
 
+    EXPECT_FALSE((snapshot[kValidFlag1Offset] & kFlag1ReleaseLeds) != 0);
     EXPECT_TRUE((snapshot[kValidFlag1Offset] & kFlag1PlayerIndicatorControlEnable) != 0);
-    EXPECT_EQ(snapshot[kPlayerLedsOffset], 0x2f);
+    EXPECT_EQ(snapshot[kPlayerLedsOffset], kPlayerLed4Instant);
+
+    controller_output_state_set_player_led_mode(PlayerLedModeFollowGame);
+    AudioSnapshot follow_snapshot{};
+    controller_output_state_copy_audio_snapshot(follow_snapshot.data(), false);
+    EXPECT_FALSE((follow_snapshot[kValidFlag1Offset] & kFlag1PlayerIndicatorControlEnable) != 0);
 
     Payload report{};
     EXPECT_TRUE(controller_output_state_copy_player_led_report(report.data(), static_cast<uint16_t>(report.size())));
     EXPECT_TRUE((report[kValidFlag1Offset] & kFlag1PlayerIndicatorControlEnable) != 0);
-    EXPECT_EQ(report[kPlayerLedsOffset], 0x2f);
+    EXPECT_EQ(report[kPlayerLedsOffset], kPlayerLedOff);
 }
 
 void output_state_player_led_release_invalidates_cached_indicator() {
@@ -571,7 +693,9 @@ void output_state_player_led_release_invalidates_cached_indicator() {
     EXPECT_EQ(snapshot[kPlayerLedsOffset], 0);
 
     Payload report{};
-    EXPECT_FALSE(controller_output_state_copy_player_led_report(report.data(), static_cast<uint16_t>(report.size())));
+    EXPECT_TRUE(controller_output_state_copy_player_led_report(report.data(), static_cast<uint16_t>(report.size())));
+    EXPECT_TRUE((report[kValidFlag1Offset] & kFlag1PlayerIndicatorControlEnable) != 0);
+    EXPECT_EQ(report[kPlayerLedsOffset], kPlayerLedOff);
 }
 
 void output_state_preserves_selector_zero_and_ignores_motor_only_rumble() {
@@ -1191,14 +1315,16 @@ std::vector<TestCase> tests{
     {"audio haptics replace tracks state without suppressing classic rumble", audio_haptics_replace_tracks_state_without_suppressing_classic_rumble},
     {"speaker sanitizer strips host amp flags and zeroes only controlled fields", speaker_sanitizer_strips_host_amp_flags_and_zeroes_only_controlled_fields},
     {"mic sanitizer removes mute led and only mic power save bit", mic_sanitizer_removes_mute_led_and_only_mic_power_save_bit},
-    {"lightbar override removes host led claims without mutating color bytes", lightbar_override_removes_host_led_claims_without_mutating_color_bytes},
+    {"lightbar override removes only host lightbar claims", lightbar_override_removes_only_host_lightbar_claims},
     {"host led clear detection covers release player and lightbar paths", host_led_clear_detection_covers_release_player_and_lightbar_paths},
     {"output state audio snapshot routes to speaker and headphones safely", output_state_audio_snapshot_routes_to_speaker_and_headphones_safely},
     {"output state audio snapshot preserves adaptive trigger effects and motor power", output_state_audio_snapshot_preserves_adaptive_trigger_effects_and_motor_power},
     {"output state lightbar override is scaled and survives audio snapshot", output_state_lightbar_override_is_scaled_and_survives_audio_snapshot},
-    {"output state player led enabled preserves host indicator", output_state_player_led_enabled_preserves_host_indicator},
-    {"output state player led disabled suppresses host indicator", output_state_player_led_disabled_suppresses_host_indicator},
-    {"output state player led reenabled restores host indicator", output_state_player_led_reenabled_restores_host_indicator},
+    {"output state player led follow game preserves host indicator", output_state_player_led_follow_game_preserves_host_indicator},
+    {"output state player led follow game without cache emits off report", output_state_player_led_follow_game_without_cache_emits_off_report},
+    {"output state player led forced modes override host indicator", output_state_player_led_forced_modes_override_host_indicator},
+    {"output state player led force survives game updates and restores latest cache", output_state_player_led_force_survives_game_updates_and_restores_latest_cache},
+    {"output state player led force blocks game release", output_state_player_led_force_blocks_game_release},
     {"output state player led release invalidates cached indicator", output_state_player_led_release_invalidates_cached_indicator},
     {"output state preserves selector zero and ignores motor only rumble", output_state_preserves_selector_zero_and_ignores_motor_only_rumble},
     {"output state strip zero classic rumble only removes idle selector", output_state_strip_zero_classic_rumble_only_removes_idle_selector},
@@ -1243,3 +1369,5 @@ int main() {
     std::cout << tests.size() << " firmware logic tests passed\n";
     return 0;
 }
+
+
