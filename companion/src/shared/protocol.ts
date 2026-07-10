@@ -1,10 +1,10 @@
-export const COMPANION_USAGE_PAGE = 0xff5d;
+﻿export const COMPANION_USAGE_PAGE = 0xff5d;
 export const COMPANION_USAGE = 0x0001;
 export const REPORT_LENGTH = 64;
 export const PAYLOAD_LENGTH = 63;
 export const MAGIC = 'DS5B';
 export const PROTOCOL_MAJOR = 1;
-export const PROTOCOL_MINOR = 16;
+export const PROTOCOL_MINOR = 17;
 
 export const REPORT_ID = {
   STATUS: 0x01,
@@ -85,12 +85,20 @@ export const COMMAND_ID = {
   SET_HOST_PERSONA: 0x21,
   SET_AUDIO_REACTIVE_HAPTICS: 0x22,
   SET_CHORD_BINDINGS: 0x23,
-  SET_PLAYER_LED_ENABLED: 0x24,
+  SET_PLAYER_LED_MODE: 0x24,
   SET_CLASSIC_RUMBLE_V1: 0x25,
   SET_SPEAKER_GAIN: 0x32,
   ENTER_BOOTLOADER: 0x33
 } as const;
 
+export const PLAYER_LED_MODE_VALUE = {
+  off: 0,
+  game: 1,
+  p1: 2,
+  p2: 3,
+  p3: 4,
+  p4: 5
+} as const;
 export const ACK_RESULT = {
   OK: 0x00,
   ERR_BAD_MAGIC: 0x01,
@@ -1015,3 +1023,4 @@ export function ackUserMessage(result: number): string {
       return ackResultName(result).replace(/^ERR_/, '').replaceAll('_', ' ').toLowerCase();
   }
 }
+
