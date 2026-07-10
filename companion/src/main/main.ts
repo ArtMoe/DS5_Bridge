@@ -32,6 +32,7 @@ import type {
   BridgeSnapshot,
   PicoFirmwareAction,
   PicoFirmwareActionResult,
+  PlayerLedMode,
   UiScalePercent,
   UiThemePreset
 } from '../shared/types';
@@ -1058,7 +1059,7 @@ function registerIpc(service: BridgeService): void {
     service.setMuteButtonAction(mode, usage, modifiers, behavior, chordStarterEnabled)
   ));
   ipcMain.handle('bridge:setLedEnabled', (_event, value: boolean) => service.setLedEnabled(value));
-  ipcMain.handle('bridge:setPlayerLedEnabled', (_event, value: boolean) => service.setPlayerLedEnabled(value));
+  ipcMain.handle('bridge:setPlayerLedMode', (_event, value: PlayerLedMode) => service.setPlayerLedMode(value));
   ipcMain.handle('bridge:setIdleDisconnectEnabled', (_event, value: boolean) => service.setIdleDisconnectEnabled(value));
   ipcMain.handle('bridge:setIdleDisconnectTimeoutMinutes', (_event, value: number) => (
     service.setIdleDisconnectTimeoutMinutes(value)
@@ -1260,3 +1261,4 @@ app.on('before-quit', (event) => {
     }
   })();
 });
+

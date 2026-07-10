@@ -9,6 +9,7 @@ import {
   COMMAND_ID,
   PROTOCOL_MAJOR,
   PROTOCOL_MINOR,
+  PLAYER_LED_MODE_VALUE,
   REPORT_ID,
   REPORT_LENGTH,
   CHORD_FUNCTION_EVENT_BASE,
@@ -68,6 +69,7 @@ import type {
   BridgeDiagnostics,
   BridgeSnapshot,
   CompanionSettings,
+  PlayerLedMode,
   AudioHapticsSession,
   HostPersonaTransition,
   HidDeviceSummary,
@@ -2457,9 +2459,9 @@ export class BridgeService extends EventEmitter {
     return this.getSnapshot();
   }
 
-  async setPlayerLedEnabled(enabled: boolean): Promise<BridgeSnapshot> {
-    await this.sendSettingCommand(COMMAND_ID.SET_PLAYER_LED_ENABLED, enabled ? 1 : 0, {
-      playerLedEnabled: enabled
+  async setPlayerLedMode(mode: PlayerLedMode): Promise<BridgeSnapshot> {
+    await this.sendSettingCommand(COMMAND_ID.SET_PLAYER_LED_MODE, PLAYER_LED_MODE_VALUE[mode], {
+      playerLedMode: mode
     });
     return this.getSnapshot();
   }
@@ -3653,7 +3655,7 @@ export class BridgeService extends EventEmitter {
     await this.sendCommand(COMMAND_ID.SET_LED_ENABLED, settings.ledEnabled ? 1 : 0, {
       expectSettingsRevisionChange
     });
-    await this.sendCommand(COMMAND_ID.SET_PLAYER_LED_ENABLED, settings.playerLedEnabled ? 1 : 0, {
+    await this.sendCommand(COMMAND_ID.SET_PLAYER_LED_MODE, PLAYER_LED_MODE_VALUE[settings.playerLedMode], {
       expectSettingsRevisionChange
     });
     await this.sendCommand(COMMAND_ID.SET_IDLE_DISCONNECT_ENABLED, settings.idleDisconnectEnabled ? 1 : 0, {
@@ -3854,3 +3856,4 @@ export class BridgeService extends EventEmitter {
     this.emit('snapshot', this.getSnapshot());
   }
 }
+

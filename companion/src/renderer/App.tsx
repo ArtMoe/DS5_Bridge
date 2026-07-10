@@ -130,7 +130,7 @@ import type {
   TriggerTestMode,
   TriggerTestTarget
 } from '../shared/protocol';
-import type { AudioHapticsSession, BridgeSnapshot, UiScalePercent, UiThemePreset } from '../shared/types';
+import type { AudioHapticsSession, BridgeSnapshot, PlayerLedMode, UiScalePercent, UiThemePreset } from '../shared/types';
 
 type ControlTab = 'overview' | 'haptics' | 'audio' | 'triggers' | 'lighting' | 'remapping' | 'chords' | 'system';
 type StartupTutorialStep = 'feature-toggle' | 'support' | 'done';
@@ -382,6 +382,15 @@ const MUTE_KEYBOARD_BEHAVIOR_OPTIONS: Array<[string, MuteKeyboardBehavior]> = [
   ['Tap Once', 'tap'],
   ['Hold While Pressed', 'hold']
 ];
+const PLAYER_LED_MODE_OPTIONS: Array<[string, PlayerLedMode]> = [
+  ['Follow Game', 'game'],
+  ['Off', 'off'],
+  ['P1', 'p1'],
+  ['P2', 'p2'],
+  ['P3', 'p3'],
+  ['P4', 'p4']
+];
+
 const POLLING_RATE_OPTIONS: Array<[string, PollingRateMode]> = [
   ['1000 Hz / Real-time', '1000'],
   ['500 Hz', '500'],
@@ -2592,7 +2601,7 @@ function chordControllerSettingSummary(action: ChordControllerSettingAction, ste
   if (notchTarget) {
     const actionText = `${notchTarget.direction === 'up' ? 'Increase' : 'Decrease'} ${notchTarget.target.label}`;
     return typeof stepPercent === 'number'
-      ? `${actionText} — ${stepPercent}% step`
+      ? `${actionText} 鈥?${stepPercent}% step`
       : actionText;
   }
   switch (action) {
@@ -5231,7 +5240,7 @@ export function App() {
             <strong>
               {detailValue}
               {func.type === 'controller-setting' && notchTarget ? (
-                <em> — {func.stepPercent}% step</em>
+                <em> 鈥?{func.stepPercent}% step</em>
               ) : null}
             </strong>
           </div>
@@ -9575,20 +9584,19 @@ export function App() {
                 <div className="settings-menu-row">
                   <div className="settings-menu-copy">
                     <strong>Player Slot LED</strong>
-                    <span>Show the controller player indicator lights</span>
+                    <span>Override the game or follow its player indicator</span>
                   </div>
-                  <button
-                    type="button"
-                    role="switch"
-                    aria-checked={snapshot.settings.playerLedEnabled}
-                    className={`switch ${snapshot.settings.playerLedEnabled ? 'on' : ''}`}
-                    disabled={!connected}
-                    onClick={() => void runAction('player-led', () => (
-                      window.bridge.setPlayerLedEnabled(!snapshot.settings.playerLedEnabled)
+                  <CustomSelect
+                    value={snapshot.settings.playerLedMode}
+                    options={PLAYER_LED_MODE_OPTIONS}
+                    className="settings-player-led-select"
+                    showSelectedCheck={false}
+                    ariaLabel="Player slot LED mode"
+                    disabled={!connected || pendingAction !== null}
+                    onChange={(mode) => void runAction('player-led', () => (
+                      window.bridge.setPlayerLedMode(mode)
                     ))}
-                  >
-                    <span />
-                  </button>
+                  />
                 </div>
                 <div className="settings-menu-section-label">Shortcuts</div>
                 <div className={`settings-menu-row ${settingsFocusTarget === 'sleep-shortcut' ? 'settings-menu-row-highlight' : ''}`}>
@@ -9677,3 +9685,4 @@ export function App() {
     </div>
   );
 }
+

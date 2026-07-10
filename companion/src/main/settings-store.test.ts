@@ -62,8 +62,37 @@ describe('SettingsStore', () => {
     expect(settings.micMuted).toBe(false);
     expect(settings.lightbarColor).toBe('#0000ff');
     expect(settings.showBatteryPercentTrayIcon).toBe(false);
+    expect(settings.playerLedMode).toBe('game');
   });
 
+  it('migrates legacy player LED booleans and preserves explicit modes', () => {
+    const disabledUserDataPath = tempUserDataPath();
+    writeFileSync(path.join(disabledUserDataPath, 'settings.json'), JSON.stringify({
+      settingsSchemaVersion: 2,
+      playerLedEnabled: false
+    }), 'utf8');
+    expect(new SettingsStore(disabledUserDataPath).get().playerLedMode).toBe('off');
+
+    const enabledUserDataPath = tempUserDataPath();
+    writeFileSync(path.join(enabledUserDataPath, 'settings.json'), JSON.stringify({
+      settingsSchemaVersion: 2,
+      playerLedEnabled: true,
+      customProfile: {
+        playerLedEnabled: false
+      }
+    }), 'utf8');
+    const enabledStore = new SettingsStore(enabledUserDataPath);
+    expect(enabledStore.get().playerLedMode).toBe('game');
+    expect(enabledStore.applyPreset('custom').playerLedMode).toBe('off');
+
+    const explicitModeUserDataPath = tempUserDataPath();
+    writeFileSync(path.join(explicitModeUserDataPath, 'settings.json'), JSON.stringify({
+      settingsSchemaVersion: 2,
+      playerLedEnabled: false,
+      playerLedMode: 'p4'
+    }), 'utf8');
+    expect(new SettingsStore(explicitModeUserDataPath).get().playerLedMode).toBe('p4');
+  });
   it('migrates legacy custom-only profile data without stealing selection', () => {
     const userDataPath = tempUserDataPath();
     writeFileSync(path.join(userDataPath, 'settings.json'), JSON.stringify({
@@ -499,6 +528,7 @@ describe('SettingsStore', () => {
     writeFileSync(path.join(userDataPath, 'settings.json'), JSON.stringify({
       uiScalePercent: 110,
       uiThemePreset: 'laserwave',
+      playerLedMode: 'p9',
       lightbarColor: '#golden',
       speakerVolumePercent: 999,
       speakerGainLevel: 99,
@@ -523,6 +553,7 @@ describe('SettingsStore', () => {
 
     expect(settings.uiScalePercent).toBe(100);
     expect(settings.uiThemePreset).toBe(DEFAULT_SETTINGS.uiThemePreset);
+    expect(settings.playerLedMode).toBe('game');
     expect(settings.lightbarColor).toBe(DEFAULT_SETTINGS.lightbarColor);
     expect(settings.speakerVolumePercent).toBe(100);
     expect(settings.speakerGainLevel).toBe(7);
@@ -544,3 +575,4 @@ describe('SettingsStore', () => {
     expect(new SettingsStore(userDataPath).get().uiThemePreset).toBe('kiwi');
   });
 });
+

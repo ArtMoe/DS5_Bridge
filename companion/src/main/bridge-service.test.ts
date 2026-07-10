@@ -121,7 +121,7 @@ const FULL_REAPPLY_COMMANDS = [
   COMMAND_ID.SET_MIC_VOLUME,
   COMMAND_ID.SET_MIC_MUTE,
   COMMAND_ID.SET_LED_ENABLED,
-  COMMAND_ID.SET_PLAYER_LED_ENABLED,
+  COMMAND_ID.SET_PLAYER_LED_MODE,
   COMMAND_ID.SET_IDLE_DISCONNECT_ENABLED,
   COMMAND_ID.SET_IDLE_DISCONNECT_TIMEOUT,
   COMMAND_ID.SET_USB_SUSPEND_DISCONNECT_ENABLED,
@@ -1486,12 +1486,12 @@ describe('BridgeService', () => {
     await poll(service);
     await flushReapply();
     device.sentReports = [];
-    const snapshot = await service.setPlayerLedEnabled(false);
+    const snapshot = await service.setPlayerLedMode('p3');
 
     const command = device.sentReports.at(-1);
-    expect(command?.[7]).toBe(COMMAND_ID.SET_PLAYER_LED_ENABLED);
-    expect(command?.[9]).toBe(0);
-    expect(snapshot.settings.playerLedEnabled).toBe(false);
+    expect(command?.[7]).toBe(COMMAND_ID.SET_PLAYER_LED_MODE);
+    expect(command?.[9]).toBe(4);
+    expect(snapshot.settings.playerLedMode).toBe('p3');
   });
 
   it('sends and stores sleep keybind settings', async () => {
@@ -2688,3 +2688,6 @@ describe('BridgeService', () => {
     await expect(service.setHapticsGain(80)).rejects.toThrow('did not advance settings_revision');
   });
 });
+
+
+

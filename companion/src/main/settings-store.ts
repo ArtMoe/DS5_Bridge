@@ -37,7 +37,7 @@ import type {
   HostPersonaMode,
   RemapButtonId
 } from '../shared/protocol';
-import type { CompanionSettings, UiScalePercent, UiThemePreset } from '../shared/types';
+import type { CompanionSettings, PlayerLedMode, UiScalePercent, UiThemePreset } from '../shared/types';
 
 const DEFAULT_CONTROLLER_PROFILE_SETTINGS: ControllerProfileSettings = {
   hapticsEnabled: true,
@@ -175,7 +175,7 @@ export const DEFAULT_SETTINGS: CompanionSettings = {
   muteKeyboardBehavior: DEFAULT_CONTROLLER_PROFILE_SETTINGS.muteKeyboardBehavior,
   muteKeyboardChordStarterEnabled: DEFAULT_CONTROLLER_PROFILE_SETTINGS.muteKeyboardChordStarterEnabled,
   ledEnabled: true,
-  playerLedEnabled: true,
+  playerLedMode: 'game',
   idleDisconnectEnabled: true,
   idleDisconnectTimeoutMinutes: 15,
   usbSuspendDisconnectEnabled: true,
@@ -205,6 +205,19 @@ function normalizeColor(value: unknown): string {
 
 function normalizePresetId(value: unknown): CompanionSettings['selectedPresetId'] {
   return normalizeBridgePresetId(value, DEFAULT_SETTINGS.selectedPresetId);
+}
+
+function isPlayerLedMode(value: unknown): value is PlayerLedMode {
+  return value === 'game'
+    || value === 'off'
+    || value === 'p1'
+    || value === 'p2'
+    || value === 'p3'
+    || value === 'p4';
+}
+
+function normalizePlayerLedMode(value: unknown): PlayerLedMode {
+  return isPlayerLedMode(value) ? value : DEFAULT_SETTINGS.playerLedMode;
 }
 
 function normalizePollingRateMode(value: unknown): CompanionSettings['pollingRateMode'] {
@@ -816,12 +829,25 @@ function cloneSettings(settings: CompanionSettings): CompanionSettings {
   };
 }
 
-type PersistedSettings = Partial<CompanionSettings> & {
-  customProfile?: Partial<CompanionSettings>;
+type PersistedCompanionSettings = Partial<CompanionSettings> & {
+  playerLedEnabled?: boolean;
+};
+
+type PersistedSettings = PersistedCompanionSettings & {
+  customProfile?: PersistedCompanionSettings;
   settingsSchemaVersion?: number;
 };
 
-const CURRENT_SETTINGS_SCHEMA_VERSION = 2;
+const CURRENT_SETTINGS_SCHEMA_VERSION = 3;
+
+function migratePlayerLedSetting(value: PersistedCompanionSettings): PersistedCompanionSettings {
+  const playerLedMode = isPlayerLedMode(value.playerLedMode)
+    ? value.playerLedMode
+    : typeof value.playerLedEnabled === 'boolean'
+      ? (value.playerLedEnabled ? 'game' : 'off')
+      : DEFAULT_SETTINGS.playerLedMode;
+  return { ...value, playerLedMode };
+}
 
 function migratePersistedSettings(value: PersistedSettings): PersistedSettings {
   const version = Number.isFinite(value.settingsSchemaVersion)
@@ -832,7 +858,10 @@ function migratePersistedSettings(value: PersistedSettings): PersistedSettings {
   }
 
   const next: PersistedSettings = {
-    ...value,
+    ...migratePlayerLedSetting(value),
+    customProfile: value.customProfile
+      ? migratePlayerLedSetting(value.customProfile)
+      : undefined,
     settingsSchemaVersion: CURRENT_SETTINGS_SCHEMA_VERSION
   };
   return next;
@@ -948,9 +977,7 @@ function normalizeSettings(value: Partial<CompanionSettings> | null | undefined)
       ? value.muteKeyboardChordStarterEnabled
       : DEFAULT_SETTINGS.muteKeyboardChordStarterEnabled,
     ledEnabled: typeof value?.ledEnabled === 'boolean' ? value.ledEnabled : DEFAULT_SETTINGS.ledEnabled,
-    playerLedEnabled: typeof value?.playerLedEnabled === 'boolean'
-      ? value.playerLedEnabled
-      : DEFAULT_SETTINGS.playerLedEnabled,
+    playerLedMode: normalizePlayerLedMode(value?.playerLedMode),
     idleDisconnectEnabled: typeof value?.idleDisconnectEnabled === 'boolean'
       ? value.idleDisconnectEnabled
       : DEFAULT_SETTINGS.idleDisconnectEnabled,
@@ -1285,3 +1312,4 @@ export class SettingsStore {
     }, null, 2)}\n`, 'utf8');
   }
 }
+

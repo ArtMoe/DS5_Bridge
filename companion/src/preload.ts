@@ -18,6 +18,7 @@ import type {
   BridgeDiagnostics,
   BridgeSnapshot,
   PicoFirmwareActionResult,
+  PlayerLedMode,
   UiThemePreset,
   WindowsDeviceCleanupResult
 } from './shared/types';
@@ -100,8 +101,8 @@ const api = {
     ipcRenderer.invoke('bridge:setMuteButtonAction', mode, usage, modifiers, behavior, chordStarterEnabled)
   ),
   setLedEnabled: (value: boolean): Promise<BridgeSnapshot> => ipcRenderer.invoke('bridge:setLedEnabled', value),
-  setPlayerLedEnabled: (value: boolean): Promise<BridgeSnapshot> => (
-    ipcRenderer.invoke('bridge:setPlayerLedEnabled', value)
+  setPlayerLedMode: (value: PlayerLedMode): Promise<BridgeSnapshot> => (
+    ipcRenderer.invoke('bridge:setPlayerLedMode', value)
   ),
   setIdleDisconnectEnabled: (value: boolean): Promise<BridgeSnapshot> => ipcRenderer.invoke('bridge:setIdleDisconnectEnabled', value),
   setIdleDisconnectTimeoutMinutes: (value: number): Promise<BridgeSnapshot> => (
@@ -220,3 +221,4 @@ const api = {
 contextBridge.exposeInMainWorld('bridge', api);
 
 export type BridgeApi = typeof api;
+

@@ -24,6 +24,7 @@ import type {
 
 export type UiScalePercent = 75 | 100 | 125 | 150;
 export type UiThemePreset = 'light' | 'dark' | 'bubble-gum' | 'pomegranate' | 'kiwi';
+export type PlayerLedMode = 'game' | 'off' | 'p1' | 'p2' | 'p3' | 'p4';
 
 export interface CompanionSettings {
   selectedPresetId: BridgePresetId;
@@ -64,7 +65,7 @@ export interface CompanionSettings {
   muteKeyboardBehavior: MuteKeyboardBehavior;
   muteKeyboardChordStarterEnabled: boolean;
   ledEnabled: boolean;
-  playerLedEnabled: boolean;
+  playerLedMode: PlayerLedMode;
   idleDisconnectEnabled: boolean;
   idleDisconnectTimeoutMinutes: number;
   usbSuspendDisconnectEnabled: boolean;
@@ -176,3 +177,4 @@ export interface PicoFirmwareActionResult {
   targetPath?: string;
   message: string;
 }
+
