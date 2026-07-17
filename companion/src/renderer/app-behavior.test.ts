@@ -120,6 +120,13 @@ describe('renderer behavior guards', () => {
     expect(appSource.indexOf('>Lightbar</div>')).toBeLessThan(appSource.indexOf('>About</div>'));
   });
 
+  it('links the official DS5 Bridge Discord from About', () => {
+    expect(appSource).toContain('IconBrandDiscord');
+    expect(appSource).toContain("window.bridge.openExternal('https://discord.gg/By5jhh73wr')");
+    expect(appSource).toContain('<strong>Discord</strong>');
+    expect(appSource).toContain('<span>Official DS5 Bridge Discord</span>');
+  });
+
   it('uses the device container border instead of a compact status dot', () => {
     expect(appSource).toContain('const sidebarDeviceTone =');
     expect(appSource).toContain('className={`hero-main device-status-${sidebarDeviceTone}`}');

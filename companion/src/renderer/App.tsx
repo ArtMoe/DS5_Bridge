@@ -25,6 +25,7 @@ import {
   IconFlame,
   IconFlask2,
   IconBrandDeezer,
+  IconBrandDiscord,
   IconDeviceAudioTape,
   IconBrandXbox,
   IconBrandGithub,
@@ -9924,6 +9925,19 @@ export function App() {
                   <span className="settings-menu-link-copy">
                     <strong>GitHub</strong>
                     <span>SundayMoments</span>
+                  </span>
+                </button>
+                <button
+                  type="button"
+                  className="settings-menu-link-row"
+                  onClick={() => void window.bridge.openExternal('https://discord.gg/By5jhh73wr')}
+                >
+                  <span className="settings-menu-link-icon" aria-hidden="true">
+                    <IconBrandDiscord size={18} />
+                  </span>
+                  <span className="settings-menu-link-copy">
+                    <strong>Discord</strong>
+                    <span>Official DS5 Bridge Discord</span>
                   </span>
                 </button>
               </div>
