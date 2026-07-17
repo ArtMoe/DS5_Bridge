@@ -14,14 +14,13 @@ struct OutputSchedulerInputs {
     bool audio_available;
     bool urgent_available;
     bool coalesced_state_available;
-    uint32_t audio_age_us;
-    uint32_t audio_depth;
-    uint8_t consecutive_non_audio_sends;
+    uint8_t consecutive_audio_sends;
+    uint32_t state_age_us;
 };
 
 struct OutputSchedulerConfig {
-    uint32_t audio_max_age_us;
-    uint8_t max_consecutive_non_audio_sends;
+    uint8_t max_consecutive_audio_sends;
+    uint32_t state_max_age_us;
 };
 
 OutputSchedulerChoice output_scheduler_choose_interrupt_packet(

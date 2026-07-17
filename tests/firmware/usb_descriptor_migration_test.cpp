@@ -1644,6 +1644,40 @@ void assert_host_rumble_passes_through_with_bounded_delivery(
             "Managed rumble STOP delivery must remain bounded, retryable, and fair to native audio"
         );
     }
+
+    const std::string select_output = extract_between(
+        bt_cpp,
+        "static bool select_next_output_packet_locked(output_packet &packet, uint32_t now) {",
+        "\n}\n\nstatic bool select_next_control_packet_locked"
+    );
+    const std::string enqueue_state = extract_between(
+        bt_cpp,
+        "static bool enqueue_state_output(uint8_t *data, uint16_t len, uint8_t reason) {",
+        "\n}\n\nstatic bool enqueue_feedback_state_output"
+    );
+    if (
+        bt_cpp.find("#define OUTPUT_MAX_CONSECUTIVE_AUDIO_SENDS 4")
+            == std::string::npos
+        || bt_cpp.find("#define OUTPUT_STATE_MAX_AGE_US 3000")
+            == std::string::npos
+        || select_output.find("consecutive_audio_sends")
+            == std::string::npos
+        || select_output.find("state_age_us")
+            == std::string::npos
+        || scheduler_cpp.find("const bool state_starved")
+            == std::string::npos
+        || scheduler_cpp.find(
+            "return OutputSchedulerChoice::CoalescedState;"
+        ) == std::string::npos
+        || bt_cpp.find("state_send_blocked_by_audio_locked")
+            != std::string::npos
+        || enqueue_state.find("request_can_send_if_needed(true);")
+            == std::string::npos
+    ) {
+        throw std::runtime_error(
+            "Companion feedback must receive a bounded scheduler turn during continuous audio"
+        );
+    }
 }
 
 void assert_dualsense_battery_buckets_preserve_power_state(

@@ -86,8 +86,8 @@
 #define AUDIO_SEND_QUEUE_MAX_DEPTH 4
 #define URGENT_SEND_QUEUE_MAX_DEPTH 16
 #define URGENT_SEND_QUEUE_HARD_MAX_DEPTH 64
-#define OUTPUT_AUDIO_MAX_AGE_US 3000
-#define OUTPUT_MAX_CONSECUTIVE_NON_AUDIO_SENDS 1
+#define OUTPUT_MAX_CONSECUTIVE_AUDIO_SENDS 4
+#define OUTPUT_STATE_MAX_AGE_US 3000
 #define CONTROL_SEND_QUEUE_MAX_DEPTH 8
 #define CONTROL_SEND_HEADSET_AUDIO_SAFE_WINDOW_US 6000
 #define CONTROL_SEND_HEADSET_AUDIO_IDLE_US 20000
@@ -309,7 +309,6 @@ static bool select_next_control_packet_locked(control_packet &packet, uint32_t n
 static void request_can_send_if_needed(bool should_request_send);
 static void request_control_can_send_if_needed(bool should_request_send);
 static bool headset_audio_send_window_closed_locked(uint32_t now);
-static bool state_send_blocked_by_audio_locked(uint32_t now);
 static void request_control_if_audio_window_open_locked(uint32_t now, bool &should_request_control);
 static void finish_hid_session_if_ready();
 static void init_state_report(uint8_t *report);
@@ -406,6 +405,7 @@ static uint32_t last_bt_send_us = 0;
 static uint32_t last_audio_0x36_send_us = 0;
 static uint32_t non_audio_reports_since_audio = 0;
 static uint8_t consecutive_non_audio_sends = 0;
+static uint8_t consecutive_audio_sends = 0;
 static uint8_t consecutive_classic_rumble_stop_sends = 0;
 static bool interrupt_can_send_event_requested = false;
 static critical_section_t queue_lock;
@@ -452,6 +452,7 @@ static void clear_output_queues_locked() {
     state_pending = false;
     memset(state_pending_report, 0, sizeof(state_pending_report));
     consecutive_non_audio_sends = 0;
+    consecutive_audio_sends = 0;
     consecutive_classic_rumble_stop_sends = 0;
     interrupt_can_send_event_requested = false;
     non_audio_reports_since_audio = 0;
@@ -3454,6 +3455,9 @@ static void note_output_packet_sent(const output_packet &packet, uint32_t now) {
         output_counters.audio_0x36_sent_count++;
         output_counters.consecutive_state_sends = 0;
         consecutive_non_audio_sends = 0;
+        if (consecutive_audio_sends != 0xff) {
+            consecutive_audio_sends++;
+        }
         return;
     }
 
@@ -3477,6 +3481,7 @@ static void note_output_packet_sent(const output_packet &packet, uint32_t now) {
     if (consecutive_non_audio_sends < 255) {
         consecutive_non_audio_sends++;
     }
+    consecutive_audio_sends = 0;
 }
 
 static bool select_next_output_packet_locked(output_packet &packet, uint32_t now) {
@@ -3512,20 +3517,19 @@ static bool select_next_output_packet_locked(output_packet &packet, uint32_t now
         urgent_queue.pop_front();
     } else {
         const bool audio_available = !audio_queue.empty();
-        const uint32_t audio_age_us = audio_available
-            ? packet_age_us(now, audio_queue.front().enqueue_time_us)
+        const uint32_t state_age_us = state_pending
+            ? packet_age_us(now, state_pending_since_us)
             : 0;
         const OutputSchedulerInputs scheduler_inputs{
             audio_available,
             urgent_ready,
             state_pending && !urgent_queued,
-            audio_age_us,
-            static_cast<uint32_t>(audio_queue.size()),
-            consecutive_non_audio_sends
+            consecutive_audio_sends,
+            state_age_us
         };
         constexpr OutputSchedulerConfig scheduler_config{
-            OUTPUT_AUDIO_MAX_AGE_US,
-            OUTPUT_MAX_CONSECUTIVE_NON_AUDIO_SENDS
+            OUTPUT_MAX_CONSECUTIVE_AUDIO_SENDS,
+            OUTPUT_STATE_MAX_AGE_US
         };
 
         const OutputSchedulerChoice choice = output_scheduler_choose_interrupt_packet(
@@ -3540,9 +3544,6 @@ static bool select_next_output_packet_locked(output_packet &packet, uint32_t now
             packet = std::move(urgent_queue.front());
             urgent_queue.pop_front();
         } else if (choice == OutputSchedulerChoice::CoalescedState) {
-            if (state_send_blocked_by_audio_locked(now)) {
-                return false;
-            }
             uint8_t report[DS_OUTPUT_REPORT_BT_SIZE];
             memcpy(report, state_pending_report, sizeof(report));
             if (!build_interrupt_output_packet(report, sizeof(report), packet.data)) {
@@ -4076,18 +4077,6 @@ static bool headset_audio_send_window_closed_locked(uint32_t now) {
     const uint32_t elapsed_us = packet_age_us(now, last_audio_0x36_send_us);
     return elapsed_us > CONTROL_SEND_HEADSET_AUDIO_SAFE_WINDOW_US
         && elapsed_us < CONTROL_SEND_HEADSET_AUDIO_IDLE_US;
-}
-
-static bool state_send_blocked_by_audio_locked(uint32_t now) {
-    if (!speaker_output_enabled || !audio_queue.empty()) {
-        return false;
-    }
-    if (last_audio_0x36_send_us == 0) {
-        return false;
-    }
-
-    const uint32_t elapsed_us = packet_age_us(now, last_audio_0x36_send_us);
-    return elapsed_us < CONTROL_SEND_HEADSET_AUDIO_IDLE_US;
 }
 
 static void request_control_if_audio_window_open_locked(uint32_t now, bool &should_request_control) {
@@ -4912,13 +4901,11 @@ static bool enqueue_state_output(uint8_t *data, uint16_t len, uint8_t reason) {
         return false;
     }
     const uint32_t now = time_us_32();
-    bool should_request_send = false;
     critical_section_enter_blocking(&queue_lock);
     merge_state_output_locked(data, len, now, reason);
-    should_request_send = !state_send_blocked_by_audio_locked(now);
     update_queue_depth_counters_locked();
     critical_section_exit(&queue_lock);
-    request_can_send_if_needed(should_request_send);
+    request_can_send_if_needed(true);
     return true;
 }
 
@@ -5060,6 +5047,7 @@ void bt_reset_output_debug_stats() {
     last_audio_0x36_send_us = 0;
     non_audio_reports_since_audio = 0;
     consecutive_non_audio_sends = 0;
+    consecutive_audio_sends = 0;
     update_queue_depth_counters_locked();
     critical_section_exit(&queue_lock);
 }

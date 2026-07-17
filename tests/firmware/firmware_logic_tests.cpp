@@ -199,23 +199,24 @@ OutputSchedulerInputs scheduler_inputs() {
         false,
         0,
         0,
-        0,
     };
 }
 
 OutputSchedulerConfig scheduler_config() {
     return OutputSchedulerConfig{
-        1'000,
-        2,
+        4,
+        3'000,
     };
 }
 
-void scheduler_prioritizes_audio_when_non_audio_would_delay_streaming() {
+void scheduler_prioritizes_audio_before_state_is_starved() {
     auto inputs = scheduler_inputs();
     auto config = scheduler_config();
     inputs.audio_available = true;
-    inputs.audio_depth = 1;
     inputs.coalesced_state_available = true;
+    inputs.consecutive_audio_sends =
+        static_cast<uint8_t>(config.max_consecutive_audio_sends - 1);
+    inputs.state_age_us = config.state_max_age_us - 1;
     EXPECT_EQ(output_scheduler_choose_interrupt_packet(inputs, config), OutputSchedulerChoice::AudioStream);
 }
 
@@ -226,22 +227,23 @@ void scheduler_sends_coalesced_state_when_audio_is_absent() {
     EXPECT_EQ(output_scheduler_choose_interrupt_packet(inputs, config), OutputSchedulerChoice::CoalescedState);
 }
 
-void scheduler_audio_due_on_age_backlog_or_fairness_limit() {
+void scheduler_bounds_coalesced_state_latency_during_continuous_audio() {
     auto inputs = scheduler_inputs();
     auto config = scheduler_config();
     inputs.audio_available = true;
-    EXPECT_EQ(output_scheduler_choose_interrupt_packet(inputs, config), OutputSchedulerChoice::AudioStream);
+    inputs.coalesced_state_available = true;
+    inputs.consecutive_audio_sends = config.max_consecutive_audio_sends;
+    EXPECT_EQ(
+        output_scheduler_choose_interrupt_packet(inputs, config),
+        OutputSchedulerChoice::CoalescedState
+    );
 
-    inputs.audio_age_us = config.audio_max_age_us;
-    EXPECT_EQ(output_scheduler_choose_interrupt_packet(inputs, config), OutputSchedulerChoice::AudioStream);
-
-    inputs.audio_age_us = 0;
-    inputs.audio_depth = 2;
-    EXPECT_EQ(output_scheduler_choose_interrupt_packet(inputs, config), OutputSchedulerChoice::AudioStream);
-
-    inputs.audio_depth = 1;
-    inputs.consecutive_non_audio_sends = config.max_consecutive_non_audio_sends;
-    EXPECT_EQ(output_scheduler_choose_interrupt_packet(inputs, config), OutputSchedulerChoice::AudioStream);
+    inputs.consecutive_audio_sends = 0;
+    inputs.state_age_us = config.state_max_age_us;
+    EXPECT_EQ(
+        output_scheduler_choose_interrupt_packet(inputs, config),
+        OutputSchedulerChoice::CoalescedState
+    );
 }
 
 void packet_compositor_initializes_bluetooth_report_and_wraps_sequence() {
@@ -1307,9 +1309,9 @@ struct TestCase {
 };
 
 std::vector<TestCase> tests{
-    {"scheduler prioritizes audio when non-audio would delay streaming", scheduler_prioritizes_audio_when_non_audio_would_delay_streaming},
+    {"scheduler prioritizes audio before state is starved", scheduler_prioritizes_audio_before_state_is_starved},
     {"scheduler sends coalesced state when audio is absent", scheduler_sends_coalesced_state_when_audio_is_absent},
-    {"scheduler audio due on age backlog or fairness limit", scheduler_audio_due_on_age_backlog_or_fairness_limit},
+    {"scheduler bounds coalesced state latency during continuous audio", scheduler_bounds_coalesced_state_latency_during_continuous_audio},
     {"scheduler alternates rumble with audio and prioritizes one stop", scheduler_alternates_rumble_with_audio_and_prioritizes_one_stop},
     {"classic rumble delivery is bounded and protects managed stop", classic_rumble_delivery_is_bounded_and_protects_managed_stop},
     {"packet compositor initializes bluetooth report and wraps sequence", packet_compositor_initializes_bluetooth_report_and_wraps_sequence},
