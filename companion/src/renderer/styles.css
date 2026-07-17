@@ -1039,7 +1039,7 @@ button {
   display: grid;
   grid-template-rows: auto auto auto auto minmax(0, 1fr) auto;
   align-content: start;
-  gap: 10px;
+  gap: 6px;
   border: 0;
   border-right: 1px solid var(--sidebar-border);
   border-radius: 0;
@@ -2334,6 +2334,7 @@ button {
 
 .sidebar-support {
   height: 58px;
+  margin: -5px 0 5px;
   min-width: 0;
   display: grid;
   align-items: center;
