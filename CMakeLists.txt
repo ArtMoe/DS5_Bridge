@@ -6,6 +6,18 @@ set(CMAKE_C_STANDARD 11)
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 
+set(DS5_FIRMWARE_VERSION_FILE "${CMAKE_CURRENT_LIST_DIR}/firmware-version.txt")
+file(STRINGS "${DS5_FIRMWARE_VERSION_FILE}" DS5_FIRMWARE_VERSION LIMIT_COUNT 1)
+string(STRIP "${DS5_FIRMWARE_VERSION}" DS5_FIRMWARE_VERSION)
+if(NOT DS5_FIRMWARE_VERSION MATCHES "^([0-9]+)\\.([0-9]+)\\.([0-9]+)$")
+    message(FATAL_ERROR
+        "firmware-version.txt must contain one MAJOR.MINOR.PATCH version"
+    )
+endif()
+set(DS5_FIRMWARE_VERSION_MAJOR "${CMAKE_MATCH_1}")
+set(DS5_FIRMWARE_VERSION_MINOR "${CMAKE_MATCH_2}")
+set(DS5_FIRMWARE_VERSION_PATCH "${CMAKE_MATCH_3}")
+
 # Initialise pico_sdk from installed location
 # (note this can come from environment, CMake cache etc)
 
@@ -134,6 +146,9 @@ target_compile_definitions(ds5-bridge PRIVATE
         WDL_RESAMPLE_TYPE=float
         CYW43_PIO_CLOCK_DIV_INT=${CYW43_PIO_CLOCK_DIV_VALUE}
         SYS_CLOCK_KHZ=${SYS_CLOCK_KHZ_VALUE}
+        DS5_FIRMWARE_VERSION_MAJOR=${DS5_FIRMWARE_VERSION_MAJOR}
+        DS5_FIRMWARE_VERSION_MINOR=${DS5_FIRMWARE_VERSION_MINOR}
+        DS5_FIRMWARE_VERSION_PATCH=${DS5_FIRMWARE_VERSION_PATCH}
 )
 # Kitsune Input intentionally enumerates as a stock DualSense only. Never turn
 # this on: DualSense Edge USB identity/descriptors are not a supported persona.
@@ -226,7 +241,7 @@ if(DS5_ENABLE_FEEDBACK_TRACE_REPORTS)
 endif()
 
 pico_set_program_name(ds5-bridge "ds5-bridge")
-pico_set_program_version(ds5-bridge "1.6.2")
+pico_set_program_version(ds5-bridge "${DS5_FIRMWARE_VERSION}")
 
 if(DS5_ENABLE_FIRMWARE_LOGS)
     pico_enable_stdio_uart(ds5-bridge 1)

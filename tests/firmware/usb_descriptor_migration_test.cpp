@@ -1,3 +1,4 @@
+#include <cctype>
 #include <cstdint>
 #include <exception>
 #include <filesystem>
@@ -983,6 +984,62 @@ void assert_bluetooth_pairing_and_reconnect_policy(std::filesystem::path const &
     }
 }
 
+void assert_firmware_version_has_one_canonical_source(
+    std::filesystem::path const &root
+) {
+    auto firmware_version = read_text(root / "firmware-version.txt");
+    while (!firmware_version.empty() && std::isspace(
+        static_cast<unsigned char>(firmware_version.back())
+    )) {
+        firmware_version.pop_back();
+    }
+    if (!std::regex_match(firmware_version, std::regex(R"(\d+\.\d+\.\d+)"))) {
+        throw std::runtime_error(
+            "firmware-version.txt must contain one semantic firmware version"
+        );
+    }
+
+    const auto cmake = read_text(root / "CMakeLists.txt");
+    const auto companion_cpp = read_text(root / "src" / "companion.cpp");
+    const auto bridge_service =
+        read_text(root / "companion" / "src" / "main" / "bridge-service.ts");
+    const auto release_script =
+        read_text(root / "tools" / "create-release-candidate.ps1");
+    std::smatch bundled_match;
+    const bool bundled_found = std::regex_search(
+        bridge_service,
+        bundled_match,
+        std::regex(R"(BUNDLED_FIRMWARE_VERSION\s*=\s*'(\d+\.\d+\.\d+)')")
+    );
+
+    if (
+        cmake.find(
+            "pico_set_program_version(ds5-bridge \"${DS5_FIRMWARE_VERSION}\")"
+        ) == std::string::npos
+        || cmake.find(
+            "DS5_FIRMWARE_VERSION_MAJOR=${DS5_FIRMWARE_VERSION_MAJOR}"
+        ) == std::string::npos
+        || companion_cpp.find(
+            "kFirmwareMajor = DS5_FIRMWARE_VERSION_MAJOR"
+        ) == std::string::npos
+        || companion_cpp.find(
+            "kFirmwareMinor = DS5_FIRMWARE_VERSION_MINOR"
+        ) == std::string::npos
+        || companion_cpp.find(
+            "kFirmwarePatch = DS5_FIRMWARE_VERSION_PATCH"
+        ) == std::string::npos
+        || release_script.find(
+            "Read-FirmwareVersion (Join-Path $repoRoot 'firmware-version.txt')"
+        ) == std::string::npos
+        || !bundled_found
+        || bundled_match[1].str() != firmware_version
+    ) {
+        throw std::runtime_error(
+            "CMake, firmware reports, and release validation must share firmware-version.txt"
+        );
+    }
+}
+
 void assert_bluetooth_device_management_policy(std::filesystem::path const &root) {
     const auto bt_cpp = read_text(root / "src" / "bt.cpp");
     const auto bt_h = read_text(root / "src" / "bt.h");
@@ -1627,6 +1684,7 @@ int main() {
         assert_ps_chord_starter_is_deferred_to_protect_steam_big_picture(source_root);
         assert_mic_pass_through_defaults_to_enabled(source_root);
         assert_bluetooth_pairing_and_reconnect_policy(source_root);
+        assert_firmware_version_has_one_canonical_source(source_root);
         assert_bluetooth_device_management_policy(source_root);
         assert_companion_device_management_contract(source_root);
         assert_bluetooth_hid_recovery_and_encryption_watchdog(source_root);

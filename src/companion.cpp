@@ -19,13 +19,22 @@
 
 namespace {
 
+#if !defined(DS5_FIRMWARE_VERSION_MAJOR) \
+    || !defined(DS5_FIRMWARE_VERSION_MINOR) \
+    || !defined(DS5_FIRMWARE_VERSION_PATCH)
+#error "Firmware version definitions must come from firmware-version.txt via CMake"
+#endif
+
 constexpr uint8_t kMagic[] = {'D', 'S', '5', 'B'};
 constexpr uint8_t kProtocolMajor = 1;
 constexpr uint8_t kProtocolMinor = 17;
 constexpr uint8_t kProtocolMinSupportedMinor = 7;
-constexpr uint8_t kFirmwareMajor = 1;
-constexpr uint8_t kFirmwareMinor = 6;
-constexpr uint8_t kFirmwarePatch = 3;
+static_assert(DS5_FIRMWARE_VERSION_MAJOR <= 255);
+static_assert(DS5_FIRMWARE_VERSION_MINOR <= 255);
+static_assert(DS5_FIRMWARE_VERSION_PATCH <= 255);
+constexpr uint8_t kFirmwareMajor = DS5_FIRMWARE_VERSION_MAJOR;
+constexpr uint8_t kFirmwareMinor = DS5_FIRMWARE_VERSION_MINOR;
+constexpr uint8_t kFirmwarePatch = DS5_FIRMWARE_VERSION_PATCH;
 constexpr uint8_t kAudioReactiveHapticsModeMask = 0x7f;
 constexpr uint8_t kAudioReactiveHapticsSuppressClassicRumbleFlag = 0x80;
 constexpr uint8_t kTriangleButtonBit = 0x80;
