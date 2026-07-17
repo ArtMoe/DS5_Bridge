@@ -28,6 +28,25 @@ void require_contains(
     }
 }
 
+void require_before(
+    std::string const &source,
+    std::string const &first,
+    std::string const &second,
+    std::string const &message
+) {
+    const std::size_t first_position = source.find(first);
+    const std::size_t second_position = source.find(second);
+    if (
+        first_position == std::string::npos
+        || second_position == std::string::npos
+        || first_position >= second_position
+    ) {
+        throw std::runtime_error(
+            message + ": expected " + first + " before " + second
+        );
+    }
+}
+
 }  // namespace
 
 int main() {
@@ -61,6 +80,12 @@ int main() {
             main,
             "stdio_init_all();",
             "The debug build must reinitialize stdio at the configured UART baud"
+        );
+        require_before(
+            main,
+            "if (!audio_init())",
+            "if (cyw43_arch_init())",
+            "Core 1 flash safety must be ready before BTstack initializes its TLV bank"
         );
         require_contains(
             presets,

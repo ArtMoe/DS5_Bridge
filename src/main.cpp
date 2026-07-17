@@ -572,6 +572,14 @@ int main() {
     board_init_after_tusb();
     firmware_log_init_btstack_sink();
 
+    // CYW43 initialization also initializes BTstack's flash-backed TLV store.
+    // Core 1 must already be servicing cooperative XIP pause requests before
+    // that store can erase, repair, or write its bank header safely.
+    if (!audio_init()) {
+        DS5_LOG("Failed to initialize core 1 flash safety\n");
+        return 1;
+    }
+
     if (cyw43_arch_init()) {
         DS5_LOG("Failed to initialize CYW43\n");
         return 1;
@@ -602,11 +610,6 @@ int main() {
 #ifdef ENABLE_COMPANION
     companion_init();
 #endif
-
-    if (!audio_init()) {
-        DS5_LOG("Failed to initialize core 1 flash safety\n");
-        return 1;
-    }
 
     bt_init();
     bt_register_data_callback(on_bt_data);
