@@ -782,6 +782,77 @@ void assert_bluetooth_pairing_and_reconnect_policy(std::filesystem::path const &
     }
 }
 
+void assert_bluetooth_hid_recovery_and_encryption_watchdog(std::filesystem::path const &root) {
+    const auto bt_cpp = read_text(root / "src" / "bt.cpp");
+
+    const std::string recovery_block = extract_between(
+        bt_cpp,
+        "void bt_connection_recovery_loop() {",
+        "\n}\n\nvoid bt_inquiry_loop"
+    );
+    if (
+        recovery_block.find("ENCRYPTION_COMPLETION_TIMEOUT_US") == std::string::npos
+        || recovery_block.find("SECURITY_PHASE_TIMEOUT_US") == std::string::npos
+        || recovery_block.find("HID_REMOTE_INTERRUPT_FOLLOWUP_TIMEOUT_US")
+            == std::string::npos
+        || recovery_block.find("hid_connection_initiator == HidConnectionInitiator::Remote")
+            == std::string::npos
+        || recovery_block.find("hid_control_pending_cid != 0 || hid_interrupt_pending_cid != 0")
+            == std::string::npos
+    ) {
+        throw std::runtime_error("Bluetooth recovery must bound security/encryption and preserve HID channel initiator ownership");
+    }
+
+    const std::string incoming_block = extract_between(
+        bt_cpp,
+        "case L2CAP_EVENT_INCOMING_CONNECTION:",
+        "\n        case L2CAP_EVENT_CHANNEL_CLOSED:"
+    );
+    if (
+        incoming_block.find("current_link_security_ready(handle)") == std::string::npos
+        || incoming_block.find("hid_connection_initiator = HidConnectionInitiator::Remote;")
+            == std::string::npos
+        || incoming_block.find("hid_control_pending_cid = local_cid;") == std::string::npos
+        || incoming_block.find("hid_control_ready || hid_control_pending_cid != 0")
+            == std::string::npos
+        || incoming_block.find("hid_interrupt_pending_cid = local_cid;")
+            == std::string::npos
+    ) {
+        throw std::runtime_error("Incoming HID Control must retain remote ownership through the pending Interrupt boundary");
+    }
+
+    const std::string command_status_block = extract_between(
+        bt_cpp,
+        "case HCI_EVENT_COMMAND_STATUS:",
+        "\n        case HCI_EVENT_COMMAND_COMPLETE:"
+    );
+    if (
+        command_status_block.find("HCI_OPCODE_HCI_SET_CONNECTION_ENCRYPTION")
+            == std::string::npos
+        || command_status_block.find("encryption_command_generation = connection_generation;")
+            == std::string::npos
+        || command_status_block.find("encryption_command_accepted_at_us = time_us_32();")
+            == std::string::npos
+    ) {
+        throw std::runtime_error("Accepted Set Connection Encryption commands must be tied to the active ACL generation");
+    }
+
+    if (
+        bt_cpp.find("#define ENCRYPTION_COMPLETION_TIMEOUT_US 2500000u") == std::string::npos
+        || bt_cpp.find("#define HID_REMOTE_INITIATION_GRACE_US 500000u") == std::string::npos
+        || bt_cpp.find("#define HID_REMOTE_INTERRUPT_FOLLOWUP_TIMEOUT_US 1000000u")
+            == std::string::npos
+        || bt_cpp.find("case HCI_EVENT_ENCRYPTION_CHANGE_V2:") == std::string::npos
+        || bt_cpp.find("case GAP_EVENT_SECURITY_LEVEL:") == std::string::npos
+        || bt_cpp.find("gap_request_security_level(handle, LEVEL_2);") == std::string::npos
+        || bt_cpp.find("gap_disconnect(acl_handle)") == std::string::npos
+        || bt_cpp.find("HCI_SEND_CMD_LOGGED(&hci_disconnect") != std::string::npos
+        || bt_cpp.find("HCI_SEND_CMD_LOGGED(&hci_set_connection_encryption") != std::string::npos
+    ) {
+        throw std::runtime_error("Bluetooth security must use GAP-owned setup and generation-safe stalled-encryption recovery");
+    }
+}
+
 } // namespace
 
 int main() {
@@ -801,6 +872,7 @@ int main() {
         assert_ps_chord_starter_is_deferred_to_protect_steam_big_picture(source_root);
         assert_mic_pass_through_defaults_to_enabled(source_root);
         assert_bluetooth_pairing_and_reconnect_policy(source_root);
+        assert_bluetooth_hid_recovery_and_encryption_watchdog(source_root);
 
         if (bcd_device != kExpectedUsbDeviceRevision) {
             std::cerr << "USB bcdDevice changed unexpectedly. Expected 0x" << std::hex

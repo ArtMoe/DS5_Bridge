@@ -121,8 +121,17 @@
 #define INQUIRY_LED_BLINK_INTERVAL_US 250000u
 #define AUTHENTICATION_PIN_OR_KEY_MISSING 0x06u
 #define ACL_CONNECTION_PENDING_TIMEOUT_US 10000000u
-#define HID_CHANNEL_RECOVERY_DELAY_US 2000000u
-#define HID_CHANNEL_RECOVERY_MAX_ATTEMPTS 5
+#define HID_CHANNEL_RECOVERY_DELAY_US 250000u
+#define HID_REMOTE_INITIATION_GRACE_US 500000u
+#define HID_CHANNEL_RECOVERY_MAX_ATTEMPTS 16
+#define ENCRYPTION_COMPLETION_TIMEOUT_US 2500000u
+#define SECURITY_PHASE_TIMEOUT_US 8000000u
+#define HID_OPENING_PHASE_TIMEOUT_US 8000000u
+#define HID_REMOTE_INTERRUPT_FOLLOWUP_TIMEOUT_US 1000000u
+#define AUTHENTICATION_COLLISION_RETRY_DELAY_US 250000u
+#define AUTHENTICATION_COLLISION_MAX_RETRIES 3u
+#define AUTHENTICATION_LMP_TRANSACTION_COLLISION 0x23u
+#define AUTHENTICATION_DIFFERENT_TRANSACTION_COLLISION 0x2au
 
 #define HCI_SEND_CMD_LOGGED(cmd, ...) do { \
     const uint8_t err = hci_send_cmd((cmd), ##__VA_ARGS__); \
@@ -177,6 +186,21 @@ enum OutputTraceTransform : uint8_t {
     OutputTraceTransformState = 0x20,
 };
 
+enum class BtConnectionPhase : uint8_t {
+    Listening = 0,
+    Connecting,
+    Securing,
+    HidOpening,
+    Ready,
+    Disconnecting,
+};
+
+enum class HidConnectionInitiator : uint8_t {
+    None = 0,
+    Local,
+    Remote,
+};
+
 struct output_packet {
     vector<uint8_t> data;
     uint32_t enqueue_time_us;
@@ -228,6 +252,7 @@ static void request_control_can_send_if_needed(bool should_request_send);
 static bool headset_audio_send_window_closed_locked(uint32_t now);
 static bool state_send_blocked_by_audio_locked(uint32_t now);
 static void request_control_if_audio_window_open_locked(uint32_t now, bool &should_request_control);
+static void finish_hid_session_if_ready();
 static void init_state_report(uint8_t *report);
 static bool select_next_output_packet_locked(output_packet &packet, uint32_t now);
 static bool audio_output_route_protected();
@@ -256,14 +281,28 @@ static uint32_t acl_connection_pending_at_us = 0;
 static hci_con_handle_t acl_handle = HCI_CON_HANDLE_INVALID;
 static uint16_t hid_control_cid;
 static uint16_t hid_interrupt_cid;
+static uint16_t hid_control_pending_cid;
+static uint16_t hid_interrupt_pending_cid;
 static bt_data_callback_t bt_data_callback = nullptr;
 static uint8_t controller_type = ControllerTypeUnknown;
 static bool controller_type_check_pending = false;
 static bool hid_control_ready = false;
 static bool hid_interrupt_ready = false;
+static HidConnectionInitiator hid_connection_initiator = HidConnectionInitiator::None;
+static uint32_t hid_control_opened_at_us = 0;
 static bool hid_channel_recovery_pending = false;
 static uint32_t hid_channel_recovery_at_us = 0;
 static uint8_t hid_channel_recovery_attempts = 0;
+static BtConnectionPhase connection_phase = BtConnectionPhase::Listening;
+static uint32_t connection_generation = 0;
+static uint32_t connection_phase_started_us = 0;
+static bool encryption_completion_pending = false;
+static hci_con_handle_t encryption_command_handle = HCI_CON_HANDLE_INVALID;
+static uint32_t encryption_command_generation = 0;
+static uint32_t encryption_command_accepted_at_us = 0;
+static bool authentication_retry_pending = false;
+static uint8_t authentication_retry_attempts = 0;
+static uint32_t authentication_retry_at_us = 0;
 static int8_t bt_rssi = 0;
 static bool bt_rssi_known = false;
 static bool bt_rssi_request_pending = false;
@@ -367,6 +406,110 @@ static uint32_t packet_age_us(uint32_t now, uint32_t enqueue_time_us) {
 
 static bool bt_time_reached(uint32_t now, uint32_t target) {
     return static_cast<int32_t>(now - target) >= 0;
+}
+
+static void clear_encryption_completion() {
+    encryption_completion_pending = false;
+    encryption_command_handle = HCI_CON_HANDLE_INVALID;
+    encryption_command_generation = 0;
+    encryption_command_accepted_at_us = 0;
+}
+
+static void clear_authentication_retry() {
+    authentication_retry_pending = false;
+    authentication_retry_attempts = 0;
+    authentication_retry_at_us = 0;
+}
+
+static void note_connection_phase_started() {
+    connection_phase_started_us = time_us_32();
+}
+
+static bool begin_connection_attempt() {
+    if (connection_phase != BtConnectionPhase::Listening) {
+        return false;
+    }
+    connection_phase = BtConnectionPhase::Connecting;
+    connection_generation++;
+    if (connection_generation == 0) {
+        connection_generation++;
+    }
+    connection_phase_started_us = time_us_32();
+    clear_encryption_completion();
+    clear_authentication_retry();
+    return true;
+}
+
+static bool connection_handle_is_current(hci_con_handle_t handle) {
+    return handle != HCI_CON_HANDLE_INVALID && handle == acl_handle;
+}
+
+static bool note_acl_connected(hci_con_handle_t handle) {
+    if (
+        connection_phase != BtConnectionPhase::Connecting
+        || handle == HCI_CON_HANDLE_INVALID
+    ) {
+        return false;
+    }
+    acl_handle = handle;
+    connection_phase = BtConnectionPhase::Securing;
+    note_connection_phase_started();
+    clear_encryption_completion();
+    return true;
+}
+
+static void fail_pending_connection_attempt() {
+    if (
+        connection_phase == BtConnectionPhase::Connecting
+        && acl_handle == HCI_CON_HANDLE_INVALID
+    ) {
+        connection_phase = BtConnectionPhase::Listening;
+        connection_phase_started_us = 0;
+        clear_encryption_completion();
+        clear_authentication_retry();
+    }
+}
+
+static bool begin_hid_opening(hci_con_handle_t handle) {
+    if (!connection_handle_is_current(handle)) {
+        return false;
+    }
+    if (connection_phase == BtConnectionPhase::HidOpening) {
+        return true;
+    }
+    if (connection_phase != BtConnectionPhase::Securing) {
+        return false;
+    }
+    connection_phase = BtConnectionPhase::HidOpening;
+    note_connection_phase_started();
+    clear_encryption_completion();
+    return true;
+}
+
+static bool begin_connection_disconnect() {
+    if (acl_handle == HCI_CON_HANDLE_INVALID) {
+        return false;
+    }
+    if (connection_phase == BtConnectionPhase::Disconnecting) {
+        return true;
+    }
+    connection_phase = BtConnectionPhase::Disconnecting;
+    note_connection_phase_started();
+    clear_encryption_completion();
+    clear_authentication_retry();
+    return true;
+}
+
+static void reset_connection_session() {
+    connection_phase = BtConnectionPhase::Listening;
+    connection_phase_started_us = 0;
+    clear_encryption_completion();
+    clear_authentication_retry();
+}
+
+static bool current_link_security_ready(hci_con_handle_t handle) {
+    return connection_handle_is_current(handle)
+        && gap_security_level(handle) >= LEVEL_2;
 }
 
 static void clear_acl_connection_pending() {
@@ -485,6 +628,14 @@ static void update_inquiry_led(uint32_t now) {
 }
 
 static bool classic_acl_connection_allowed(bd_addr_t addr, bool log_reject) {
+    if (connection_phase != BtConnectionPhase::Listening) {
+        if (log_reject) {
+            DS5_LOG("[HCI] Rejecting controller %s while connection phase=%u is busy\n",
+                    bd_addr_to_str(addr),
+                    static_cast<unsigned int>(connection_phase));
+        }
+        return false;
+    }
     if (
         acl_connection_pending
         || acl_handle != HCI_CON_HANDLE_INVALID
@@ -1150,10 +1301,25 @@ bool bt_disconnect() {
     if (acl_handle == HCI_CON_HANDLE_INVALID) {
         return false;
     }
+    const BtConnectionPhase previous_phase = connection_phase;
+    const uint32_t previous_phase_started_us = connection_phase_started_us;
+    if (!begin_connection_disconnect()) {
+        return false;
+    }
 
-    // 0x13 = remote user terminated connection
-    HCI_SEND_CMD_LOGGED(&hci_disconnect, acl_handle, 0x13);
-    return true;
+    // Let BTstack own its SEND_DISCONNECT/SENT_DISCONNECT state transition.
+    // Sending hci_disconnect directly leaves its ACL bookkeeping stale.
+    gap_connectable_control(0);
+    gap_discoverable_control(0);
+    gap_set_bondable_mode(0);
+    const uint8_t status = gap_disconnect(acl_handle);
+    if (status == ERROR_CODE_SUCCESS || status == ERROR_CODE_COMMAND_DISALLOWED) {
+        return true;
+    }
+    DS5_LOG("[HCI] GAP disconnect failed handle=0x%04X status=0x%02X\n", acl_handle, status);
+    connection_phase = previous_phase;
+    connection_phase_started_us = previous_phase_started_us;
+    return false;
 }
 
 bool bt_power_off_controller() {
@@ -1224,27 +1390,63 @@ void bt_l2cap_init() {
 }
 
 static void open_next_hid_channel_if_needed() {
-    if (acl_handle == HCI_CON_HANDLE_INVALID) {
+    if (
+        acl_handle == HCI_CON_HANDLE_INVALID
+        || connection_phase != BtConnectionPhase::HidOpening
+        || hid_connection_initiator == HidConnectionInitiator::Remote
+    ) {
         return;
     }
 
-    if (!hid_control_ready && hid_control_cid == 0) {
+    if (
+        !hid_control_ready
+        && hid_control_cid == 0
+        && hid_control_pending_cid == 0
+    ) {
+        hid_connection_initiator = HidConnectionInitiator::Local;
         DS5_LOG("[L2CAP] Open missing HID Control channel\n");
-        l2cap_create_channel(l2cap_packet_handler, current_device_addr, PSM_HID_CONTROL, MTU_CONTROL,
-                             &hid_control_cid);
+        const uint8_t status = l2cap_create_channel(
+            l2cap_packet_handler,
+            current_device_addr,
+            PSM_HID_CONTROL,
+            MTU_CONTROL,
+            &hid_control_pending_cid
+        );
+        if (status != ERROR_CODE_SUCCESS) {
+            hid_control_pending_cid = 0;
+            hid_connection_initiator = HidConnectionInitiator::None;
+            DS5_LOG("[L2CAP] HID Control open deferred status=0x%02X\n", status);
+        }
         return;
     }
 
-    if (!hid_interrupt_ready && hid_interrupt_cid == 0) {
+    if (
+        hid_connection_initiator == HidConnectionInitiator::Local
+        && hid_control_ready
+        && !hid_interrupt_ready
+        && hid_interrupt_cid == 0
+        && hid_interrupt_pending_cid == 0
+    ) {
         DS5_LOG("[L2CAP] Open missing HID Interrupt channel\n");
-        l2cap_create_channel(l2cap_packet_handler, current_device_addr, PSM_HID_INTERRUPT, MTU_INTERRUPT,
-                             &hid_interrupt_cid);
+        const uint8_t status = l2cap_create_channel(
+            l2cap_packet_handler,
+            current_device_addr,
+            PSM_HID_INTERRUPT,
+            MTU_INTERRUPT,
+            &hid_interrupt_pending_cid
+        );
+        if (status != ERROR_CODE_SUCCESS) {
+            hid_interrupt_pending_cid = 0;
+            DS5_LOG("[L2CAP] HID Interrupt open deferred status=0x%02X\n", status);
+        }
     }
 }
 
-static void schedule_hid_channel_recovery() {
+static void schedule_hid_channel_recovery(
+    uint32_t delay_us = HID_CHANNEL_RECOVERY_DELAY_US
+) {
     hid_channel_recovery_pending = true;
-    hid_channel_recovery_at_us = time_us_32() + HID_CHANNEL_RECOVERY_DELAY_US;
+    hid_channel_recovery_at_us = time_us_32() + delay_us;
 }
 
 static void cancel_hid_channel_recovery_if_ready() {
@@ -1255,15 +1457,90 @@ static void cancel_hid_channel_recovery_if_ready() {
 }
 
 void bt_connection_recovery_loop() {
-    if (!hid_channel_recovery_pending || acl_handle == HCI_CON_HANDLE_INVALID) {
+    if (acl_handle == HCI_CON_HANDLE_INVALID) {
         return;
     }
-    if (static_cast<int32_t>(time_us_32() - hid_channel_recovery_at_us) < 0) {
+
+    const uint32_t now = time_us_32();
+    if (
+        authentication_retry_pending
+        && bt_time_reached(now, authentication_retry_at_us)
+    ) {
+        authentication_retry_pending = false;
+        DS5_LOG("[HCI] Retry GAP security level 2 attempt=%u\n", authentication_retry_attempts);
+        gap_request_security_level(acl_handle, LEVEL_2);
+    }
+
+    if (
+        encryption_completion_pending
+        && encryption_command_generation == connection_generation
+        && encryption_command_handle == acl_handle
+        && static_cast<uint32_t>(now - encryption_command_accepted_at_us)
+            >= ENCRYPTION_COMPLETION_TIMEOUT_US
+    ) {
+        DS5_LOG("[HCI] Encryption completion stalled; recycle ACL and preserve pairing\n");
+        clear_encryption_completion();
+        bt_disconnect();
+        return;
+    }
+
+    if (
+        connection_phase == BtConnectionPhase::Securing
+        && connection_phase_started_us != 0
+        && static_cast<uint32_t>(now - connection_phase_started_us)
+            >= SECURITY_PHASE_TIMEOUT_US
+    ) {
+        DS5_LOG("[HCI] Security phase timed out; recycle ACL and preserve pairing\n");
+        bt_disconnect();
+        return;
+    }
+
+    if (
+        connection_phase == BtConnectionPhase::HidOpening
+        && hid_connection_initiator == HidConnectionInitiator::Remote
+        && hid_control_ready
+        && !hid_interrupt_ready
+        && hid_control_opened_at_us != 0
+        && static_cast<uint32_t>(now - hid_control_opened_at_us)
+            >= HID_REMOTE_INTERRUPT_FOLLOWUP_TIMEOUT_US
+    ) {
+        DS5_LOG("[L2CAP] Controller-owned HID Interrupt follow-up timed out; retry ACL\n");
+        bt_disconnect();
+        return;
+    }
+
+    if (
+        connection_phase == BtConnectionPhase::HidOpening
+        && hid_connection_initiator != HidConnectionInitiator::Remote
+        && connection_phase_started_us != 0
+        && static_cast<uint32_t>(now - connection_phase_started_us)
+            >= HID_OPENING_PHASE_TIMEOUT_US
+    ) {
+        DS5_LOG("[L2CAP] HID opening phase timed out; recycle ACL\n");
+        bt_disconnect();
+        return;
+    }
+
+    if (!hid_channel_recovery_pending) {
+        return;
+    }
+    if (!bt_time_reached(now, hid_channel_recovery_at_us)) {
         return;
     }
     if (hid_control_ready && hid_interrupt_ready) {
         hid_channel_recovery_pending = false;
         hid_channel_recovery_attempts = 0;
+        return;
+    }
+    if (hid_connection_initiator == HidConnectionInitiator::Remote) {
+        // The endpoint that opened Control owns the matching Interrupt open.
+        // Never collide with it by creating a symmetric local transaction.
+        hid_channel_recovery_pending = false;
+        hid_channel_recovery_attempts = 0;
+        return;
+    }
+    if (hid_control_pending_cid != 0 || hid_interrupt_pending_cid != 0) {
+        schedule_hid_channel_recovery();
         return;
     }
     if (hid_channel_recovery_attempts >= HID_CHANNEL_RECOVERY_MAX_ATTEMPTS) {
@@ -1309,6 +1586,7 @@ void bt_inquiry_loop() {
         DS5_LOG("[HCI] ACL connection pending timed out, restart inquiry\n");
         clear_outbound_inquiry_target();
         clear_acl_connection_pending();
+        fail_pending_connection_attempt();
         if (pairing_window_active) {
             schedule_inquiry_retry(0);
         } else {
@@ -1360,6 +1638,52 @@ int bt_init() {
 
     hci_power_control(HCI_POWER_ON);
     return 0;
+}
+
+static void begin_hid_channel_negotiation(hci_con_handle_t handle) {
+    if (!current_link_security_ready(handle)) {
+        DS5_LOG("[L2CAP] Refuse HID negotiation before GAP LEVEL_2 handle=0x%04X\n", handle);
+        return;
+    }
+    if (!begin_hid_opening(handle)) {
+        return;
+    }
+
+    // DualSense normally opens HID Control immediately after SSP. Give it the
+    // first turn; local recovery claims ownership only after this grace period.
+    schedule_hid_channel_recovery(HID_REMOTE_INITIATION_GRACE_US);
+    DS5_LOG("[L2CAP] Security ready; await controller-owned HID open\n");
+}
+
+static void handle_encryption_change(
+    hci_con_handle_t handle,
+    uint8_t status,
+    uint8_t enabled
+) {
+    if (!connection_handle_is_current(handle)) {
+        DS5_LOG("[HCI] Ignoring stale encryption event handle=0x%04X\n", handle);
+        return;
+    }
+    clear_encryption_completion();
+    if (connection_phase == BtConnectionPhase::Disconnecting) {
+        return;
+    }
+
+    DS5_LOG("[HCI] Encryption change handle=0x%04X status=0x%02X enabled=%u\n",
+            handle,
+            status,
+            enabled);
+    if (status == ERROR_CODE_SUCCESS && enabled) {
+        if (current_link_security_ready(handle)) {
+            begin_hid_channel_negotiation(handle);
+        } else {
+            DS5_LOG("[HCI] Encryption enabled; wait for GAP LEVEL_2 validation\n");
+        }
+        return;
+    }
+
+    DS5_LOG("[HCI] Encryption failed; recycle incomplete ACL and preserve pairing\n");
+    bt_disconnect();
 }
 
 static void hci_packet_handler(uint8_t packet_type, uint16_t channel, uint8_t *packet, uint16_t size) {
@@ -1427,6 +1751,10 @@ static void hci_packet_handler(uint8_t packet_type, uint16_t channel, uint8_t *p
             inquiry_active = false;
             stop_inquiry_led();
             if (device_found && !acl_connection_pending && acl_handle == HCI_CON_HANDLE_INVALID) {
+                if (!begin_connection_attempt()) {
+                    DS5_LOG("[HCI] Pairing target ignored because another connection owns the transport\n");
+                    break;
+                }
                 DS5_LOG("[HCI] Connecting to %s...\n", bd_addr_to_str(current_device_addr));
                 new_pair = true;
                 mark_acl_connection_pending();
@@ -1454,11 +1782,29 @@ static void hci_packet_handler(uint8_t packet_type, uint16_t channel, uint8_t *p
             ) {
                 clear_outbound_inquiry_target();
                 clear_acl_connection_pending();
+                fail_pending_connection_attempt();
                 DS5_LOG("[HCI] ACL connection command rejected, restart inquiry\n");
                 if (pairing_window_active) {
                     schedule_inquiry_retry();
                 } else {
                     restore_passive_reconnect_scan();
+                }
+            }
+            if (
+                opcode == HCI_OPCODE_HCI_SET_CONNECTION_ENCRYPTION
+                && connection_phase == BtConnectionPhase::Securing
+                && acl_handle != HCI_CON_HANDLE_INVALID
+            ) {
+                if (status == ERROR_CODE_SUCCESS) {
+                    if (!encryption_completion_pending) {
+                        encryption_completion_pending = true;
+                        encryption_command_handle = acl_handle;
+                        encryption_command_generation = connection_generation;
+                        encryption_command_accepted_at_us = time_us_32();
+                    }
+                } else {
+                    DS5_LOG("[HCI] Encryption command rejected; recycle incomplete ACL\n");
+                    bt_disconnect();
                 }
             }
             break;
@@ -1475,7 +1821,11 @@ static void hci_packet_handler(uint8_t packet_type, uint16_t channel, uint8_t *p
             const uint8_t status = hci_event_connection_complete_get_status(packet);
             if (status == 0) {
                 const hci_con_handle_t handle = hci_event_connection_complete_get_connection_handle(packet);
-                acl_handle = handle;
+                if (!note_acl_connected(handle)) {
+                    DS5_LOG("[HCI] Ignoring stale/duplicate ACL connection handle=0x%04X\n", handle);
+                    gap_disconnect(handle);
+                    break;
+                }
                 bt_rssi = 0;
                 bt_rssi_known = false;
                 bt_rssi_request_pending = false;
@@ -1486,11 +1836,12 @@ static void hci_packet_handler(uint8_t packet_type, uint16_t channel, uint8_t *p
                 gap_connectable_control(0);
                 gap_discoverable_control(0);
                 DS5_LOG("[HCI] ACL connected handle=0x%04X\n", handle);
-                DS5_LOG("[HCI] Request authentication on handle=0x%04X\n", handle);
-                HCI_SEND_CMD_LOGGED(&hci_authentication_requested, handle);
+                DS5_LOG("[HCI] Request GAP security level 2 on handle=0x%04X\n", handle);
+                gap_request_security_level(handle, LEVEL_2);
             } else {
                 clear_outbound_inquiry_target();
                 clear_acl_connection_pending();
+                fail_pending_connection_attempt();
                 DS5_LOG("[HCI] ACL connect failed status=0x%02X, restart inquiry\n", status);
                 if (pairing_window_active) {
                     schedule_inquiry_retry();
@@ -1565,8 +1916,32 @@ static void hci_packet_handler(uint8_t packet_type, uint16_t channel, uint8_t *p
         case HCI_EVENT_AUTHENTICATION_COMPLETE: {
             const uint8_t status = hci_event_authentication_complete_get_status(packet);
             const hci_con_handle_t handle = hci_event_authentication_complete_get_connection_handle(packet);
+            if (!connection_handle_is_current(handle)) {
+                DS5_LOG("[HCI] Ignoring stale authentication event handle=0x%04X status=0x%02X\n",
+                        handle,
+                        status);
+                break;
+            }
+            if (connection_phase == BtConnectionPhase::Disconnecting) {
+                break;
+            }
             DS5_LOG("[HCI] Authentication complete handle=0x%04X status=0x%02X\n", handle, status);
             if (status != ERROR_CODE_SUCCESS) {
+                if (
+                    (
+                        status == AUTHENTICATION_LMP_TRANSACTION_COLLISION
+                        || status == AUTHENTICATION_DIFFERENT_TRANSACTION_COLLISION
+                    )
+                    && authentication_retry_attempts < AUTHENTICATION_COLLISION_MAX_RETRIES
+                ) {
+                    authentication_retry_attempts++;
+                    authentication_retry_pending = true;
+                    authentication_retry_at_us = time_us_32()
+                        + AUTHENTICATION_COLLISION_RETRY_DELAY_US * authentication_retry_attempts;
+                    DS5_LOG("[HCI] Authentication collision; retry same ACL attempt=%u\n",
+                            authentication_retry_attempts);
+                    break;
+                }
                 if (status == AUTHENTICATION_PIN_OR_KEY_MISSING) {
                     DS5_LOG("[HCI] Remote reports missing key; drop stale key for %s\n",
                             bd_addr_to_str(current_device_addr));
@@ -1579,22 +1954,41 @@ static void hci_packet_handler(uint8_t packet_type, uint16_t channel, uint8_t *p
                 clear_acl_connection_pending();
                 bt_disconnect();
             } else {
-                HCI_SEND_CMD_LOGGED(&hci_set_connection_encryption, handle, 1);
+                clear_authentication_retry();
             }
             break;
         }
 
         case HCI_EVENT_ENCRYPTION_CHANGE: {
-            const uint8_t status = hci_event_encryption_change_get_status(packet);
-            const hci_con_handle_t handle = hci_event_encryption_change_get_connection_handle(packet);
-            const uint8_t enabled = hci_event_encryption_change_get_encryption_enabled(packet);
-            DS5_LOG("[HCI] Encryption change handle=0x%04X status=0x%02X enabled=%u\n", handle, status, enabled);
-            if (status == ERROR_CODE_SUCCESS && enabled) {
-                DS5_LOG("[L2CAP] Open HID channels\n");
-                schedule_hid_channel_recovery();
-                if (new_pair) {
-                    open_next_hid_channel_if_needed();
-                }
+            handle_encryption_change(
+                hci_event_encryption_change_get_connection_handle(packet),
+                hci_event_encryption_change_get_status(packet),
+                hci_event_encryption_change_get_encryption_enabled(packet)
+            );
+            break;
+        }
+
+        case HCI_EVENT_ENCRYPTION_CHANGE_V2: {
+            handle_encryption_change(
+                hci_event_encryption_change_v2_get_connection_handle(packet),
+                hci_event_encryption_change_v2_get_status(packet),
+                hci_event_encryption_change_v2_get_encryption_enabled(packet)
+            );
+            break;
+        }
+
+        case GAP_EVENT_SECURITY_LEVEL: {
+            const hci_con_handle_t handle = gap_event_security_level_get_handle(packet);
+            const gap_security_level_t level = static_cast<gap_security_level_t>(
+                gap_event_security_level_get_security_level(packet)
+            );
+            if (!connection_handle_is_current(handle)) {
+                break;
+            }
+            DS5_LOG("[HCI] GAP security level handle=0x%04X level=%u\n", handle, level);
+            if (level >= LEVEL_2) {
+                clear_encryption_completion();
+                begin_hid_channel_negotiation(handle);
             }
             break;
         }
@@ -1605,6 +1999,9 @@ static void hci_packet_handler(uint8_t packet_type, uint16_t channel, uint8_t *p
             const uint32_t cod = hci_event_connection_request_get_class_of_device(packet);
             DS5_LOG("[HCI] Incoming ACL request from %s cod=0x%06x\n", bd_addr_to_str(addr), (unsigned int) cod);
             if (classic_acl_connection_allowed(addr, false)) {
+                if (!begin_connection_attempt()) {
+                    break;
+                }
                 bd_addr_copy(current_device_addr, addr);
                 clear_outbound_inquiry_target();
                 mark_acl_connection_pending();
@@ -1614,6 +2011,18 @@ static void hci_packet_handler(uint8_t packet_type, uint16_t channel, uint8_t *p
         }
 
         case HCI_EVENT_DISCONNECTION_COMPLETE: {
+            const uint8_t status = hci_event_disconnection_complete_get_status(packet);
+            const hci_con_handle_t disconnected_handle =
+                hci_event_disconnection_complete_get_connection_handle(packet);
+            if (
+                status != ERROR_CODE_SUCCESS
+                || !connection_handle_is_current(disconnected_handle)
+            ) {
+                DS5_LOG("[HCI] Ignore stale disconnection status=0x%02X handle=0x%04X\n",
+                        status,
+                        disconnected_handle);
+                break;
+            }
             const bool host_suspended = usb_host_suspended_active();
             usb_handle_controller_transport_disconnect();
             reset_controller_input_report_cache();
@@ -1622,14 +2031,19 @@ static void hci_packet_handler(uint8_t packet_type, uint16_t channel, uint8_t *p
             clear_acl_connection_pending();
             inquiry_active = false;
             acl_handle = HCI_CON_HANDLE_INVALID;
+            reset_connection_session();
             bt_rssi = 0;
             bt_rssi_known = false;
             bt_rssi_request_pending = false;
             bt_rssi_last_request_us = 0;
             hid_control_cid = 0;
             hid_interrupt_cid = 0;
+            hid_control_pending_cid = 0;
+            hid_interrupt_pending_cid = 0;
             hid_control_ready = false;
             hid_interrupt_ready = false;
+            hid_connection_initiator = HidConnectionInitiator::None;
+            hid_control_opened_at_us = 0;
             audio_handle_controller_disconnect();
             feature_data.clear();
             controller_type = ControllerTypeUnknown;
@@ -1833,6 +2247,40 @@ static uint64_t idle_disconnect_timeout_us() {
     return static_cast<uint64_t>(idle_disconnect_timeout_minutes) * 60ULL * 1000ULL * 1000ULL;
 }
 
+static void finish_hid_session_if_ready() {
+    if (!hid_control_ready || !hid_interrupt_ready) {
+        return;
+    }
+    if (connection_phase == BtConnectionPhase::Ready) {
+        return;
+    }
+    if (connection_phase != BtConnectionPhase::HidOpening) {
+        return;
+    }
+
+    connection_phase = BtConnectionPhase::Ready;
+    connection_phase_started_us = 0;
+    cancel_hid_channel_recovery_if_ready();
+    critical_section_enter_blocking(&queue_lock);
+    reset_controller_output_session_locked();
+    critical_section_exit(&queue_lock);
+
+    if (!mute[0]) {
+        cyw43_arch_gpio_put(CYW43_WL_GPIO_LED_PIN, true);
+    }
+    gap_connectable_control(0);
+    gap_discoverable_control(0);
+    gap_set_bondable_mode(0);
+    close_pairing_window(false);
+    inactive_time = time_us_32();
+
+    DS5_LOG("Init DualSense\n");
+    init_feature();
+    reset_lightbar_setup();
+    bt_set_lightbar_color(0x00, 0x00, 0xff, 100);
+    bt_schedule_lightbar_restore(250);
+}
+
 static void l2cap_packet_handler(uint8_t packet_type, uint16_t channel, uint8_t *packet, uint16_t size) {
     (void) channel;
 
@@ -1889,84 +2337,156 @@ static void l2cap_packet_handler(uint8_t packet_type, uint16_t channel, uint8_t 
         case L2CAP_EVENT_CHANNEL_OPENED: {
             const uint8_t status = l2cap_event_channel_opened_get_status(packet);
             const uint16_t local_cid = l2cap_event_channel_opened_get_local_cid(packet);
-            if (status == 0) {
-                const uint16_t psm = l2cap_event_channel_opened_get_psm(packet);
-                if (psm == PSM_HID_CONTROL) {
-                    DS5_LOG("[L2CAP] HID Control opened cid=0x%04X\n", local_cid);
-                    hid_control_cid = local_cid;
-                    hid_control_ready = true;
-                    hid_channel_recovery_attempts = 0;
-                    cancel_hid_channel_recovery_if_ready();
-                } else if (psm == PSM_HID_INTERRUPT) {
-                    DS5_LOG("[L2CAP] HID Interrupt opened cid=0x%04X\n", local_cid);
-                    hid_interrupt_cid = local_cid;
-                    hid_interrupt_ready = true;
-                    hid_channel_recovery_attempts = 0;
-                    cancel_hid_channel_recovery_if_ready();
-                    critical_section_enter_blocking(&queue_lock);
-                    reset_controller_output_session_locked();
-                    critical_section_exit(&queue_lock);
-
-                    if (!mute[0]) {
-                        cyw43_arch_gpio_put(CYW43_WL_GPIO_LED_PIN, true);
-                    }
-                    gap_connectable_control(0);
-                    gap_discoverable_control(0);
-                    close_pairing_window(false);
-                    inactive_time = time_us_32();
-
-                    DS5_LOG("Init DualSense\n");
-
-                    init_feature();
-                    reset_lightbar_setup();
-                    bt_set_lightbar_color(0x00, 0x00, 0xff, 100);
-                    bt_schedule_lightbar_restore(250);
-
-                } else {
-                    DS5_LOG("[L2CAP] Unknown Channel psm: 0x%02X", psm);
+            const uint16_t psm = l2cap_event_channel_opened_get_psm(packet);
+            const hci_con_handle_t handle = l2cap_event_channel_opened_get_handle(packet);
+            if (!connection_handle_is_current(handle)) {
+                DS5_LOG("[L2CAP] Ignore stale channel open handle=0x%04X cid=0x%04X\n",
+                        handle,
+                        local_cid);
+                if (status == ERROR_CODE_SUCCESS) {
+                    l2cap_disconnect(local_cid);
                 }
-
-                /*if (hid_control_cid != 0 && hid_interrupt_cid != 0) {
-                    DS5_LOG("[L2CAP] HID channels ready, request CAN_SEND_NOW for SET_PROTOCOL\n");
-                    l2cap_request_can_send_now_event(hid_control_cid);
-                }*/
-            } else {
-                const uint16_t psm = l2cap_event_channel_opened_get_psm(packet);
-                hid_control_cid = 0;
-                hid_interrupt_cid = 0;
-                hid_control_ready = false;
-                hid_interrupt_ready = false;
-                hid_channel_recovery_pending = false;
-                hid_channel_recovery_attempts = 0;
-                clear_outbound_inquiry_target();
-                DS5_LOG("[L2CAP] Open failed psm=0x%04X status=0x%02X\n", psm, status);
-                bt_disconnect();
+                break;
             }
+
+            uint16_t *pending_cid = nullptr;
+            if (psm == PSM_HID_CONTROL) {
+                pending_cid = &hid_control_pending_cid;
+            } else if (psm == PSM_HID_INTERRUPT) {
+                pending_cid = &hid_interrupt_pending_cid;
+            }
+            if (pending_cid == nullptr || *pending_cid != local_cid) {
+                DS5_LOG("[L2CAP] Ignore duplicate/unowned channel open psm=0x%04X cid=0x%04X\n",
+                        psm,
+                        local_cid);
+                if (status == ERROR_CODE_SUCCESS) {
+                    l2cap_disconnect(local_cid);
+                }
+                break;
+            }
+            *pending_cid = 0;
+
+            if (status != ERROR_CODE_SUCCESS) {
+                if (
+                    psm == PSM_HID_CONTROL
+                    && hid_connection_initiator == HidConnectionInitiator::Local
+                ) {
+                    hid_connection_initiator = HidConnectionInitiator::None;
+                }
+                DS5_LOG("[L2CAP] Open failed psm=0x%04X cid=0x%04X status=0x%02X; retry\n",
+                        psm,
+                        local_cid,
+                        status);
+                schedule_hid_channel_recovery();
+                break;
+            }
+
+            if (psm == PSM_HID_CONTROL) {
+                DS5_LOG("[L2CAP] HID Control opened cid=0x%04X\n", local_cid);
+                hid_control_cid = local_cid;
+                hid_control_ready = true;
+                hid_control_opened_at_us = time_us_32();
+                note_connection_phase_started();
+                hid_channel_recovery_attempts = 0;
+                if (hid_connection_initiator == HidConnectionInitiator::Remote) {
+                    DS5_LOG("[L2CAP] Controller opened HID Control; await controller-owned Interrupt\n");
+                    hid_channel_recovery_pending = false;
+                } else {
+                    schedule_hid_channel_recovery();
+                }
+            } else {
+                DS5_LOG("[L2CAP] HID Interrupt opened cid=0x%04X\n", local_cid);
+                hid_interrupt_cid = local_cid;
+                hid_interrupt_ready = true;
+                hid_control_opened_at_us = 0;
+                note_connection_phase_started();
+                hid_channel_recovery_attempts = 0;
+            }
+            finish_hid_session_if_ready();
             break;
         }
 
         case L2CAP_EVENT_INCOMING_CONNECTION: {
             const uint16_t local_cid = l2cap_event_incoming_connection_get_local_cid(packet);
             const uint16_t psm = l2cap_event_incoming_connection_get_psm(packet);
-            DS5_LOG("[L2CAP] Incoming connection psm=0x%04X cid=0x%04X\n", psm, local_cid);
+            const hci_con_handle_t handle = l2cap_event_incoming_connection_get_handle(packet);
+            DS5_LOG("[L2CAP] Incoming connection handle=0x%04X psm=0x%04X cid=0x%04X\n",
+                    handle,
+                    psm,
+                    local_cid);
+            if (!current_link_security_ready(handle) || !begin_hid_opening(handle)) {
+                DS5_LOG("[L2CAP] Decline unowned incoming HID channel\n");
+                l2cap_decline_connection(local_cid);
+                break;
+            }
+            if (psm == PSM_HID_CONTROL) {
+                if (hid_control_cid != 0 || hid_control_pending_cid != 0) {
+                    DS5_LOG("[L2CAP] Decline duplicate HID Control channel\n");
+                    l2cap_decline_connection(local_cid);
+                    break;
+                }
+                hid_connection_initiator = HidConnectionInitiator::Remote;
+                hid_channel_recovery_pending = false;
+                hid_channel_recovery_attempts = 0;
+                hid_control_pending_cid = local_cid;
+            } else if (psm == PSM_HID_INTERRUPT) {
+                const bool control_owned = hid_control_ready || hid_control_pending_cid != 0;
+                if (!control_owned || hid_interrupt_cid != 0 || hid_interrupt_pending_cid != 0) {
+                    DS5_LOG("[L2CAP] Decline out-of-order/duplicate HID Interrupt channel\n");
+                    l2cap_decline_connection(local_cid);
+                    break;
+                }
+                hid_interrupt_pending_cid = local_cid;
+            } else {
+                DS5_LOG("[L2CAP] Decline unsupported PSM=0x%04X\n", psm);
+                l2cap_decline_connection(local_cid);
+                break;
+            }
             l2cap_accept_connection(local_cid);
             break;
         }
 
         case L2CAP_EVENT_CHANNEL_CLOSED: {
             const uint16_t local_cid = l2cap_event_channel_closed_get_local_cid(packet);
+            bool owned_channel = true;
             if (local_cid == hid_control_cid) {
                 hid_control_cid = 0;
                 hid_control_ready = false;
+                hid_control_opened_at_us = 0;
+                if (hid_connection_initiator == HidConnectionInitiator::Local) {
+                    hid_connection_initiator = HidConnectionInitiator::None;
+                }
                 DS5_LOG("[L2CAP] HID Control closed cid=0x%04X\n", local_cid);
             } else if (local_cid == hid_interrupt_cid) {
                 hid_interrupt_cid = 0;
                 hid_interrupt_ready = false;
                 DS5_LOG("[L2CAP] HID Interrupt closed cid=0x%04X\n", local_cid);
+            } else if (local_cid == hid_control_pending_cid) {
+                hid_control_pending_cid = 0;
+                if (hid_connection_initiator == HidConnectionInitiator::Local) {
+                    hid_connection_initiator = HidConnectionInitiator::None;
+                }
+                DS5_LOG("[L2CAP] Pending HID Control closed cid=0x%04X\n", local_cid);
+            } else if (local_cid == hid_interrupt_pending_cid) {
+                hid_interrupt_pending_cid = 0;
+                DS5_LOG("[L2CAP] Pending HID Interrupt closed cid=0x%04X\n", local_cid);
             } else {
-                DS5_LOG("[L2CAP] Channel closed cid=0x%04X\n", local_cid);
+                owned_channel = false;
+                DS5_LOG("[L2CAP] Ignore stale channel close cid=0x%04X\n", local_cid);
             }
-            if (hid_control_cid == 0 && hid_interrupt_cid == 0) {
+            if (!owned_channel) {
+                break;
+            }
+            if (connection_phase == BtConnectionPhase::Ready) {
+                connection_phase = BtConnectionPhase::HidOpening;
+                note_connection_phase_started();
+            }
+            if (
+                hid_control_cid == 0
+                && hid_interrupt_cid == 0
+                && hid_control_pending_cid == 0
+                && hid_interrupt_pending_cid == 0
+            ) {
                 bt_disconnect();
             } else {
                 schedule_hid_channel_recovery();
@@ -1976,6 +2496,9 @@ static void l2cap_packet_handler(uint8_t packet_type, uint16_t channel, uint8_t 
 
         case L2CAP_EVENT_CAN_SEND_NOW: {
             // DS5_LOG("[L2CAP] L2CAP_EVENT_CAN_SEND_NOW\n");
+            if (connection_phase == BtConnectionPhase::Disconnecting) {
+                break;
+            }
             const uint16_t local_cid = l2cap_event_can_send_now_get_local_cid(packet);
             if (local_cid == hid_control_cid) {
                 control_packet next_packet{};
