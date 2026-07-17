@@ -61,7 +61,7 @@ const TRAY_BATTERY_ICON_SIZE = 32;
 const TRAY_BATTERY_ICON_SCALE_FACTOR = 2;
 const TRAY_BATTERY_ICON_SHADOW = { red: 0, green: 0, blue: 0, alpha: 180 };
 const TRAY_BATTERY_ICON_DISCHARGING = { red: 245, green: 248, blue: 255, alpha: 255 };
-const TRAY_BATTERY_ICON_CHARGING = { red: 57, green: 215, blue: 125, alpha: 255 };
+const TRAY_BATTERY_ICON_EXTERNAL_POWER = { red: 57, green: 215, blue: 125, alpha: 255 };
 const trayBatteryIconCache = new Map<string, Electron.NativeImage>();
 
 function windowsAppUserModelId(): string {
@@ -164,9 +164,39 @@ function trayTooltipForSnapshot(snapshot: BridgeSnapshot): string {
   }
 
   const name = trayControllerName(snapshot.status.controllerType);
+  const powerState = trayBatteryPowerState(snapshot.status.rawPowerState);
   return snapshot.status.batteryPercent === null
-    ? name
-    : `${name} \u2014 ${snapshot.status.batteryPercent}%`;
+    ? trayTooltipWithoutBatteryPercent(name, powerState)
+    : trayTooltipWithBatteryPercent(name, snapshot.status.batteryPercent, powerState);
+}
+
+type TrayBatteryPowerState = 'battery' | 'charging' | 'external-power';
+
+function trayBatteryPowerState(rawPowerState: number | undefined): TrayBatteryPowerState {
+  if (rawPowerState === 0x01) return 'charging';
+  if (rawPowerState === 0x02) return 'external-power';
+  return 'battery';
+}
+
+function trayTooltipWithoutBatteryPercent(
+  name: string,
+  powerState: TrayBatteryPowerState
+): string {
+  if (powerState === 'charging') return `${name} \u2014 Charging`;
+  if (powerState === 'external-power') return `${name} \u2014 Connected to power`;
+  return name;
+}
+
+function trayTooltipWithBatteryPercent(
+  name: string,
+  batteryPercent: number,
+  powerState: TrayBatteryPowerState
+): string {
+  if (powerState === 'charging') return `${name} \u2014 ${batteryPercent}% (charging)`;
+  if (powerState === 'external-power') {
+    return `${name} \u2014 ${batteryPercent}% (connected to power)`;
+  }
+  return `${name} \u2014 ${batteryPercent}%`;
 }
 
 type TrayBatteryIconColor = {
@@ -272,10 +302,13 @@ function drawTrayIconNumber(buffer: Buffer, text: string, color: TrayBatteryIcon
   }
 }
 
-function batteryTrayIcon(percent: number, charging: boolean): Electron.NativeImage {
+function batteryTrayIcon(
+  percent: number,
+  powerState: TrayBatteryPowerState
+): Electron.NativeImage {
   const clampedPercent = Math.max(0, Math.min(100, Math.round(percent)));
   const text = String(clampedPercent);
-  const key = `${text}:${charging ? 'charging' : 'discharging'}`;
+  const key = `${text}:${powerState}`;
   const cached = trayBatteryIconCache.get(key);
   if (cached) {
     return cached;
@@ -283,7 +316,13 @@ function batteryTrayIcon(percent: number, charging: boolean): Electron.NativeIma
 
   const buffer = Buffer.alloc(TRAY_BATTERY_ICON_SIZE * TRAY_BATTERY_ICON_SIZE * 4);
   drawTrayIconNumber(buffer, text, TRAY_BATTERY_ICON_SHADOW, 1);
-  drawTrayIconNumber(buffer, text, charging ? TRAY_BATTERY_ICON_CHARGING : TRAY_BATTERY_ICON_DISCHARGING);
+  drawTrayIconNumber(
+    buffer,
+    text,
+    powerState === 'battery'
+      ? TRAY_BATTERY_ICON_DISCHARGING
+      : TRAY_BATTERY_ICON_EXTERNAL_POWER
+  );
   const image = nativeImage.createFromBitmap(buffer, {
     width: TRAY_BATTERY_ICON_SIZE,
     height: TRAY_BATTERY_ICON_SIZE,
@@ -291,10 +330,6 @@ function batteryTrayIcon(percent: number, charging: boolean): Electron.NativeIma
   });
   trayBatteryIconCache.set(key, image);
   return image;
-}
-
-function isChargingPowerState(rawPowerState: number | undefined): boolean {
-  return rawPowerState === 0x01 || rawPowerState === 0x02;
 }
 
 function trayIconForSnapshot(snapshot: BridgeSnapshot): Electron.NativeImage | null {
@@ -306,7 +341,10 @@ function trayIconForSnapshot(snapshot: BridgeSnapshot): Electron.NativeImage | n
     return trayDefaultIcon;
   }
 
-  return batteryTrayIcon(snapshot.status.batteryPercent, isChargingPowerState(snapshot.status.rawPowerState));
+  return batteryTrayIcon(
+    snapshot.status.batteryPercent,
+    trayBatteryPowerState(snapshot.status.rawPowerState)
+  );
 }
 
 function updateTrayTooltip(snapshot: BridgeSnapshot): void {
