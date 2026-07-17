@@ -643,9 +643,7 @@ int main() {
             audio_loop();
         });
         RUN_MAIN_PHASE(WatchdogMainLoopPhase::Button, {
-            if (!audio_recent()) {
-                button_check();
-            }
+            button_check();
         });
         RUN_MAIN_PHASE(WatchdogMainLoopPhase::Lightbar, {
             bt_lightbar_loop();

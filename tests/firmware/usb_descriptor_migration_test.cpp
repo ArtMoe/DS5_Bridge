@@ -1467,8 +1467,7 @@ void assert_watchdog_and_bootsel_flash_safety(std::filesystem::path const &root)
     const auto first_poll = main_cpp.find("cyw43_arch_poll();", watchdog_start);
     const auto first_poll_feed = main_cpp.find("watchdog_update();", first_poll);
     const auto next_usb_phase = main_cpp.find("tud_task();", first_poll);
-    const auto button_guard = main_cpp.find("if (!audio_recent())", first_poll_feed);
-    const auto button_check = main_cpp.find("button_check();", button_guard);
+    const auto button_check = main_cpp.find("button_check();", first_poll_feed);
     const std::string reboot_branch = extract_between(
         main_cpp,
         "if (watchdog_enable_caused_reboot()) {",
@@ -1483,13 +1482,12 @@ void assert_watchdog_and_bootsel_flash_safety(std::filesystem::path const &root)
         || first_poll_feed == std::string::npos
         || next_usb_phase == std::string::npos
         || first_poll_feed > next_usb_phase
-        || button_guard == std::string::npos
         || button_check == std::string::npos
-        || button_guard > button_check
+        || main_cpp.find("if (!audio_recent())", first_poll_feed) != std::string::npos
         || reboot_branch.find("sleep_ms(") != std::string::npos
     ) {
         throw std::runtime_error(
-            "Main-loop phases must remain watchdog-fed and BOOTSEL must yield to active audio"
+            "Main-loop phases must remain watchdog-fed and BOOTSEL polling must remain available during active audio"
         );
     }
 }
