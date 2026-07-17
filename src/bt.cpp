@@ -2733,8 +2733,12 @@ static void l2cap_packet_handler(uint8_t packet_type, uint16_t channel, uint8_t 
                 bt_disconnect_with_intent(BtControllerDisconnectIntentIdleTimeout);
             }
         } else if (channel == hid_control_cid) {
+            const bool edge_type_response =
+                size > 1
+                && packet[0] == 0xA3
+                && packet[1] == 0x70;
             if (controller_type_check_pending) {
-                if (size > 1 && packet[0] == 0xA3 && packet[1] == 0x70) {
+                if (edge_type_response) {
                     controller_type = ControllerTypeDualSenseEdge;
                     controller_type_check_pending = false;
                     DS5_LOG("[L2CAP] Connected controller detected as DualSense Edge\n");
@@ -2745,6 +2749,15 @@ static void l2cap_packet_handler(uint8_t packet_type, uint16_t channel, uint8_t 
                     DS5_LOG("[L2CAP] Connected controller detected as DualSense\n");
                     usb_handle_controller_transport_ready();
                 }
+            } else if (
+                edge_type_response
+                && controller_type == ControllerTypeDualSense
+            ) {
+                // The initial USB persona intentionally remains base DualSense,
+                // but a delayed 0x70 reply must still upgrade Edge-specific
+                // input handling after the fallback has already published.
+                controller_type = ControllerTypeDualSenseEdge;
+                DS5_LOG("[L2CAP] Late controller type response upgraded controller to DualSense Edge\n");
             }
             if (size >= 2 && packet[0] == 0xA3) {
                 uint8_t report_id = packet[1];
@@ -4121,11 +4134,11 @@ void set_feature_data(uint8_t reportId, uint8_t const* data,uint16_t len) {
 void init_feature() {
     controller_type = ControllerTypeUnknown;
     clear_feature_prefetch_queue();
+    controller_type_check_pending = true;
+    schedule_feature_prefetch(0x70, 64);
     schedule_feature_prefetch(0x09, 20);
     schedule_feature_prefetch(0x20, 64);
     schedule_feature_prefetch(0x22, 64);
     schedule_feature_prefetch(0x05, 41);
-    controller_type_check_pending = true;
-    schedule_feature_prefetch(0x70, 64);
     feature_prefetch_next_us = time_us_32();
 }

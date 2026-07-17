@@ -892,6 +892,35 @@ void assert_bluetooth_hid_recovery_and_encryption_watchdog(std::filesystem::path
         throw std::runtime_error("Bluetooth recovery must bound security/encryption and preserve HID channel initiator ownership");
     }
 
+    const std::string init_feature = extract_between(
+        bt_cpp,
+        "void init_feature() {",
+        "\n}\n"
+    );
+    const auto edge_probe = init_feature.find("schedule_feature_prefetch(0x70, 64);");
+    const auto informational_probe = init_feature.find("schedule_feature_prefetch(0x09, 20);");
+    const std::string control_data = extract_between(
+        bt_cpp,
+        "} else if (channel == hid_control_cid) {",
+        "\n        } else {"
+    );
+    if (
+        edge_probe == std::string::npos
+        || informational_probe == std::string::npos
+        || edge_probe > informational_probe
+        || control_data.find("const bool edge_type_response =")
+            == std::string::npos
+        || control_data.find("controller_type == ControllerTypeDualSense")
+            == std::string::npos
+        || control_data.find(
+            "Late controller type response upgraded controller to DualSense Edge"
+        ) == std::string::npos
+    ) {
+        throw std::runtime_error(
+            "Initial feature pacing must prioritize Edge detection and accept a delayed authoritative reply"
+        );
+    }
+
     const std::string incoming_block = extract_between(
         bt_cpp,
         "case L2CAP_EVENT_INCOMING_CONNECTION:",
