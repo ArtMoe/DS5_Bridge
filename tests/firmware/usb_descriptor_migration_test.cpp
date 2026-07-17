@@ -912,6 +912,128 @@ void assert_bluetooth_pairing_and_reconnect_policy(std::filesystem::path const &
     }
 }
 
+void assert_bluetooth_device_management_policy(std::filesystem::path const &root) {
+    const auto bt_cpp = read_text(root / "src" / "bt.cpp");
+    const auto bt_h = read_text(root / "src" / "bt.h");
+
+    const std::string working_block = extract_between(
+        bt_cpp,
+        "case BTSTACK_EVENT_STATE:",
+        "\n        case HCI_EVENT_INQUIRY_RESULT:"
+    );
+    const auto blacklist_load = working_block.find("bt_blacklist_load();");
+    const auto link_key_load =
+        working_block.find("stored_link_key_present = bt_has_stored_link_key();");
+    if (
+        bt_cpp.find("#include \"btstack_tlv.h\"") == std::string::npos
+        || bt_cpp.find("#define BT_BLACKLIST_TLV_TAG 0x424C434Bu")
+            == std::string::npos
+        || bt_cpp.find("static bool bt_blacklist_persist()")
+            == std::string::npos
+        || bt_cpp.find("tlv->store_tag(") == std::string::npos
+        || bt_cpp.find("memcmp(verified_addrs, cleared_controller_addrs, bytes) == 0")
+            == std::string::npos
+        || blacklist_load == std::string::npos
+        || link_key_load == std::string::npos
+        || blacklist_load > link_key_load
+    ) {
+        throw std::runtime_error(
+            "Forgotten-controller policy must load and byte-verify its durable TLV state before reconnect"
+        );
+    }
+
+    const std::string filter_block = extract_between(
+        bt_cpp,
+        "static bool classic_acl_connection_allowed",
+        "\n}\n\nstatic int classic_connection_filter"
+    );
+    const auto blacklist_check = filter_block.find("bt_blacklist_contains(addr)");
+    const auto stored_key_check = filter_block.find("gap_get_link_key_for_bd_addr");
+    const std::string connection_complete = extract_between(
+        bt_cpp,
+        "case HCI_EVENT_CONNECTION_COMPLETE: {",
+        "\n        case HCI_EVENT_LINK_KEY_REQUEST:"
+    );
+    const std::string link_key_request = extract_between(
+        bt_cpp,
+        "case HCI_EVENT_LINK_KEY_REQUEST: {",
+        "\n        case HCI_EVENT_USER_CONFIRMATION_REQUEST:"
+    );
+    if (
+        blacklist_check == std::string::npos
+        || stored_key_check == std::string::npos
+        || blacklist_check > stored_key_check
+        || connection_complete.find("Late connection from blacklisted")
+            == std::string::npos
+        || connection_complete.find("gap_disconnect(handle)")
+            == std::string::npos
+        || link_key_request.find("!bt_blacklist_contains(addr)")
+            == std::string::npos
+    ) {
+        throw std::runtime_error(
+            "Forgotten controllers must be rejected at admission, late completion, and stale key lookup"
+        );
+    }
+
+    const std::string forget_all = extract_between(
+        bt_cpp,
+        "bool bt_forget_pairings() {",
+        "\n}\n\nbool bt_forget_pairing("
+    );
+    const auto forget_all_capture = forget_all.find("bt_blacklist_add_stored_link_keys()");
+    const auto forget_all_persist = forget_all.find("bt_blacklist_persist()");
+    const auto forget_all_drop = forget_all.find("gap_delete_all_link_keys();");
+    const std::string forget_one = extract_between(
+        bt_cpp,
+        "bool bt_forget_pairing(uint8_t address[6])",
+        "\n}\n\nbool bt_set_idle_disconnect_timeout_minutes"
+    );
+    const auto forget_one_add = forget_one.find("bt_blacklist_add_unique(addr)");
+    const auto forget_one_persist = forget_one.find("bt_blacklist_persist()");
+    const auto forget_one_drop = forget_one.find("gap_drop_link_key_for_bd_addr(addr);");
+    if (
+        forget_all_capture == std::string::npos
+        || forget_all_persist == std::string::npos
+        || forget_all_drop == std::string::npos
+        || !(forget_all_capture < forget_all_persist && forget_all_persist < forget_all_drop)
+        || forget_one_add == std::string::npos
+        || forget_one_persist == std::string::npos
+        || forget_one_drop == std::string::npos
+        || !(forget_one_add < forget_one_persist && forget_one_persist < forget_one_drop)
+    ) {
+        throw std::runtime_error(
+            "Forget-one and forget-all must durably blacklist addresses before deleting link keys"
+        );
+    }
+
+    const std::string finish_hid = extract_between(
+        bt_cpp,
+        "static void finish_hid_session_if_ready() {",
+        "\n}\n\nstatic void l2cap_packet_handler"
+    );
+    const auto durable_key_gate =
+        finish_hid.find("pairing_link_key_required && !current_link_key_persisted");
+    const auto blacklist_clear = finish_hid.find("bt_blacklist_remove(current_device_addr)");
+    const auto publish_ready =
+        finish_hid.find("connection_phase = BtConnectionPhase::Ready;");
+    if (
+        durable_key_gate == std::string::npos
+        || blacklist_clear == std::string::npos
+        || publish_ready == std::string::npos
+        || !(durable_key_gate < blacklist_clear && blacklist_clear < publish_ready)
+        || bt_h.find("struct BtDeviceIdentitySnapshot") == std::string::npos
+        || bt_h.find("bool bt_get_device_identity(BtDeviceIdentitySnapshot *snapshot);")
+            == std::string::npos
+        || bt_h.find("bool bt_forget_pairing(uint8_t address[6]);")
+            == std::string::npos
+        || bt_h.find("bool bt_pairing_active();") == std::string::npos
+    ) {
+        throw std::runtime_error(
+            "Explicit durable re-pairing must clear the blacklist before publishing identity and HID readiness"
+        );
+    }
+}
+
 void assert_bluetooth_hid_recovery_and_encryption_watchdog(std::filesystem::path const &root) {
     const auto bt_cpp = read_text(root / "src" / "bt.cpp");
 
@@ -1318,6 +1440,7 @@ int main() {
         assert_ps_chord_starter_is_deferred_to_protect_steam_big_picture(source_root);
         assert_mic_pass_through_defaults_to_enabled(source_root);
         assert_bluetooth_pairing_and_reconnect_policy(source_root);
+        assert_bluetooth_device_management_policy(source_root);
         assert_bluetooth_hid_recovery_and_encryption_watchdog(source_root);
         assert_dualsense_feature_startup_is_paced(source_root);
         assert_watchdog_and_bootsel_flash_safety(source_root);

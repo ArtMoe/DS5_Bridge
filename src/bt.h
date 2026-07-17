@@ -26,6 +26,18 @@ enum BtControllerDisconnectIntent : uint8_t {
     BtControllerDisconnectIntentIdleTimeout = 2,
 };
 
+struct BtDeviceIdentitySnapshot {
+    bool address_known;
+    bool controller_connected;
+    bool link_key_known;
+    bool pairing_active;
+    uint8_t link_key_type;
+    char address[18];
+    char name[32];
+    uint16_t vendor_id;
+    uint16_t product_id;
+};
+
 typedef void (*bt_data_callback_t)(CHANNEL_TYPE channel, uint8_t *data, uint16_t len);
 
 int bt_init();
@@ -40,6 +52,9 @@ bool bt_expected_disconnect_pending();
 bool bt_power_off_controller();
 bool bt_request_scan();
 bool bt_forget_pairings();
+bool bt_forget_pairing(uint8_t address[6]);
+bool bt_get_device_identity(BtDeviceIdentitySnapshot *snapshot);
+bool bt_pairing_active();
 bool bt_set_idle_disconnect_timeout_minutes(uint16_t minutes);
 uint16_t bt_idle_disconnect_timeout_minutes();
 void bt_write(uint8_t* data,uint16_t len);

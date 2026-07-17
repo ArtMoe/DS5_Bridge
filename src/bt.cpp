@@ -26,6 +26,7 @@
 #include "companion.h"
 #endif
 #include "btstack_event.h"
+#include "btstack_tlv.h"
 #include "controller_report.h"
 #include "gap.h"
 #include "l2cap.h"
@@ -142,6 +143,7 @@
 #define AUTHENTICATION_COLLISION_MAX_RETRIES 3u
 #define AUTHENTICATION_LMP_TRANSACTION_COLLISION 0x23u
 #define AUTHENTICATION_DIFFERENT_TRANSACTION_COLLISION 0x2au
+#define BT_BLACKLIST_TLV_TAG 0x424C434Bu // ASCII 'BLCK'
 
 #define HCI_SEND_CMD_LOGGED(cmd, ...) do { \
     const uint8_t err = hci_send_cmd((cmd), ##__VA_ARGS__); \
@@ -315,6 +317,8 @@ static uint32_t pairing_window_deadline_us = 0;
 static bool inquiry_led_on = false;
 static uint32_t inquiry_led_last_toggle_us = 0;
 static bool stored_link_key_present = false;
+static bd_addr_t cleared_controller_addrs[NVM_NUM_LINK_KEYS];
+static int cleared_controller_addr_count = 0;
 static bool acl_connection_pending = false;
 static uint32_t acl_connection_pending_at_us = 0;
 static bool acl_connection_outbound = false;
@@ -654,6 +658,159 @@ static bool bt_has_stored_link_key() {
     return has_key;
 }
 
+static bool bt_blacklist_persist() {
+    const btstack_tlv_t *tlv = nullptr;
+    void *tlv_context = nullptr;
+    btstack_tlv_get_instance(&tlv, &tlv_context);
+    if (tlv == nullptr) {
+        DS5_LOG("[BLACKLIST] No TLV instance available, not persisting\n");
+        return false;
+    }
+
+    if (cleared_controller_addr_count == 0) {
+        tlv->delete_tag(tlv_context, BT_BLACKLIST_TLV_TAG);
+        const bool deleted =
+            tlv->get_tag(tlv_context, BT_BLACKLIST_TLV_TAG, nullptr, 0) == 0;
+        DS5_LOG("[BLACKLIST] Empty, deleted from flash verified=%u\n", deleted ? 1u : 0u);
+        return deleted;
+    }
+
+    const uint32_t bytes =
+        static_cast<uint32_t>(cleared_controller_addr_count) * sizeof(bd_addr_t);
+    const int rc = tlv->store_tag(
+        tlv_context,
+        BT_BLACKLIST_TLV_TAG,
+        reinterpret_cast<const uint8_t *>(cleared_controller_addrs),
+        bytes
+    );
+    bd_addr_t verified_addrs[NVM_NUM_LINK_KEYS]{};
+    const int verified_len = tlv->get_tag(
+        tlv_context,
+        BT_BLACKLIST_TLV_TAG,
+        reinterpret_cast<uint8_t *>(verified_addrs),
+        sizeof(verified_addrs)
+    );
+    const bool verified =
+        rc == 0
+        && verified_len == static_cast<int>(bytes)
+        && memcmp(verified_addrs, cleared_controller_addrs, bytes) == 0;
+    DS5_LOG(
+        "[BLACKLIST] Persisted %d entries (%lu bytes), rc=%d verified=%u\n",
+        cleared_controller_addr_count,
+        static_cast<unsigned long>(bytes),
+        rc,
+        verified ? 1u : 0u
+    );
+    return verified;
+}
+
+static void bt_blacklist_load() {
+    const btstack_tlv_t *tlv = nullptr;
+    void *tlv_context = nullptr;
+    btstack_tlv_get_instance(&tlv, &tlv_context);
+    if (tlv == nullptr) {
+        cleared_controller_addr_count = 0;
+        return;
+    }
+
+    const int len = tlv->get_tag(
+        tlv_context,
+        BT_BLACKLIST_TLV_TAG,
+        reinterpret_cast<uint8_t *>(cleared_controller_addrs),
+        sizeof(cleared_controller_addrs)
+    );
+    if (len <= 0 || (len % static_cast<int>(sizeof(bd_addr_t))) != 0) {
+        cleared_controller_addr_count = 0;
+        DS5_LOG("[BLACKLIST] No persisted entries\n");
+        return;
+    }
+
+    cleared_controller_addr_count = len / static_cast<int>(sizeof(bd_addr_t));
+    if (cleared_controller_addr_count > NVM_NUM_LINK_KEYS) {
+        cleared_controller_addr_count = NVM_NUM_LINK_KEYS;
+    }
+    DS5_LOG("[BLACKLIST] Loaded %d entries from flash\n", cleared_controller_addr_count);
+}
+
+static bool bt_blacklist_contains(bd_addr_t addr) {
+    for (int i = 0; i < cleared_controller_addr_count; i++) {
+        if (bd_addr_cmp(addr, cleared_controller_addrs[i]) == 0) {
+            return true;
+        }
+    }
+    return false;
+}
+
+static bool bt_blacklist_add_unique(bd_addr_t addr) {
+    if (bt_blacklist_contains(addr)) {
+        return true;
+    }
+    if (cleared_controller_addr_count >= NVM_NUM_LINK_KEYS) {
+        DS5_LOG("[BLACKLIST] Full, cannot add %s\n", bd_addr_to_str(addr));
+        return false;
+    }
+    bd_addr_copy(cleared_controller_addrs[cleared_controller_addr_count++], addr);
+    DS5_LOG("[BLACKLIST] Added %s\n", bd_addr_to_str(addr));
+    return true;
+}
+
+static bool bt_blacklist_remove(bd_addr_t addr) {
+    for (int i = 0; i < cleared_controller_addr_count; i++) {
+        if (bd_addr_cmp(addr, cleared_controller_addrs[i]) != 0) {
+            continue;
+        }
+
+        bd_addr_t previous_addrs[NVM_NUM_LINK_KEYS]{};
+        const int previous_count = cleared_controller_addr_count;
+        memcpy(previous_addrs, cleared_controller_addrs, sizeof(previous_addrs));
+        for (int j = i; j < cleared_controller_addr_count - 1; j++) {
+            bd_addr_copy(cleared_controller_addrs[j], cleared_controller_addrs[j + 1]);
+        }
+        cleared_controller_addr_count--;
+        memset(cleared_controller_addrs[cleared_controller_addr_count], 0, sizeof(bd_addr_t));
+        if (!bt_blacklist_persist()) {
+            memcpy(cleared_controller_addrs, previous_addrs, sizeof(previous_addrs));
+            cleared_controller_addr_count = previous_count;
+            DS5_LOG(
+                "[BLACKLIST] Failed durable removal for %s; keep policy fail-closed\n",
+                bd_addr_to_str(addr)
+            );
+            return false;
+        }
+        DS5_LOG(
+            "[BLACKLIST] Durably removed %s after explicit pairing, %d remaining\n",
+            bd_addr_to_str(addr),
+            cleared_controller_addr_count
+        );
+        return true;
+    }
+    return true;
+}
+
+static bool bt_blacklist_add_stored_link_keys() {
+    btstack_link_key_iterator_t iterator;
+    if (!gap_link_key_iterator_init(&iterator)) {
+        return false;
+    }
+
+    bool added = true;
+    bd_addr_t addr;
+    link_key_t key;
+    link_key_type_t type;
+    while (gap_link_key_iterator_get_next(&iterator, addr, key, &type)) {
+        added = bt_blacklist_add_unique(addr) && added;
+    }
+    gap_link_key_iterator_done(&iterator);
+    return added;
+}
+
+static bool bt_current_address_known() {
+    return bt_is_controller_connected()
+        || device_found
+        || acl_connection_pending
+        || acl_handle != HCI_CON_HANDLE_INVALID;
+}
+
 static bool persist_notified_link_key(
     uint8_t const *packet,
     bd_addr_t addr,
@@ -839,6 +996,15 @@ static bool classic_acl_connection_allowed(bd_addr_t addr, bool log_reject) {
         }
         return false;
     }
+    if (bt_blacklist_contains(addr)) {
+        if (log_reject) {
+            DS5_LOG(
+                "[HCI] Rejecting cleared controller %s until an explicit scan is requested\n",
+                bd_addr_to_str(addr)
+            );
+        }
+        return false;
+    }
 
     link_key_t key;
     link_key_type_t type;
@@ -933,6 +1099,51 @@ int8_t bt_get_signal_strength() {
 
 bool bt_has_signal_strength() {
     return bt_rssi_known;
+}
+
+bool bt_pairing_active() {
+    return pairing_window_active;
+}
+
+bool bt_get_device_identity(BtDeviceIdentitySnapshot *snapshot) {
+    if (snapshot == nullptr) {
+        return false;
+    }
+
+    memset(snapshot, 0, sizeof(*snapshot));
+    snapshot->address_known = bt_current_address_known();
+    snapshot->controller_connected = bt_is_controller_connected();
+    snapshot->pairing_active = pairing_window_active;
+    if (!snapshot->address_known) {
+        return false;
+    }
+
+    strncpy(snapshot->address, bd_addr_to_str(current_device_addr), sizeof(snapshot->address) - 1);
+    snapshot->address[sizeof(snapshot->address) - 1] = '\0';
+    switch (controller_type) {
+        case ControllerTypeDualSense:
+            strncpy(snapshot->name, "DualSense", sizeof(snapshot->name) - 1);
+            snapshot->vendor_id = 0x054c;
+            snapshot->product_id = 0x0ce6;
+            break;
+        case ControllerTypeDualSenseEdge:
+            strncpy(snapshot->name, "DualSense Edge", sizeof(snapshot->name) - 1);
+            snapshot->vendor_id = 0x054c;
+            snapshot->product_id = 0x0df2;
+            break;
+        default:
+            strncpy(snapshot->name, "Controller", sizeof(snapshot->name) - 1);
+            break;
+    }
+    snapshot->name[sizeof(snapshot->name) - 1] = '\0';
+
+    link_key_t link_key;
+    link_key_type_t link_key_type;
+    snapshot->link_key_known =
+        gap_get_link_key_for_bd_addr(current_device_addr, link_key, &link_key_type);
+    snapshot->link_key_type =
+        snapshot->link_key_known ? static_cast<uint8_t>(link_key_type) : 0;
+    return true;
 }
 
 void bt_set_classic_rumble_gain(uint16_t gain_percent) {
@@ -1577,41 +1788,94 @@ bool bt_power_off_controller() {
 }
 
 bool bt_request_scan() {
-    if (acl_handle != HCI_CON_HANDLE_INVALID || hid_interrupt_ready) {
-        return false;
-    }
-
     const uint32_t now = time_us_32();
     pairing_window_active = true;
     pairing_window_deadline_us = now + PAIRING_WINDOW_US;
-    inquiry_retry_scheduled = true;
-    inquiry_retry_at_us = now;
     gap_connectable_control(0);
     gap_discoverable_control(0);
     gap_set_bondable_mode(1);
     DS5_LOG("[HCI] Controller pairing window requested\n");
+
+    if (acl_handle != HCI_CON_HANDLE_INVALID || hid_interrupt_ready) {
+        // Companion pairing while connected means "disconnect and pair".
+        // The disconnection-complete path schedules inquiry because the
+        // pairing window is already open.
+        (void)bt_disconnect();
+        return true;
+    }
+
+    inquiry_retry_scheduled = true;
+    inquiry_retry_at_us = now;
     return true;
 }
 
 bool bt_forget_pairings() {
     DS5_LOG("[HCI] Forget controller pairings requested\n");
+    bd_addr_t previous_addrs[NVM_NUM_LINK_KEYS]{};
+    const int previous_count = cleared_controller_addr_count;
+    memcpy(previous_addrs, cleared_controller_addrs, sizeof(previous_addrs));
+
+    if (
+        !bt_blacklist_add_stored_link_keys()
+        || (bt_current_address_known() && !bt_blacklist_add_unique(current_device_addr))
+        || !bt_blacklist_persist()
+    ) {
+        memcpy(cleared_controller_addrs, previous_addrs, sizeof(previous_addrs));
+        cleared_controller_addr_count = previous_count;
+        DS5_LOG("[BLACKLIST] Forget all aborted: durable blacklist update failed\n");
+        return false;
+    }
+
     gap_delete_all_link_keys();
     stored_link_key_present = false;
+    current_link_key_persisted = false;
     feature_data.clear();
     clear_feature_prefetch_queue();
 
-    if (acl_handle != HCI_CON_HANDLE_INVALID) {
-        (void)bt_disconnect();
+    return bt_request_scan();
+}
+
+bool bt_forget_pairing(uint8_t address[6]) {
+    if (address == nullptr) {
+        return false;
+    }
+    bool has_address_material = false;
+    for (size_t i = 0; i < sizeof(bd_addr_t); i++) {
+        has_address_material = has_address_material || address[i] != 0;
+    }
+    if (!has_address_material) {
+        return false;
     }
 
-    const uint32_t now = time_us_32();
-    pairing_window_active = true;
-    pairing_window_deadline_us = now + PAIRING_WINDOW_US;
-    inquiry_retry_scheduled = true;
-    inquiry_retry_at_us = now;
-    gap_connectable_control(0);
-    gap_discoverable_control(0);
-    gap_set_bondable_mode(1);
+    bd_addr_t addr;
+    memcpy(addr, address, sizeof(addr));
+    DS5_LOG("[HCI] Forget controller pairing requested for %s\n", bd_addr_to_str(addr));
+
+    bd_addr_t previous_addrs[NVM_NUM_LINK_KEYS]{};
+    const int previous_count = cleared_controller_addr_count;
+    memcpy(previous_addrs, cleared_controller_addrs, sizeof(previous_addrs));
+    if (!bt_blacklist_add_unique(addr) || !bt_blacklist_persist()) {
+        memcpy(cleared_controller_addrs, previous_addrs, sizeof(previous_addrs));
+        cleared_controller_addr_count = previous_count;
+        DS5_LOG("[BLACKLIST] Targeted forget aborted: durable blacklist update failed\n");
+        return false;
+    }
+
+    const bool targets_current_session =
+        bt_current_address_known() && bd_addr_cmp(current_device_addr, addr) == 0;
+    gap_drop_link_key_for_bd_addr(addr);
+    stored_link_key_present = bt_has_stored_link_key();
+    if (targets_current_session) {
+        current_link_key_persisted = false;
+        feature_data.clear();
+        clear_feature_prefetch_queue();
+        if (acl_handle != HCI_CON_HANDLE_INVALID || hid_interrupt_ready) {
+            (void)bt_disconnect();
+        }
+    }
+    if (!stored_link_key_present) {
+        return bt_request_scan();
+    }
     return true;
 }
 
@@ -2068,6 +2332,7 @@ static void hci_packet_handler(uint8_t packet_type, uint16_t channel, uint8_t *p
                 // Apply fast interlaced page scan tuning after that reset.
                 gap_set_page_scan_activity(0x0012, 0x0012); // 11.25 ms
                 gap_set_page_scan_type(PAGE_SCAN_MODE_INTERLACED);
+                bt_blacklist_load();
                 stored_link_key_present = bt_has_stored_link_key();
                 if (stored_link_key_present) {
                     DS5_LOG("[BT] Stored controller found; staying in passive page scan\n");
@@ -2233,6 +2498,29 @@ static void hci_packet_handler(uint8_t packet_type, uint16_t channel, uint8_t *p
             const uint8_t status = hci_event_connection_complete_get_status(packet);
             if (status == 0) {
                 const hci_con_handle_t handle = hci_event_connection_complete_get_connection_handle(packet);
+                bd_addr_t conn_addr;
+                hci_event_connection_complete_get_bd_addr(packet, conn_addr);
+                if (
+                    !pairing_authorized_session
+                    && !pairing_window_active
+                    && bt_blacklist_contains(conn_addr)
+                ) {
+                    DS5_LOG(
+                        "[HCI] Late connection from blacklisted %s on handle=0x%04X; disconnecting\n",
+                        bd_addr_to_str(conn_addr),
+                        handle
+                    );
+                    if (note_acl_connected(handle)) {
+                        bd_addr_copy(current_device_addr, conn_addr);
+                        clear_outbound_inquiry_target();
+                        clear_acl_connection_pending();
+                        acl_disconnect_on_completion = false;
+                        (void)bt_disconnect();
+                    } else {
+                        (void)gap_disconnect(handle);
+                    }
+                    break;
+                }
                 if (!note_acl_connected(handle)) {
                     DS5_LOG("[HCI] Ignoring stale/duplicate ACL connection handle=0x%04X\n", handle);
                     gap_disconnect(handle);
@@ -2241,7 +2529,7 @@ static void hci_packet_handler(uint8_t packet_type, uint16_t channel, uint8_t *p
                 reset_signal_strength_session();
                 clear_acl_connection_pending();
                 device_found = false;
-                hci_event_connection_complete_get_bd_addr(packet, current_device_addr);
+                bd_addr_copy(current_device_addr, conn_addr);
                 gap_connectable_control(0);
                 gap_discoverable_control(0);
                 DS5_LOG("[HCI] ACL connected handle=0x%04X\n", handle);
@@ -2276,7 +2564,8 @@ static void hci_packet_handler(uint8_t packet_type, uint16_t channel, uint8_t *p
             hci_event_link_key_request_get_bd_addr(packet, addr);
             link_key_t link_key;
             link_key_type_t link_key_type;
-            bool link = gap_get_link_key_for_bd_addr(addr, link_key, &link_key_type);
+            bool link = !bt_blacklist_contains(addr)
+                && gap_get_link_key_for_bd_addr(addr, link_key, &link_key_type);
             if (link) {
                 DS5_LOG("[HCI] Link key request from %s, reply stored key type=%u\n", bd_addr_to_str(addr),
                        (unsigned int) link_key_type);
@@ -2818,6 +3107,14 @@ static void finish_hid_session_if_ready() {
         return;
     }
     if (connection_phase != BtConnectionPhase::HidOpening) {
+        return;
+    }
+    if (
+        pairing_authorized_session
+        && !bt_blacklist_remove(current_device_addr)
+    ) {
+        DS5_LOG("[BLACKLIST] Explicit pairing policy commit failed; disconnect controller\n");
+        (void)bt_disconnect();
         return;
     }
 
