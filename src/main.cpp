@@ -560,17 +560,8 @@ int main() {
     }
     cyw43_arch_gpio_put(CYW43_WL_GPIO_LED_PIN, false);
 
-    if (watchdog_caused_reboot()) {
+    if (watchdog_enable_caused_reboot()) {
         DS5_LOG("Rebooted by Watchdog!\n");
-        // Blink the LED three times after a crash reboot.
-        for (int i = 0;i < 6;i++) {
-            if (i % 2 == 0) {
-                cyw43_arch_gpio_put(CYW43_WL_GPIO_LED_PIN, true);
-            }else {
-                cyw43_arch_gpio_put(CYW43_WL_GPIO_LED_PIN, false);
-            }
-            sleep_ms(500);
-        }
     } else {
         DS5_LOG("Clean boot\n");
     }
@@ -581,31 +572,49 @@ int main() {
     companion_init();
 #endif
 
+    if (!audio_init()) {
+        DS5_LOG("Failed to initialize core 1 flash safety\n");
+        return 1;
+    }
+
     bt_init();
     bt_register_data_callback(on_bt_data);
-
-    audio_init();
 
     watchdog_enable(1000, true);
 
     while (1) {
         watchdog_update();
         cyw43_arch_poll();
+        watchdog_update();
         tud_task();
+        watchdog_update();
         interrupt_loop();
+        watchdog_update();
         usb_pm_poll();
+        watchdog_update();
         audio_loop();
-        button_check();
+        watchdog_update();
+        if (!audio_recent()) {
+            button_check();
+        }
+        watchdog_update();
         bt_lightbar_loop();
+        watchdog_update();
         bt_signal_strength_loop();
+        watchdog_update();
         bt_inquiry_loop();
+        watchdog_update();
         bt_connection_recovery_loop();
+        watchdog_update();
         bt_feature_prefetch_loop();
+        watchdog_update();
         bt_output_retry_loop();
         watchdog_update();
 #ifdef ENABLE_COMPANION
         companion_loop();
+        watchdog_update();
 #endif
         interrupt_loop();
+        watchdog_update();
     }
 }

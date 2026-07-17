@@ -64,6 +64,7 @@ add_executable(ds5-bridge
         src/controller_output_state.cpp
         src/haptics_test_signal.cpp
         src/output_scheduler.cpp
+        src/core1_flash_safety.cpp
         src/audio.cpp
         src/bt.cpp
 )
@@ -125,6 +126,9 @@ target_compile_definitions(ds5-bridge PRIVATE
         # BOOTSEL polling floats QSPI CSn briefly; flash_safe_execute() must
         # park core 1 while that happens.
         PICO_FLASH_ASSUME_CORE1_SAFE=0
+        # Bound each CYW43/BTstack service pass so connection-event bursts
+        # cannot starve TinyUSB, audio, BOOTSEL, or the watchdog.
+        PICO_BTSTACK_CYW43_MAX_HCI_PROCESS_LOOP_COUNT=4
         WDL_RESAMPLE_TYPE=float
         CYW43_PIO_CLOCK_DIV_INT=${CYW43_PIO_CLOCK_DIV_VALUE}
         SYS_CLOCK_KHZ=${SYS_CLOCK_KHZ_VALUE}

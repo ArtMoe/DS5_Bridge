@@ -61,7 +61,9 @@ struct audio_status {
     bool mic_usb_streaming;
 };
 
-void audio_init();
+// Starts core 1 and verifies that it reached the cooperative flash-safety
+// service boundary before Bluetooth can persist pairing keys.
+bool audio_init();
 void audio_loop();
 void audio_handle_bridge_audio_report(uint8_t const *report, uint16_t len);
 void audio_test_haptics_loop();

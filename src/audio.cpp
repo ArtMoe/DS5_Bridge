@@ -5,6 +5,7 @@
 
 #include "audio.h"
 #include "bt.h"
+#include "core1_flash_safety.h"
 #include "controller_packet_compositor.h"
 #include "controller_output_policy.h"
 #include "controller_output_state.h"
@@ -18,6 +19,7 @@
 #include "tusb.h"
 #include "usb.h"
 #include <algorithm>
+#include <atomic>
 #include <cstdio>
 #include <cstring>
 
@@ -27,6 +29,7 @@
 #include "pico/flash.h"
 #include "pico/multicore.h"
 #include "pico/platform.h"
+#include "pico/sem.h"
 #include "pico/time.h"
 #include "pico/util/queue.h"
 
@@ -134,6 +137,8 @@ static uint8_t packetCounter = 0;
 static bool plug_headset = false;
 static bool controller_state_ready = false;
 static bool audio_initialized = false;
+static semaphore_t core1_flash_init_done;
+static std::atomic_bool core1_flash_init_succeeded{false};
 static uint32_t last_audio_us = 0;
 static bool speaker_route_active = false;
 static bool speaker_route_headset = false;
@@ -2071,7 +2076,7 @@ void __not_in_flash_func(audio_loop)() {
     }
 }
 
-void audio_init() {
+bool audio_init() {
 #if DS5_AUDIO_DEBUG_ENABLED
     critical_section_init(&audio_debug_cs);
     audio_debug_cs_ready = true;
@@ -2085,8 +2090,19 @@ void audio_init() {
     queue_init(&mic_decode_fifo,sizeof(mic_decode_element),HOST_MIC_QUEUE_DEPTH);
     critical_section_init(&opus_cs);
     opus_cs_ready = true;
+    sem_init(&core1_flash_init_done, 0, 1);
+    core1_flash_init_succeeded.store(false, std::memory_order_relaxed);
     multicore_launch_core1_with_stack(core1_entry,audio_core1_stack,sizeof(audio_core1_stack));
+    if (!sem_acquire_timeout_ms(&core1_flash_init_done, 250)) {
+        DS5_LOG("[Audio] Core 1 flash-safety handshake timed out\n");
+        return false;
+    }
+    if (!core1_flash_init_succeeded.load(std::memory_order_acquire)) {
+        DS5_LOG("[Audio] Core 1 flash-safety initialization failed\n");
+        return false;
+    }
     audio_initialized = true;
+    return true;
 }
 
 static OpusEncoder *encoder;
@@ -2323,8 +2339,6 @@ static bool __not_in_flash_func(core1_process_speaker)() {
 }
 
 static void __not_in_flash_func(core1_entry)() {
-    flash_safe_execute_core_init();
-
     int error = 0;
     encoder = opus_encoder_create(48000,2,OPUS_APPLICATION_AUDIO,&error);
     if (error != OPUS_OK) {
@@ -2352,7 +2366,20 @@ static void __not_in_flash_func(core1_entry)() {
     uint32_t core1_speaker_us = 0;
     uint32_t core1_mic_us = 0;
 
+    // Publish readiness only after setup reaches the cooperative service loop.
+    // Core 0 must not request an XIP pause while core 1 is still initializing.
+    const bool flash_init_succeeded = flash_safe_execute_core_init();
+    core1_flash_init_succeeded.store(flash_init_succeeded, std::memory_order_release);
+    sem_release(&core1_flash_init_done);
+    if (!flash_init_succeeded) {
+        while (true) {
+            tight_loop_contents();
+        }
+    }
+
     while (true) {
+        core1_flash_safety_poll();
+
         const uint32_t speaker_start_us = time_us_32();
         const bool did_speaker = core1_process_speaker();
         const uint32_t mic_start_us = time_us_32();

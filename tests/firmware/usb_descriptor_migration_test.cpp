@@ -910,6 +910,87 @@ void assert_dualsense_feature_startup_is_paced(std::filesystem::path const &root
     }
 }
 
+void assert_watchdog_and_bootsel_flash_safety(std::filesystem::path const &root) {
+    const auto cmake = read_text(root / "CMakeLists.txt");
+    const auto audio_cpp = read_text(root / "src" / "audio.cpp");
+    const auto audio_h = read_text(root / "src" / "audio.h");
+    const auto flash_safety_cpp = read_text(root / "src" / "core1_flash_safety.cpp");
+    const auto main_cpp = read_text(root / "src" / "main.cpp");
+
+    if (
+        cmake.find("src/core1_flash_safety.cpp") == std::string::npos
+        || cmake.find("PICO_BTSTACK_CYW43_MAX_HCI_PROCESS_LOOP_COUNT=4")
+            == std::string::npos
+        || cmake.find("PICO_FLASH_ASSUME_CORE1_SAFE=0") == std::string::npos
+    ) {
+        throw std::runtime_error(
+            "Firmware build must bound CYW43 event bursts and retain multicore flash safety"
+        );
+    }
+
+    const auto core1_entry = audio_cpp.find("static void __not_in_flash_func(core1_entry)() {");
+    const auto decoder_ready = audio_cpp.find("mic_decoder = opus_decoder_create(", core1_entry);
+    const auto flash_ready = audio_cpp.find(
+        "const bool flash_init_succeeded = flash_safe_execute_core_init();",
+        core1_entry
+    );
+    const auto service_loop = audio_cpp.find("    while (true) {", flash_ready);
+    if (
+        audio_h.find("bool audio_init();") == std::string::npos
+        || audio_cpp.find("std::atomic_bool core1_flash_init_succeeded") == std::string::npos
+        || audio_cpp.find("sem_acquire_timeout_ms(&core1_flash_init_done, 250)")
+            == std::string::npos
+        || audio_cpp.find("sem_release(&core1_flash_init_done);") == std::string::npos
+        || audio_cpp.find("core1_flash_safety_poll();") == std::string::npos
+        || core1_entry == std::string::npos
+        || decoder_ready == std::string::npos
+        || flash_ready == std::string::npos
+        || service_loop == std::string::npos
+        || !(decoder_ready < flash_ready && flash_ready < service_loop)
+        || flash_safety_cpp.find(
+            "extern \"C\" flash_safety_helper_t *get_flash_safety_helper()"
+        ) == std::string::npos
+        || flash_safety_cpp.find("Core1FlashPauseRequested") == std::string::npos
+        || flash_safety_cpp.find("Core1FlashPausePaused") == std::string::npos
+    ) {
+        throw std::runtime_error(
+            "Core 1 must handshake and cooperatively park at a RAM-resident XIP-safe boundary"
+        );
+    }
+
+    const auto audio_init = main_cpp.find("if (!audio_init())");
+    const auto bt_init = main_cpp.find("bt_init();", audio_init);
+    const auto watchdog_start = main_cpp.find("watchdog_enable(1000, true);", bt_init);
+    const auto first_poll = main_cpp.find("cyw43_arch_poll();", watchdog_start);
+    const auto first_poll_feed = main_cpp.find("watchdog_update();", first_poll);
+    const auto next_usb_phase = main_cpp.find("tud_task();", first_poll);
+    const auto button_guard = main_cpp.find("if (!audio_recent())", first_poll_feed);
+    const auto button_check = main_cpp.find("button_check();", button_guard);
+    const std::string reboot_branch = extract_between(
+        main_cpp,
+        "if (watchdog_enable_caused_reboot()) {",
+        "\n    } else {"
+    );
+    if (
+        audio_init == std::string::npos
+        || bt_init == std::string::npos
+        || watchdog_start == std::string::npos
+        || !(audio_init < bt_init && bt_init < watchdog_start)
+        || first_poll == std::string::npos
+        || first_poll_feed == std::string::npos
+        || next_usb_phase == std::string::npos
+        || first_poll_feed > next_usb_phase
+        || button_guard == std::string::npos
+        || button_check == std::string::npos
+        || button_guard > button_check
+        || reboot_branch.find("sleep_ms(") != std::string::npos
+    ) {
+        throw std::runtime_error(
+            "Main-loop phases must remain watchdog-fed and BOOTSEL must yield to active audio"
+        );
+    }
+}
+
 void assert_bootsel_gestures_and_intentional_disconnects(std::filesystem::path const &root) {
     const auto button_cpp = read_text(root / "src" / "button_functions.cpp");
     const auto bt_cpp = read_text(root / "src" / "bt.cpp");
@@ -1083,6 +1164,7 @@ int main() {
         assert_bluetooth_pairing_and_reconnect_policy(source_root);
         assert_bluetooth_hid_recovery_and_encryption_watchdog(source_root);
         assert_dualsense_feature_startup_is_paced(source_root);
+        assert_watchdog_and_bootsel_flash_safety(source_root);
         assert_bootsel_gestures_and_intentional_disconnects(source_root);
         assert_host_rumble_passes_through_with_bounded_delivery(source_root);
 
