@@ -136,6 +136,7 @@
 #define ENCRYPTION_COMPLETION_TIMEOUT_US 2500000u
 #define SECURITY_PHASE_TIMEOUT_US 8000000u
 #define HID_OPENING_PHASE_TIMEOUT_US 8000000u
+#define HID_REMOTE_INTERRUPT_OPEN_TIMEOUT_US 10000000u
 #define HID_REMOTE_INTERRUPT_FOLLOWUP_TIMEOUT_US 1000000u
 #define AUTHENTICATION_COLLISION_RETRY_DELAY_US 250000u
 #define AUTHENTICATION_COLLISION_MAX_RETRIES 3u
@@ -322,6 +323,9 @@ static bool acl_connection_cancel_sent = false;
 static bool acl_disconnect_on_completion = false;
 static uint8_t current_device_page_scan_repetition_mode = 0;
 static uint16_t current_device_clock_offset = 0;
+static bool pairing_authorized_session = false;
+static bool pairing_link_key_required = false;
+static bool current_link_key_persisted = false;
 static hci_con_handle_t acl_handle = HCI_CON_HANDLE_INVALID;
 static uint16_t hid_control_cid;
 static uint16_t hid_interrupt_cid;
@@ -523,6 +527,9 @@ static bool begin_connection_attempt() {
         return false;
     }
     controller_disconnect_intent = BtControllerDisconnectIntentNone;
+    pairing_authorized_session = false;
+    pairing_link_key_required = false;
+    current_link_key_persisted = false;
     connection_phase = BtConnectionPhase::Connecting;
     connection_generation++;
     if (connection_generation == 0) {
@@ -559,6 +566,9 @@ static void fail_pending_connection_attempt() {
     ) {
         connection_phase = BtConnectionPhase::Listening;
         connection_phase_started_us = 0;
+        pairing_authorized_session = false;
+        pairing_link_key_required = false;
+        current_link_key_persisted = false;
         clear_encryption_completion();
         clear_authentication_retry();
     }
@@ -597,6 +607,9 @@ static bool begin_connection_disconnect() {
 static void reset_connection_session() {
     connection_phase = BtConnectionPhase::Listening;
     connection_phase_started_us = 0;
+    pairing_authorized_session = false;
+    pairing_link_key_required = false;
+    current_link_key_persisted = false;
     clear_encryption_completion();
     clear_authentication_retry();
 }
@@ -639,6 +652,59 @@ static bool bt_has_stored_link_key() {
     const bool has_key = gap_link_key_iterator_get_next(&iterator, addr, key, &type);
     gap_link_key_iterator_done(&iterator);
     return has_key;
+}
+
+static bool persist_notified_link_key(
+    uint8_t const *packet,
+    bd_addr_t addr,
+    bool explicit_pairing_session,
+    bool existing_link_is_secured
+) {
+    link_key_t notified_key;
+    memcpy(notified_key, packet + 8, LINK_KEY_LEN);
+
+    link_key_t stored_key;
+    link_key_type_t stored_type;
+    const bool had_stored_key =
+        gap_get_link_key_for_bd_addr(addr, stored_key, &stored_type);
+    const link_key_type_t notified_type =
+        static_cast<link_key_type_t>(packet[24]);
+    const link_key_type_t effective_type =
+        notified_type == CHANGED_COMBINATION_KEY
+        ? (had_stored_key ? stored_type : INVALID_LINK_KEY)
+        : notified_type;
+    const bool update_authorized =
+        explicit_pairing_session
+        || (
+            had_stored_key
+            && notified_type == CHANGED_COMBINATION_KEY
+            && existing_link_is_secured
+        );
+
+    bool key_has_material = false;
+    for (uint8_t byte : notified_key) {
+        key_has_material = key_has_material || byte != 0;
+    }
+    if (
+        !update_authorized
+        || !key_has_material
+        || effective_type == INVALID_LINK_KEY
+    ) {
+        return false;
+    }
+
+    const bool stored_matches =
+        had_stored_key
+        && memcmp(stored_key, notified_key, LINK_KEY_LEN) == 0
+        && stored_type == effective_type;
+    if (stored_matches) {
+        return true;
+    }
+
+    gap_store_link_key_for_bd_addr(addr, notified_key, effective_type);
+    return gap_get_link_key_for_bd_addr(addr, stored_key, &stored_type)
+        && memcmp(stored_key, notified_key, LINK_KEY_LEN) == 0
+        && stored_type == effective_type;
 }
 
 static void restore_passive_reconnect_scan() {
@@ -1624,6 +1690,17 @@ static void cancel_hid_channel_recovery_if_ready() {
     }
 }
 
+static uint32_t current_hid_opening_timeout_us() {
+    if (
+        hid_connection_initiator == HidConnectionInitiator::Remote
+        && hid_control_ready
+        && !hid_interrupt_ready
+    ) {
+        return HID_REMOTE_INTERRUPT_OPEN_TIMEOUT_US;
+    }
+    return HID_OPENING_PHASE_TIMEOUT_US;
+}
+
 static void service_disconnect_recovery(uint32_t now) {
     if (
         disconnect_retry_waiting
@@ -1716,10 +1793,9 @@ void bt_connection_recovery_loop() {
 
     if (
         connection_phase == BtConnectionPhase::HidOpening
-        && hid_connection_initiator != HidConnectionInitiator::Remote
         && connection_phase_started_us != 0
         && static_cast<uint32_t>(now - connection_phase_started_us)
-            >= HID_OPENING_PHASE_TIMEOUT_US
+            >= current_hid_opening_timeout_us()
     ) {
         DS5_LOG("[L2CAP] HID opening phase timed out; recycle ACL\n");
         bt_disconnect();
@@ -2046,6 +2122,15 @@ static void hci_packet_handler(uint8_t packet_type, uint16_t channel, uint8_t *p
                 }
                 DS5_LOG("[HCI] Connecting to %s...\n", bd_addr_to_str(current_device_addr));
                 new_pair = true;
+                link_key_t existing_key;
+                link_key_type_t existing_key_type;
+                current_link_key_persisted = gap_get_link_key_for_bd_addr(
+                    current_device_addr,
+                    existing_key,
+                    &existing_key_type
+                );
+                pairing_authorized_session = true;
+                pairing_link_key_required = !current_link_key_persisted;
                 acl_connection_outbound = true;
                 acl_disconnect_on_completion = false;
                 mark_acl_connection_pending();
@@ -2219,12 +2304,35 @@ static void hci_packet_handler(uint8_t packet_type, uint16_t channel, uint8_t *p
         case HCI_EVENT_LINK_KEY_NOTIFICATION: {
             bd_addr_t addr;
             hci_event_link_key_request_get_bd_addr(packet, addr);
-            if (bd_addr_cmp(addr, current_device_addr) == 0) {
-                stored_link_key_present = true;
-                gap_discoverable_control(0);
-                gap_set_bondable_mode(0);
-                DS5_LOG("[HCI] Link key stored for %s\n", bd_addr_to_str(addr));
+            const bool current_controller =
+                bd_addr_cmp(addr, current_device_addr) == 0
+                && connection_phase != BtConnectionPhase::Listening
+                && connection_phase != BtConnectionPhase::Disconnecting;
+            if (!current_controller) {
+                DS5_LOG("[HCI] Ignore link key notification from unowned controller %s\n",
+                        bd_addr_to_str(addr));
+                break;
             }
+
+            current_link_key_persisted = persist_notified_link_key(
+                packet,
+                addr,
+                pairing_authorized_session,
+                current_link_security_ready(acl_handle)
+            );
+            stored_link_key_present = bt_has_stored_link_key();
+            if (!current_link_key_persisted) {
+                DS5_LOG("[HCI] Reject non-durable or unauthorized link key for %s\n",
+                        bd_addr_to_str(addr));
+                bt_disconnect();
+                break;
+            }
+
+            pairing_link_key_required = false;
+            gap_discoverable_control(0);
+            gap_set_bondable_mode(0);
+            DS5_LOG("[HCI] Link key persisted for %s\n", bd_addr_to_str(addr));
+            finish_hid_session_if_ready();
             break;
         }
 
@@ -2319,6 +2427,15 @@ static void hci_packet_handler(uint8_t packet_type, uint16_t channel, uint8_t *p
                 }
                 bd_addr_copy(current_device_addr, addr);
                 clear_outbound_inquiry_target();
+                link_key_t existing_key;
+                link_key_type_t existing_key_type;
+                current_link_key_persisted = gap_get_link_key_for_bd_addr(
+                    current_device_addr,
+                    existing_key,
+                    &existing_key_type
+                );
+                pairing_authorized_session = false;
+                pairing_link_key_required = !current_link_key_persisted;
                 acl_connection_outbound = false;
                 acl_disconnect_on_completion = false;
                 mark_acl_connection_pending();
@@ -2672,6 +2789,10 @@ static bool requeue_managed_rumble_on_send_failure(
 
 static void finish_hid_session_if_ready() {
     if (!hid_control_ready || !hid_interrupt_ready) {
+        return;
+    }
+    if (pairing_link_key_required && !current_link_key_persisted) {
+        DS5_LOG("[HCI] HID ready; wait for durable link key before publishing controller\n");
         return;
     }
     if (connection_phase == BtConnectionPhase::Ready) {

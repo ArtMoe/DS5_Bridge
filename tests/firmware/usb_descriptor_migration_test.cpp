@@ -869,6 +869,43 @@ void assert_bluetooth_pairing_and_reconnect_policy(std::filesystem::path const &
             "RSSI sampling must remain input-idle, audio-safe, and bounded per idle epoch"
         );
     }
+
+    const std::string link_key_notification = extract_between(
+        bt_cpp,
+        "case HCI_EVENT_LINK_KEY_NOTIFICATION: {",
+        "\n        case HCI_EVENT_AUTHENTICATION_COMPLETE:"
+    );
+    const std::string finish_hid = extract_between(
+        bt_cpp,
+        "static void finish_hid_session_if_ready() {",
+        "\n}\n\nstatic void l2cap_packet_handler"
+    );
+    if (
+        bt_cpp.find("static bool persist_notified_link_key(")
+            == std::string::npos
+        || bt_cpp.find("gap_store_link_key_for_bd_addr(addr, notified_key, effective_type);")
+            == std::string::npos
+        || bt_cpp.find("memcmp(stored_key, notified_key, LINK_KEY_LEN) == 0")
+            == std::string::npos
+        || bt_cpp.find("const bool update_authorized =")
+            == std::string::npos
+        || bt_cpp.find("notified_type == CHANGED_COMBINATION_KEY")
+            == std::string::npos
+        || bt_cpp.find("&& existing_link_is_secured")
+            == std::string::npos
+        || link_key_notification.find("current_link_key_persisted =")
+            == std::string::npos
+        || link_key_notification.find("finish_hid_session_if_ready();")
+            == std::string::npos
+        || finish_hid.find("pairing_link_key_required && !current_link_key_persisted")
+            == std::string::npos
+        || finish_hid.find("wait for durable link key before publishing controller")
+            == std::string::npos
+    ) {
+        throw std::runtime_error(
+            "First-time Bluetooth pairing must byte-verify its durable link key before publishing HID"
+        );
+    }
 }
 
 void assert_bluetooth_hid_recovery_and_encryption_watchdog(std::filesystem::path const &root) {
@@ -883,6 +920,8 @@ void assert_bluetooth_hid_recovery_and_encryption_watchdog(std::filesystem::path
         recovery_block.find("ENCRYPTION_COMPLETION_TIMEOUT_US") == std::string::npos
         || recovery_block.find("SECURITY_PHASE_TIMEOUT_US") == std::string::npos
         || recovery_block.find("HID_REMOTE_INTERRUPT_FOLLOWUP_TIMEOUT_US")
+            == std::string::npos
+        || recovery_block.find("current_hid_opening_timeout_us()")
             == std::string::npos
         || recovery_block.find("hid_connection_initiator == HidConnectionInitiator::Remote")
             == std::string::npos
