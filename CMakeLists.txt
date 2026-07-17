@@ -67,6 +67,7 @@ add_executable(ds5-bridge
         src/core1_flash_safety.cpp
         src/audio.cpp
         src/bt.cpp
+        src/firmware_log.cpp
 )
 
 # Cockos WDLResampler
@@ -243,6 +244,7 @@ target_link_libraries(ds5-bridge
         pico_multicore
         hardware_watchdog
         hardware_timer
+        pico_rand
         pico_btstack_classic
         pico_cyw43_arch_poll
         pico_btstack_cyw43

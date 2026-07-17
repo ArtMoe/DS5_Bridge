@@ -36,6 +36,9 @@ int main() {
         const std::string cmake = read_text(root / "CMakeLists.txt");
         const std::string main = read_text(root / "src" / "main.cpp");
         const std::string presets = read_text(root / "CMakePresets.json");
+        const std::string utils = read_text(root / "src" / "utils.h");
+        const std::string firmware_log =
+            read_text(root / "src" / "firmware_log.cpp");
 
         require_contains(
             cmake,
@@ -81,6 +84,41 @@ int main() {
             presets,
             "\"WAVESHARE_RP2350B_PLUS_W_BUILD\": \"OFF\"",
             "The UART preset must explicitly target the Pico 2 W"
+        );
+        require_contains(
+            cmake,
+            "src/firmware_log.cpp",
+            "The retained firmware logger must be linked"
+        );
+        require_contains(
+            utils,
+            "firmware_log_printf(__VA_ARGS__)",
+            "Firmware logs must append to the nonblocking retained logger"
+        );
+        require_contains(
+            utils,
+            "firmware_log_hexdump((data), (size))",
+            "Firmware hexdumps must avoid direct UART writes"
+        );
+        require_contains(
+            firmware_log,
+            "constexpr uint32_t kFirmwareLogRingSize = 8u * 1024u;",
+            "The retained log ring must preserve Kitsune Input's RAM-safe size"
+        );
+        require_contains(
+            firmware_log,
+            "while (written < copied && uart_is_writable(uart_default))",
+            "UART draining must be bounded by currently writable FIFO space"
+        );
+        require_contains(
+            firmware_log,
+            "hci_dump_enable_packet_log(false);",
+            "The BTstack sink must exclude raw pairing packets"
+        );
+        require_contains(
+            main,
+            "firmware_log_flush_live();",
+            "The main loop must service the nonblocking UART drain"
         );
 
         std::cout << "Diagnostics configuration checks passed.\n";

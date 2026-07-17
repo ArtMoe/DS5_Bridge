@@ -19,6 +19,7 @@
 #include "controller_report.h"
 #include "dualsense_input_decoder.h"
 #include "dualsense_output.h"
+#include "firmware_log.h"
 #include "persona/ds4_persona.h"
 #include "persona/dualsense_persona.h"
 #include "persona/host_persona.h"
@@ -552,6 +553,7 @@ int main() {
 #endif
 
     board_init();
+    firmware_log_init();
     usb_device_stack_init_disconnected();
 #if DS5_DEBUG_LOGS_ENABLED
     // TinyUSB's board_init() configures its UART at 115200. Reinitialize stdio
@@ -559,6 +561,7 @@ int main() {
     stdio_init_all();
 #endif
     board_init_after_tusb();
+    firmware_log_init_btstack_sink();
 
     if (cyw43_arch_init()) {
         DS5_LOG("Failed to initialize CYW43\n");
@@ -593,6 +596,7 @@ int main() {
         cyw43_arch_poll();
         watchdog_update();
         tud_task();
+        firmware_log_flush_live();
         watchdog_update();
         interrupt_loop();
         watchdog_update();
