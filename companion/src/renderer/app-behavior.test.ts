@@ -166,6 +166,23 @@ describe('renderer behavior guards', () => {
     expect(appSource).toContain('window.bridge.setShowBatteryPercentTrayIcon(!snapshot.settings.showBatteryPercentTrayIcon)');
   });
 
+  it('distinguishes active charging from connected external power', () => {
+    expect(appSource).toContain(
+      'function isChargingPowerState(rawPowerState: number | undefined): boolean {\n'
+      + '  return rawPowerState === 0x01;\n'
+      + '}'
+    );
+    expect(appSource).toContain(
+      'function isExternalPowerState(rawPowerState: number | undefined): boolean {\n'
+      + '  return rawPowerState === 0x01 || rawPowerState === 0x02;\n'
+      + '}'
+    );
+    expect(appSource).toContain("batteryCharging ? 'Charging' : 'Connected to power'");
+    expect(appSource).toContain('className="device-power-indicator"');
+    expect(appSource).toContain('connected && !batteryExternalPower && batteryPercent > 0');
+    expect(stylesSource).toContain('.device-power-indicator');
+  });
+
   it('keeps the haptics test button actionable instead of relabeling it as game-active', () => {
     const start = appSource.indexOf('<button className="primary-action" type="button" disabled={activeFeedbackTestUnavailable}');
     expect(start).toBeGreaterThanOrEqual(0);

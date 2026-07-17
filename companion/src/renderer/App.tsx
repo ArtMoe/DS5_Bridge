@@ -1764,6 +1764,10 @@ function batteryTone(percent: number | null | undefined): 'healthy' | 'warning' 
 }
 
 function isChargingPowerState(rawPowerState: number | undefined): boolean {
+  return rawPowerState === 0x01;
+}
+
+function isExternalPowerState(rawPowerState: number | undefined): boolean {
   return rawPowerState === 0x01 || rawPowerState === 0x02;
 }
 
@@ -3546,6 +3550,10 @@ export function App() {
   const batteryPercentLabel = batteryLabel(snapshot);
   const batteryLevelTone = batteryTone(snapshot?.status?.batteryPercent);
   const batteryCharging = isChargingPowerState(snapshot?.status?.rawPowerState);
+  const batteryExternalPower = isExternalPowerState(snapshot?.status?.rawPowerState);
+  const batteryPowerLabel = batteryExternalPower
+    ? batteryCharging ? 'Charging' : 'Connected to power'
+    : null;
   const batterySegmentCount = connected
     ? batteryPercent >= 67
       ? 3
@@ -3558,7 +3566,7 @@ export function App() {
   const batteryChargingSegment = connected && batteryCharging && batteryPercent < 100
     ? Math.min(2, batterySegmentCount)
     : -1;
-  const batteryCritical = connected && !batteryCharging && batteryPercent > 0 && batteryPercent <= 20;
+  const batteryCritical = connected && !batteryExternalPower && batteryPercent > 0 && batteryPercent <= 20;
   const statusTone = personaTransitionActive
     ? 'warn'
     : connected
@@ -6475,6 +6483,15 @@ export function App() {
                   </span>
                 )}
                 <span>{sidebarBatteryLabel}</span>
+                {batteryPowerLabel && (
+                  <span
+                    className="device-power-indicator"
+                    title={batteryPowerLabel}
+                    aria-label={batteryPowerLabel}
+                  >
+                    <Zap size={13} stroke={2} aria-hidden="true" />
+                  </span>
+                )}
               </div>
             </div>
           </div>

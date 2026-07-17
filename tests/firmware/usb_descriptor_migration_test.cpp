@@ -1508,6 +1508,25 @@ void assert_host_rumble_passes_through_with_bounded_delivery(
     }
 }
 
+void assert_dualsense_battery_buckets_preserve_power_state(
+    std::filesystem::path const &root
+) {
+    const auto decoder = read_text(root / "src" / "dualsense_input_decoder.cpp");
+    const auto companion = read_text(root / "src" / "companion.cpp");
+    constexpr auto midpoint_formula = "battery == 10 ? 100 : battery * 10 + 5";
+
+    if (
+        decoder.find(midpoint_formula) == std::string::npos
+        || companion.find(midpoint_formula) == std::string::npos
+        || decoder.find("raw_power_state == 0x02") != std::string::npos
+        || companion.find("raw_power_state == 0x02") != std::string::npos
+    ) {
+        throw std::runtime_error(
+            "DualSense battery buckets must map to midpoint percentages independently of charging or external-power state"
+        );
+    }
+}
+
 } // namespace
 
 int main() {
@@ -1534,6 +1553,7 @@ int main() {
         assert_watchdog_and_bootsel_flash_safety(source_root);
         assert_bootsel_gestures_and_intentional_disconnects(source_root);
         assert_host_rumble_passes_through_with_bounded_delivery(source_root);
+        assert_dualsense_battery_buckets_preserve_power_state(source_root);
 
         if (bcd_device != kExpectedUsbDeviceRevision) {
             std::cerr << "USB bcdDevice changed unexpectedly. Expected 0x" << std::hex

@@ -1534,10 +1534,8 @@ void get_battery(uint8_t &battery_percent, uint8_t &raw_power_state) {
 
     const uint8_t battery = report[52] & 0x0F;
     raw_power_state = (report[52] >> 4) & 0x0F;
-    if (raw_power_state == 0x02) {
-        battery_percent = 100;
-    } else if (battery <= 10) {
-        battery_percent = battery * 10;
+    if (battery <= 10) {
+        battery_percent = static_cast<uint8_t>(battery == 10 ? 100 : battery * 10 + 5);
     }
 }
 

@@ -1013,7 +1013,7 @@ void dualsense_decoder_extracts_normalized_controller_state() {
     EXPECT_TRUE(state.home);
     EXPECT_TRUE(state.touchpad);
     EXPECT_TRUE(state.edge_left_paddle);
-    EXPECT_EQ(state.battery_percent, 70);
+    EXPECT_EQ(state.battery_percent, 75);
     EXPECT_TRUE(state.headset_plugged);
     EXPECT_TRUE(state.microphone_muted);
     EXPECT_TRUE(state.motion_valid);
@@ -1034,6 +1034,31 @@ void dualsense_decoder_extracts_normalized_controller_state() {
     EXPECT_EQ(state.touch_points[1].y, 0);
     EXPECT_EQ(state.dualsense_report_len, kDualSenseUsbInputReportSize);
     EXPECT_EQ(state.dualsense_report[7], report[7]);
+}
+
+void dualsense_decoder_preserves_valid_battery_bucket_across_power_states() {
+    auto report = sample_dualsense_input_report();
+    BridgeControllerState state{};
+
+    report[52] = 0x18;
+    EXPECT_TRUE(dualsense_decode_usb_input_report(report.data(), report.size(), state));
+    EXPECT_EQ(state.battery_percent, 85);
+    EXPECT_EQ(state.raw_power_state, 1);
+
+    report[52] = 0x28;
+    EXPECT_TRUE(dualsense_decode_usb_input_report(report.data(), report.size(), state));
+    EXPECT_EQ(state.battery_percent, 85);
+    EXPECT_EQ(state.raw_power_state, 2);
+
+    report[52] = 0x2a;
+    EXPECT_TRUE(dualsense_decode_usb_input_report(report.data(), report.size(), state));
+    EXPECT_EQ(state.battery_percent, 100);
+    EXPECT_EQ(state.raw_power_state, 2);
+
+    report[52] = 0x2f;
+    EXPECT_TRUE(dualsense_decode_usb_input_report(report.data(), report.size(), state));
+    EXPECT_EQ(state.battery_percent, 0xff);
+    EXPECT_EQ(state.raw_power_state, 2);
 }
 
 void dualsense_persona_preserves_native_report_bytes() {
@@ -1313,6 +1338,7 @@ std::vector<TestCase> tests{
     {"haptics test signal drives left and right actuators opposite phase", haptics_test_signal_drives_left_and_right_actuators_opposite_phase},
     {"haptics test signal allows carrier paced packets without wall clock gap", haptics_test_signal_allows_carrier_paced_packets_without_wall_clock_gap},
     {"dualsense decoder extracts normalized controller state", dualsense_decoder_extracts_normalized_controller_state},
+    {"dualsense decoder preserves valid battery bucket across power states", dualsense_decoder_preserves_valid_battery_bucket_across_power_states},
     {"dualsense persona preserves native report bytes", dualsense_persona_preserves_native_report_bytes},
     {"xusb360 persona maps standard gamepad fields", xusb360_persona_maps_standard_gamepad_fields},
     {"xusb360 rumble decodes to ds5 classic rumble payload", xusb360_rumble_decodes_to_ds5_classic_rumble_payload},

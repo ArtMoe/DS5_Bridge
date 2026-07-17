@@ -1179,6 +1179,14 @@ button {
   font-weight: 650;
 }
 
+.device-power-indicator {
+  flex: 0 0 auto;
+  display: inline-grid;
+  place-items: center;
+  color: var(--success);
+  line-height: 0;
+}
+
 .battery-icon {
   --battery-color: var(--success);
   position: relative;
