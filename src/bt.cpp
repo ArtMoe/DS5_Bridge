@@ -1720,6 +1720,30 @@ static void set_trigger_vibration(uint8_t *trigger, uint8_t position, uint8_t am
     trigger[9] = frequency;
 }
 
+static uint8_t adaptive_trigger_motor_power_for_intensity(uint8_t intensity_percent) {
+    if (intensity_percent == 0 || intensity_percent >= 100) {
+        return 0;
+    }
+    const uint8_t clamped = intensity_percent > 100 ? 100 : intensity_percent;
+    const uint8_t reduction = static_cast<uint8_t>(((100 - clamped) * 8 + 50) / 100);
+    return std::min<uint8_t>(reduction, 7);
+}
+
+static void queue_adaptive_trigger_state_report(uint8_t *report, uint8_t motor_power) {
+    uint8_t *payload = report + 3;
+    payload[OUTPUT_PAYLOAD_VALID_FLAG1_OFFSET] |= DS_OUTPUT_VALID_FLAG1_MOTOR_POWER_LEVEL_ENABLE;
+    payload[OUTPUT_PAYLOAD_TRIGGER_POWER_OFFSET] = motor_power;
+    audio_set_adaptive_trigger_state(
+        payload + DS_TRIGGER_EFFECT_RIGHT_OFFSET,
+        (payload[OUTPUT_PAYLOAD_VALID_FLAG0_OFFSET] & DS_OUTPUT_VALID_FLAG0_RIGHT_TRIGGER_EFFECT) != 0,
+        payload + DS_TRIGGER_EFFECT_LEFT_OFFSET,
+        (payload[OUTPUT_PAYLOAD_VALID_FLAG0_OFFSET] & DS_OUTPUT_VALID_FLAG0_LEFT_TRIGGER_EFFECT) != 0,
+        motor_power,
+        true
+    );
+    enqueue_feedback_state_output(report, DS_OUTPUT_REPORT_BT_SIZE, OutputReasonStateOnly);
+}
+
 static void reset_lightbar_setup() {
     if (hid_interrupt_cid == 0) {
         return;
@@ -1764,7 +1788,10 @@ void bt_set_adaptive_trigger_effect(uint8_t mode, uint8_t intensity_percent, uin
     if (target == DS_TRIGGER_TARGET_RIGHT || target == DS_TRIGGER_TARGET_BOTH) {
         apply_effect(right_trigger);
     }
-    bt_write(report, sizeof(report));
+    queue_adaptive_trigger_state_report(
+        report,
+        adaptive_trigger_motor_power_for_intensity(intensity_percent)
+    );
 }
 
 static void set_custom_trigger_effect(
@@ -1821,7 +1848,7 @@ void bt_set_custom_adaptive_trigger_effects(
         ? set_custom_trigger_effect(left_trigger, left_mode, left_start_percent, left_wall_percent, left_force_percent)
         : set_trigger_off(left_trigger);
 
-    bt_write(report, sizeof(report));
+    queue_adaptive_trigger_state_report(report, 0);
 }
 
 void bt_set_custom_adaptive_trigger_effect(

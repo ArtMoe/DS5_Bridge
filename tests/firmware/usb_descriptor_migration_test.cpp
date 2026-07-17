@@ -1680,6 +1680,48 @@ void assert_host_rumble_passes_through_with_bounded_delivery(
     }
 }
 
+void assert_companion_trigger_tests_survive_continuous_audio(
+    std::filesystem::path const &root
+) {
+    const auto bt_cpp = read_text(root / "src" / "bt.cpp");
+    const std::string state_submit = extract_between(
+        bt_cpp,
+        "static void queue_adaptive_trigger_state_report",
+        "\n}\n\nstatic void reset_lightbar_setup"
+    );
+    const std::string standard_test = extract_between(
+        bt_cpp,
+        "void bt_set_adaptive_trigger_effect",
+        "\n}\n\nstatic void set_custom_trigger_effect"
+    );
+    const std::string custom_test = extract_between(
+        bt_cpp,
+        "void bt_set_custom_adaptive_trigger_effects",
+        "\n}\n\nvoid bt_set_custom_adaptive_trigger_effect("
+    );
+
+    if (
+        state_submit.find("DS_OUTPUT_VALID_FLAG1_MOTOR_POWER_LEVEL_ENABLE")
+            == std::string::npos
+        || state_submit.find("audio_set_adaptive_trigger_state")
+            == std::string::npos
+        || state_submit.find("enqueue_feedback_state_output")
+            == std::string::npos
+        || standard_test.find("adaptive_trigger_motor_power_for_intensity")
+            == std::string::npos
+        || standard_test.find("queue_adaptive_trigger_state_report")
+            == std::string::npos
+        || standard_test.find("bt_write(") != std::string::npos
+        || custom_test.find("queue_adaptive_trigger_state_report(report, 0)")
+            == std::string::npos
+        || custom_test.find("bt_write(") != std::string::npos
+    ) {
+        throw std::runtime_error(
+            "Companion trigger tests must update the audio-carried output state and use the bounded feedback queue"
+        );
+    }
+}
+
 void assert_dualsense_battery_buckets_preserve_power_state(
     std::filesystem::path const &root
 ) {
@@ -1726,6 +1768,7 @@ int main() {
         assert_watchdog_and_bootsel_flash_safety(source_root);
         assert_bootsel_gestures_and_intentional_disconnects(source_root);
         assert_host_rumble_passes_through_with_bounded_delivery(source_root);
+        assert_companion_trigger_tests_survive_continuous_audio(source_root);
         assert_dualsense_battery_buckets_preserve_power_state(source_root);
 
         if (bcd_device != kExpectedUsbDeviceRevision) {
