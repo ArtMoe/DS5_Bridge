@@ -27,6 +27,7 @@
 #include "hardware/vreg.h"
 #include "hardware/watchdog.h"
 #include "pico/cyw43_arch.h"
+#include "pico/stdlib.h"
 #include "pico/time.h"
 #ifdef ENABLE_COMPANION
 #include "companion.h"
@@ -552,6 +553,11 @@ int main() {
 
     board_init();
     usb_device_stack_init_disconnected();
+#if DS5_DEBUG_LOGS_ENABLED
+    // TinyUSB's board_init() configures its UART at 115200. Reinitialize stdio
+    // after the custom USB stack so diagnostic builds use the configured baud.
+    stdio_init_all();
+#endif
     board_init_after_tusb();
 
     if (cyw43_arch_init()) {

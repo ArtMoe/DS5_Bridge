@@ -34,6 +34,7 @@ int main() {
     try {
         const std::filesystem::path root = DS5_SOURCE_ROOT;
         const std::string cmake = read_text(root / "CMakeLists.txt");
+        const std::string main = read_text(root / "src" / "main.cpp");
         const std::string presets = read_text(root / "CMakePresets.json");
 
         require_contains(
@@ -45,6 +46,16 @@ int main() {
             cmake,
             "PICO_STACK_SIZE=4096",
             "Diagnostic logging must retain the larger firmware stack"
+        );
+        require_contains(
+            main,
+            "#if DS5_DEBUG_LOGS_ENABLED",
+            "The debug build must override TinyUSB's board-level UART default"
+        );
+        require_contains(
+            main,
+            "stdio_init_all();",
+            "The debug build must reinitialize stdio at the configured UART baud"
         );
         require_contains(
             presets,
