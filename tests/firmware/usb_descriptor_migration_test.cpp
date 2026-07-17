@@ -785,6 +785,52 @@ void assert_bluetooth_pairing_and_reconnect_policy(std::filesystem::path const &
     ) {
         throw std::runtime_error("Bluetooth pairing window, link-loss timing, or BTstack-owned incoming ACL policy regressed");
     }
+
+    const std::string inquiry_loop = extract_between(
+        bt_cpp,
+        "void bt_inquiry_loop() {",
+        "\n}\n\nint bt_init()"
+    );
+    const std::string connection_complete = extract_between(
+        bt_cpp,
+        "case HCI_EVENT_CONNECTION_COMPLETE: {",
+        "\n        case HCI_EVENT_LINK_KEY_REQUEST:"
+    );
+    const std::string disconnect = extract_between(
+        bt_cpp,
+        "bool bt_disconnect_with_intent",
+        "\n}\n\nbool bt_disconnect()"
+    );
+    if (
+        bt_cpp.find("static void service_acl_connection_cancel()") == std::string::npos
+        || bt_cpp.find("hci_send_cmd(&hci_create_connection_cancel, current_device_addr)")
+            == std::string::npos
+        || bt_cpp.find("hci_event_inquiry_result_get_page_scan_repetition_mode(packet)")
+            == std::string::npos
+        || bt_cpp.find("hci_event_inquiry_result_with_rssi_get_clock_offset(packet)")
+            == std::string::npos
+        || bt_cpp.find("hci_event_extended_inquiry_response_get_clock_offset(packet)")
+            == std::string::npos
+        || bt_cpp.find("(current_device_clock_offset & 0x7FFFu) | 0x8000u")
+            == std::string::npos
+        || bt_cpp.find("current_device_page_scan_repetition_mode,\n                             0,\n                             valid_clock_offset")
+            == std::string::npos
+        || inquiry_loop.find("acl_connection_cancel_requested = true;") == std::string::npos
+        || inquiry_loop.find("acl_disconnect_on_completion = true;") == std::string::npos
+        || inquiry_loop.find("clear_acl_connection_pending();\n        fail_pending_connection_attempt();")
+            != std::string::npos
+        || connection_complete.find("if (acl_disconnect_on_completion)") == std::string::npos
+        || connection_complete.find(
+            "ACL completed after cancellation; disconnect before security setup"
+        ) == std::string::npos
+        || disconnect.find("connection_phase == BtConnectionPhase::Disconnecting")
+            == std::string::npos
+        || disconnect.find("&& acl_handle != HCI_CON_HANDLE_INVALID") == std::string::npos
+    ) {
+        throw std::runtime_error(
+            "Pending ACL and disconnect transactions must retain ownership until their terminal events"
+        );
+    }
 }
 
 void assert_bluetooth_hid_recovery_and_encryption_watchdog(std::filesystem::path const &root) {
