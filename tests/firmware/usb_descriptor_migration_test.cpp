@@ -887,6 +887,10 @@ void assert_bluetooth_pairing_and_reconnect_policy(std::filesystem::path const &
             == std::string::npos
         || bt_cpp.find("memcmp(stored_key, notified_key, LINK_KEY_LEN) == 0")
             == std::string::npos
+        || bt_cpp.find("gap_drop_link_key_for_bd_addr(addr);")
+            == std::string::npos
+        || bt_cpp.find("gap_store_link_key_for_bd_addr(addr, prior_key, prior_type);")
+            == std::string::npos
         || bt_cpp.find("const bool update_authorized =")
             == std::string::npos
         || bt_cpp.find("notified_type == CHANGED_COMBINATION_KEY")

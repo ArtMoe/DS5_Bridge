@@ -701,10 +701,29 @@ static bool persist_notified_link_key(
         return true;
     }
 
+    link_key_t prior_key;
+    link_key_type_t prior_type = INVALID_LINK_KEY;
+    if (had_stored_key) {
+        memcpy(prior_key, stored_key, LINK_KEY_LEN);
+        prior_type = stored_type;
+    }
     gap_store_link_key_for_bd_addr(addr, notified_key, effective_type);
-    return gap_get_link_key_for_bd_addr(addr, stored_key, &stored_type)
+    const bool persisted =
+        gap_get_link_key_for_bd_addr(addr, stored_key, &stored_type)
         && memcmp(stored_key, notified_key, LINK_KEY_LEN) == 0
         && stored_type == effective_type;
+    if (persisted) {
+        return true;
+    }
+
+    // Fail closed. A first-time partial write must not enable passive scan on
+    // reboot, while a failed rotation should restore the previously verified
+    // key instead of stranding an otherwise valid bond.
+    gap_drop_link_key_for_bd_addr(addr);
+    if (had_stored_key) {
+        gap_store_link_key_for_bd_addr(addr, prior_key, prior_type);
+    }
+    return false;
 }
 
 static void restore_passive_reconnect_scan() {
