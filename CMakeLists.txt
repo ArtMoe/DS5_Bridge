@@ -200,6 +200,8 @@ if(DS5_ENABLE_FIRMWARE_LOGS)
     target_compile_definitions(ds5-bridge PRIVATE
             DS5_ENABLE_DEBUG_LOGS
             DS5_DEBUG_LOGS_ENABLED=1
+            PICO_DEFAULT_UART_BAUD_RATE=921600
+            PICO_STACK_SIZE=4096
     )
 endif()
 
