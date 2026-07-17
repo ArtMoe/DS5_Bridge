@@ -760,17 +760,21 @@ void assert_bluetooth_pairing_and_reconnect_policy(std::filesystem::path const &
     );
     const auto page_activity = working_block.find("gap_set_page_scan_activity(0x0012, 0x0012);");
     const auto page_type = working_block.find("gap_set_page_scan_type(PAGE_SCAN_MODE_INTERLACED);");
+    const auto pairing_recovery =
+        working_block.find("recover_pairing_transaction_on_boot();");
     const auto stored_key = working_block.find("stored_link_key_present = bt_has_stored_link_key();");
     const auto passive_scan = working_block.find("restore_passive_reconnect_scan();");
     const auto first_pair = working_block.find("(void)bt_request_scan();");
     if (
         page_activity == std::string::npos
         || page_type == std::string::npos
+        || pairing_recovery == std::string::npos
         || stored_key == std::string::npos
         || passive_scan == std::string::npos
         || first_pair == std::string::npos
         || page_activity > page_type
-        || page_type > stored_key
+        || page_type > pairing_recovery
+        || pairing_recovery > stored_key
     ) {
         throw std::runtime_error("Bluetooth page-scan tuning must be applied after HCI reset before passive reconnect or first pairing");
     }
@@ -829,6 +833,17 @@ void assert_bluetooth_pairing_and_reconnect_policy(std::filesystem::path const &
         "bool bt_disconnect_with_intent",
         "\n}\n\nbool bt_disconnect()"
     );
+    const std::string explicit_pairing = extract_between(
+        bt_cpp,
+        "case GAP_EVENT_INQUIRY_COMPLETE:",
+        "\n        case HCI_EVENT_COMMAND_STATUS:"
+    );
+    const auto transaction_stage =
+        explicit_pairing.find("stage_pairing_transaction(");
+    const auto prior_key_drop =
+        explicit_pairing.find("gap_drop_link_key_for_bd_addr(current_device_addr);");
+    const auto create_connection =
+        explicit_pairing.find("&hci_create_connection");
     if (
         bt_cpp.find("static void service_acl_connection_cancel()") == std::string::npos
         || bt_cpp.find("hci_send_cmd(&hci_create_connection_cancel, current_device_addr)")
@@ -841,8 +856,16 @@ void assert_bluetooth_pairing_and_reconnect_policy(std::filesystem::path const &
             == std::string::npos
         || bt_cpp.find("(current_device_clock_offset & 0x7FFFu) | 0x8000u")
             == std::string::npos
-        || bt_cpp.find("current_device_page_scan_repetition_mode,\n                             0,\n                             valid_clock_offset")
+        || bt_cpp.find("current_device_page_scan_repetition_mode,\n                    0,\n                    valid_clock_offset")
             == std::string::npos
+        || bt_cpp.find("#define BT_PAIRING_TRANSACTION_TLV_TAG 0x50545832u")
+            == std::string::npos
+        || bt_cpp.find("static bool recover_pairing_transaction_on_boot()")
+            == std::string::npos
+        || transaction_stage == std::string::npos
+        || prior_key_drop == std::string::npos
+        || create_connection == std::string::npos
+        || !(transaction_stage < prior_key_drop && prior_key_drop < create_connection)
         || inquiry_loop.find("acl_connection_cancel_requested = true;") == std::string::npos
         || inquiry_loop.find("acl_disconnect_on_completion = true;") == std::string::npos
         || inquiry_loop.find("clear_acl_connection_pending();\n        fail_pending_connection_attempt();")
@@ -850,6 +873,15 @@ void assert_bluetooth_pairing_and_reconnect_policy(std::filesystem::path const &
         || connection_complete.find("if (acl_disconnect_on_completion)") == std::string::npos
         || connection_complete.find(
             "ACL completed after cancellation; disconnect before security setup"
+        ) == std::string::npos
+        || connection_complete.find(
+            "restore_uncommitted_pairing_key(\"ACL connection failure\")"
+        ) == std::string::npos
+        || bt_cpp.find(
+            "restore_uncommitted_pairing_key(\"ACL command rejection\")"
+        ) == std::string::npos
+        || bt_cpp.find(
+            "\"disconnect before replacement key commit\""
         ) == std::string::npos
         || disconnect.find("connection_phase == BtConnectionPhase::Disconnecting")
             == std::string::npos
@@ -908,6 +940,12 @@ void assert_bluetooth_pairing_and_reconnect_policy(std::filesystem::path const &
         "static void finish_hid_session_if_ready() {",
         "\n}\n\nstatic void l2cap_packet_handler"
     );
+    const auto transaction_accept =
+        link_key_notification.find("mark_pairing_transaction_key_accepted(addr)");
+    const auto pairing_policy_commit =
+        link_key_notification.find("finalize_pairing_policy_for_addr(addr)");
+    const auto transaction_discard =
+        link_key_notification.find("discard_pairing_transaction()");
     if (
         bt_cpp.find("static bool persist_notified_link_key(")
             == std::string::npos
@@ -929,13 +967,18 @@ void assert_bluetooth_pairing_and_reconnect_policy(std::filesystem::path const &
             == std::string::npos
         || link_key_notification.find("finish_hid_session_if_ready();")
             == std::string::npos
+        || transaction_accept == std::string::npos
+        || pairing_policy_commit == std::string::npos
+        || transaction_discard == std::string::npos
+        || !(transaction_accept < pairing_policy_commit
+            && pairing_policy_commit < transaction_discard)
         || finish_hid.find("pairing_link_key_required && !current_link_key_persisted")
             == std::string::npos
         || finish_hid.find("wait for durable link key before publishing controller")
             == std::string::npos
     ) {
         throw std::runtime_error(
-            "First-time Bluetooth pairing must byte-verify its durable link key before publishing HID"
+            "Bluetooth pairing must transactionally replace and byte-verify its durable link key before publishing HID"
         );
     }
 }
@@ -1008,6 +1051,8 @@ void assert_bluetooth_device_management_policy(std::filesystem::path const &root
         "bool bt_forget_pairings() {",
         "\n}\n\nbool bt_forget_pairing("
     );
+    const auto forget_all_cancel =
+        forget_all.find("cancel_pairing_transaction_before_forget(true, nullptr)");
     const auto forget_all_capture = forget_all.find("bt_blacklist_add_stored_link_keys()");
     const auto forget_all_persist = forget_all.find("bt_blacklist_persist()");
     const auto forget_all_drop = forget_all.find("gap_delete_all_link_keys();");
@@ -1016,18 +1061,26 @@ void assert_bluetooth_device_management_policy(std::filesystem::path const &root
         "bool bt_forget_pairing(uint8_t address[6])",
         "\n}\n\nbool bt_set_idle_disconnect_timeout_minutes"
     );
+    const auto forget_one_cancel =
+        forget_one.find("cancel_pairing_transaction_before_forget(false, addr)");
     const auto forget_one_add = forget_one.find("bt_blacklist_add_unique(addr)");
     const auto forget_one_persist = forget_one.find("bt_blacklist_persist()");
     const auto forget_one_drop = forget_one.find("gap_drop_link_key_for_bd_addr(addr);");
     if (
-        forget_all_capture == std::string::npos
+        forget_all_cancel == std::string::npos
+        || forget_all_capture == std::string::npos
         || forget_all_persist == std::string::npos
         || forget_all_drop == std::string::npos
-        || !(forget_all_capture < forget_all_persist && forget_all_persist < forget_all_drop)
+        || !(forget_all_capture < forget_all_persist
+            && forget_all_persist < forget_all_cancel
+            && forget_all_cancel < forget_all_drop)
+        || forget_one_cancel == std::string::npos
         || forget_one_add == std::string::npos
         || forget_one_persist == std::string::npos
         || forget_one_drop == std::string::npos
-        || !(forget_one_add < forget_one_persist && forget_one_persist < forget_one_drop)
+        || !(forget_one_add < forget_one_persist
+            && forget_one_persist < forget_one_cancel
+            && forget_one_cancel < forget_one_drop)
     ) {
         throw std::runtime_error(
             "Forget-one and forget-all must durably blacklist addresses before deleting link keys"

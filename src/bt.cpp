@@ -144,6 +144,10 @@
 #define AUTHENTICATION_LMP_TRANSACTION_COLLISION 0x23u
 #define AUTHENTICATION_DIFFERENT_TRANSACTION_COLLISION 0x2au
 #define BT_BLACKLIST_TLV_TAG 0x424C434Bu // ASCII 'BLCK'
+#define BT_PAIRING_TRANSACTION_TLV_TAG 0x50545832u // ASCII 'PTX2'
+#define BT_PAIRING_TRANSACTION_VERSION 2u
+#define BT_PAIRING_TRANSACTION_FLAG_PRIOR_KEY 0x01u
+#define BT_PAIRING_TRANSACTION_SIZE (3u + BD_ADDR_LEN + LINK_KEY_LEN + 1u)
 
 #define HCI_SEND_CMD_LOGGED(cmd, ...) do { \
     const uint8_t err = hci_send_cmd((cmd), ##__VA_ARGS__); \
@@ -274,6 +278,20 @@ struct output_scheduler_counters {
     uint32_t bt_send_gap_max_us;
 };
 
+enum class pairing_transaction_state : uint8_t {
+    AwaitingKey = 1,
+    KeyAccepted = 2,
+};
+
+struct pairing_transaction {
+    bool valid;
+    pairing_transaction_state state;
+    bool prior_key_valid;
+    bd_addr_t addr;
+    link_key_t prior_key;
+    link_key_type_t prior_type;
+};
+
 static void hci_packet_handler(uint8_t packet_type, uint16_t channel, uint8_t *packet, uint16_t size);
 static void l2cap_packet_handler(uint8_t packet_type, uint16_t channel, uint8_t *packet, uint16_t size);
 static int classic_connection_filter(bd_addr_t addr, hci_link_type_t link_type);
@@ -330,6 +348,7 @@ static uint16_t current_device_clock_offset = 0;
 static bool pairing_authorized_session = false;
 static bool pairing_link_key_required = false;
 static bool current_link_key_persisted = false;
+static bool pairing_transaction_recovery_failed = false;
 static hci_con_handle_t acl_handle = HCI_CON_HANDLE_INVALID;
 static uint16_t hid_control_cid;
 static uint16_t hid_interrupt_cid;
@@ -528,6 +547,9 @@ static void arm_signal_strength_idle_epoch(uint64_t now_us) {
 
 static bool begin_connection_attempt() {
     if (connection_phase != BtConnectionPhase::Listening) {
+        return false;
+    }
+    if (pairing_transaction_recovery_failed) {
         return false;
     }
     controller_disconnect_intent = BtControllerDisconnectIntentNone;
@@ -787,6 +809,379 @@ static bool bt_blacklist_remove(bd_addr_t addr) {
     return true;
 }
 
+static bool link_key_material_is_valid(uint8_t const *key, link_key_type_t type) {
+    if (type == INVALID_LINK_KEY || gap_security_level_for_link_key_type(type) < LEVEL_2) {
+        return false;
+    }
+    for (uint8_t i = 0; i < LINK_KEY_LEN; ++i) {
+        if (key[i] != 0) {
+            return true;
+        }
+    }
+    return false;
+}
+
+static bool pairing_transaction_equal(
+    pairing_transaction const &left,
+    pairing_transaction const &right
+) {
+    return left.valid == right.valid
+        && left.state == right.state
+        && left.prior_key_valid == right.prior_key_valid
+        && bd_addr_cmp(left.addr, right.addr) == 0
+        && (!left.prior_key_valid || (
+            memcmp(left.prior_key, right.prior_key, LINK_KEY_LEN) == 0
+            && left.prior_type == right.prior_type
+        ));
+}
+
+static bool pairing_transaction_storage_status(bool &present) {
+    present = false;
+    const btstack_tlv_t *tlv = nullptr;
+    void *tlv_context = nullptr;
+    btstack_tlv_get_instance(&tlv, &tlv_context);
+    if (tlv == nullptr) {
+        return false;
+    }
+    present =
+        tlv->get_tag(tlv_context, BT_PAIRING_TRANSACTION_TLV_TAG, nullptr, 0) > 0;
+    return true;
+}
+
+static bool read_pairing_transaction(pairing_transaction &transaction) {
+    transaction = {};
+    const btstack_tlv_t *tlv = nullptr;
+    void *tlv_context = nullptr;
+    btstack_tlv_get_instance(&tlv, &tlv_context);
+    if (tlv == nullptr) {
+        return false;
+    }
+
+    uint8_t record[BT_PAIRING_TRANSACTION_SIZE]{};
+    const int len = tlv->get_tag(
+        tlv_context,
+        BT_PAIRING_TRANSACTION_TLV_TAG,
+        record,
+        sizeof(record)
+    );
+    if (
+        len != static_cast<int>(sizeof(record))
+        || record[0] != BT_PAIRING_TRANSACTION_VERSION
+        || (record[2] & ~BT_PAIRING_TRANSACTION_FLAG_PRIOR_KEY) != 0
+    ) {
+        return false;
+    }
+    if (
+        record[1] != static_cast<uint8_t>(pairing_transaction_state::AwaitingKey)
+        && record[1] != static_cast<uint8_t>(pairing_transaction_state::KeyAccepted)
+    ) {
+        return false;
+    }
+
+    transaction.state = static_cast<pairing_transaction_state>(record[1]);
+    transaction.prior_key_valid =
+        (record[2] & BT_PAIRING_TRANSACTION_FLAG_PRIOR_KEY) != 0;
+    bd_addr_copy(transaction.addr, &record[3]);
+    memcpy(transaction.prior_key, &record[3 + BD_ADDR_LEN], LINK_KEY_LEN);
+    transaction.prior_type = static_cast<link_key_type_t>(
+        record[3 + BD_ADDR_LEN + LINK_KEY_LEN]
+    );
+    if (
+        transaction.prior_key_valid
+        && !link_key_material_is_valid(transaction.prior_key, transaction.prior_type)
+    ) {
+        return false;
+    }
+    transaction.valid = true;
+    return true;
+}
+
+static bool write_pairing_transaction(pairing_transaction const &transaction) {
+    if (!transaction.valid) {
+        return false;
+    }
+    const btstack_tlv_t *tlv = nullptr;
+    void *tlv_context = nullptr;
+    btstack_tlv_get_instance(&tlv, &tlv_context);
+    if (tlv == nullptr) {
+        return false;
+    }
+
+    uint8_t record[BT_PAIRING_TRANSACTION_SIZE]{};
+    record[0] = BT_PAIRING_TRANSACTION_VERSION;
+    record[1] = static_cast<uint8_t>(transaction.state);
+    record[2] =
+        transaction.prior_key_valid ? BT_PAIRING_TRANSACTION_FLAG_PRIOR_KEY : 0;
+    memcpy(&record[3], transaction.addr, BD_ADDR_LEN);
+    if (transaction.prior_key_valid) {
+        memcpy(&record[3 + BD_ADDR_LEN], transaction.prior_key, LINK_KEY_LEN);
+        record[3 + BD_ADDR_LEN + LINK_KEY_LEN] =
+            static_cast<uint8_t>(transaction.prior_type);
+    }
+    if (
+        tlv->store_tag(
+            tlv_context,
+            BT_PAIRING_TRANSACTION_TLV_TAG,
+            record,
+            sizeof(record)
+        ) != 0
+    ) {
+        return false;
+    }
+
+    pairing_transaction verified{};
+    return read_pairing_transaction(verified)
+        && pairing_transaction_equal(verified, transaction);
+}
+
+static bool discard_pairing_transaction() {
+    const btstack_tlv_t *tlv = nullptr;
+    void *tlv_context = nullptr;
+    btstack_tlv_get_instance(&tlv, &tlv_context);
+    if (tlv == nullptr) {
+        return false;
+    }
+    tlv->delete_tag(tlv_context, BT_PAIRING_TRANSACTION_TLV_TAG);
+    return tlv->get_tag(
+        tlv_context,
+        BT_PAIRING_TRANSACTION_TLV_TAG,
+        nullptr,
+        0
+    ) == 0;
+}
+
+static bool stage_pairing_transaction(
+    bd_addr_t addr,
+    uint8_t const *prior_key,
+    link_key_type_t prior_type
+) {
+    bool transaction_present = false;
+    if (
+        !pairing_transaction_storage_status(transaction_present)
+        || transaction_present
+    ) {
+        DS5_LOG("[HCI] Refuse to overwrite unfinished pairing transaction\n");
+        pairing_transaction_recovery_failed = true;
+        return false;
+    }
+
+    pairing_transaction transaction{};
+    transaction.valid = true;
+    transaction.state = pairing_transaction_state::AwaitingKey;
+    transaction.prior_key_valid =
+        prior_key != nullptr && link_key_material_is_valid(prior_key, prior_type);
+    bd_addr_copy(transaction.addr, addr);
+    if (transaction.prior_key_valid) {
+        memcpy(transaction.prior_key, prior_key, LINK_KEY_LEN);
+        transaction.prior_type = prior_type;
+    }
+    const bool staged = write_pairing_transaction(transaction);
+    pairing_transaction_recovery_failed = !staged;
+    return staged;
+}
+
+static bool mark_pairing_transaction_key_accepted(bd_addr_t addr) {
+    pairing_transaction transaction{};
+    if (
+        !read_pairing_transaction(transaction)
+        || bd_addr_cmp(transaction.addr, addr) != 0
+    ) {
+        return false;
+    }
+    transaction.state = pairing_transaction_state::KeyAccepted;
+    return write_pairing_transaction(transaction);
+}
+
+static bool restore_uncommitted_pairing_key(char const *reason) {
+    bool transaction_present = false;
+    if (!pairing_transaction_storage_status(transaction_present)) {
+        pairing_transaction_recovery_failed = true;
+        return false;
+    }
+    if (!transaction_present) {
+        pairing_transaction_recovery_failed = false;
+        return true;
+    }
+
+    pairing_transaction transaction{};
+    if (!read_pairing_transaction(transaction)) {
+        pairing_transaction_recovery_failed = true;
+        return false;
+    }
+    if (transaction.state == pairing_transaction_state::KeyAccepted) {
+        if (
+            !bt_blacklist_remove(transaction.addr)
+            || !discard_pairing_transaction()
+        ) {
+            pairing_transaction_recovery_failed = true;
+            return false;
+        }
+        stored_link_key_present = bt_has_stored_link_key();
+        pairing_transaction_recovery_failed = false;
+        return true;
+    }
+
+    link_key_t stored_key;
+    link_key_type_t stored_type;
+    const bool has_current_key = gap_get_link_key_for_bd_addr(
+        transaction.addr,
+        stored_key,
+        &stored_type
+    );
+    if (transaction.prior_key_valid) {
+        const bool prior_is_current =
+            has_current_key
+            && memcmp(stored_key, transaction.prior_key, LINK_KEY_LEN) == 0
+            && stored_type == transaction.prior_type;
+        if (!prior_is_current) {
+            if (has_current_key) {
+                gap_drop_link_key_for_bd_addr(transaction.addr);
+            }
+            gap_store_link_key_for_bd_addr(
+                transaction.addr,
+                transaction.prior_key,
+                transaction.prior_type
+            );
+        }
+        if (
+            !gap_get_link_key_for_bd_addr(transaction.addr, stored_key, &stored_type)
+            || memcmp(stored_key, transaction.prior_key, LINK_KEY_LEN) != 0
+            || stored_type != transaction.prior_type
+        ) {
+            DS5_LOG("[HCI] Failed to restore prior pairing key during %s\n", reason);
+            pairing_transaction_recovery_failed = true;
+            return false;
+        }
+        DS5_LOG("[HCI] Restored prior pairing key after %s\n", reason);
+    } else {
+        if (has_current_key) {
+            gap_drop_link_key_for_bd_addr(transaction.addr);
+        }
+        if (gap_get_link_key_for_bd_addr(transaction.addr, stored_key, &stored_type)) {
+            DS5_LOG("[HCI] Failed to clear partial pairing key during %s\n", reason);
+            pairing_transaction_recovery_failed = true;
+            return false;
+        }
+    }
+
+    stored_link_key_present = bt_has_stored_link_key();
+    if (!discard_pairing_transaction()) {
+        pairing_transaction_recovery_failed = true;
+        return false;
+    }
+    pairing_transaction_recovery_failed = false;
+    return true;
+}
+
+static bool finalize_pairing_policy_for_addr(bd_addr_t addr) {
+    return bt_blacklist_remove(addr);
+}
+
+static bool recover_pairing_transaction_on_boot() {
+    bool transaction_present = false;
+    if (!pairing_transaction_storage_status(transaction_present)) {
+        return false;
+    }
+    if (!transaction_present) {
+        pairing_transaction_recovery_failed = false;
+        return true;
+    }
+
+    pairing_transaction transaction{};
+    if (!read_pairing_transaction(transaction)) {
+        return false;
+    }
+
+    link_key_t stored_key;
+    link_key_type_t stored_type;
+    const bool has_current_key = gap_get_link_key_for_bd_addr(
+        transaction.addr,
+        stored_key,
+        &stored_type
+    );
+    if (transaction.state == pairing_transaction_state::KeyAccepted) {
+        if (
+            !has_current_key
+            || !link_key_material_is_valid(stored_key, stored_type)
+        ) {
+            return false;
+        }
+        DS5_LOG(
+            "[HCI] Resume accepted pairing policy commit for %s\n",
+            bd_addr_to_str(transaction.addr)
+        );
+        if (!finalize_pairing_policy_for_addr(transaction.addr)) {
+            return false;
+        }
+    } else if (transaction.prior_key_valid) {
+        const bool prior_is_current =
+            has_current_key
+            && memcmp(stored_key, transaction.prior_key, LINK_KEY_LEN) == 0
+            && stored_type == transaction.prior_type;
+        if (!prior_is_current) {
+            if (has_current_key) {
+                gap_drop_link_key_for_bd_addr(transaction.addr);
+            }
+            gap_store_link_key_for_bd_addr(
+                transaction.addr,
+                transaction.prior_key,
+                transaction.prior_type
+            );
+        }
+        if (
+            !gap_get_link_key_for_bd_addr(transaction.addr, stored_key, &stored_type)
+            || memcmp(stored_key, transaction.prior_key, LINK_KEY_LEN) != 0
+            || stored_type != transaction.prior_type
+        ) {
+            return false;
+        }
+        DS5_LOG("[HCI] Boot restored prior pairing key\n");
+    } else {
+        if (has_current_key) {
+            gap_drop_link_key_for_bd_addr(transaction.addr);
+        }
+        if (gap_get_link_key_for_bd_addr(transaction.addr, stored_key, &stored_type)) {
+            return false;
+        }
+    }
+
+    stored_link_key_present = bt_has_stored_link_key();
+    return discard_pairing_transaction();
+}
+
+static bool cancel_pairing_transaction_before_forget(
+    bool forget_all,
+    uint8_t const *target_addr
+) {
+    bool transaction_present = false;
+    if (!pairing_transaction_storage_status(transaction_present)) {
+        return false;
+    }
+    if (!transaction_present) {
+        pairing_transaction_recovery_failed = false;
+        return true;
+    }
+
+    pairing_transaction transaction{};
+    const bool transaction_readable = read_pairing_transaction(transaction);
+    if (!transaction_readable && !forget_all) {
+        return false;
+    }
+    if (
+        transaction_readable
+        && !forget_all
+        && target_addr != nullptr
+        && bd_addr_cmp(transaction.addr, target_addr) != 0
+    ) {
+        return true;
+    }
+    const bool discarded = discard_pairing_transaction();
+    if (discarded) {
+        pairing_transaction_recovery_failed = false;
+    }
+    return discarded;
+}
+
 static bool bt_blacklist_add_stored_link_keys() {
     btstack_link_key_iterator_t iterator;
     if (!gap_link_key_iterator_init(&iterator)) {
@@ -885,13 +1280,16 @@ static bool persist_notified_link_key(
 
 static void restore_passive_reconnect_scan() {
     const bool reconnect_allowed = stored_link_key_present
+        && !pairing_transaction_recovery_failed
         && !pairing_window_active
         && !inquiry_active
         && !acl_connection_pending
         && acl_handle == HCI_CON_HANDLE_INVALID;
     gap_connectable_control(reconnect_allowed ? 1 : 0);
     gap_discoverable_control(0);
-    gap_set_bondable_mode(pairing_window_active ? 1 : 0);
+    gap_set_bondable_mode(
+        pairing_window_active && !pairing_transaction_recovery_failed ? 1 : 0
+    );
 }
 
 static void stop_inquiry_led() {
@@ -917,7 +1315,7 @@ static void close_pairing_window(bool stop_inquiry) {
 
 static void schedule_inquiry_retry(uint32_t delay_us = INQUIRY_RETRY_DELAY_US) {
     inquiry_active = false;
-    if (!pairing_window_active) {
+    if (!pairing_window_active || pairing_transaction_recovery_failed) {
         inquiry_retry_scheduled = false;
         inquiry_retry_at_us = 0;
         restore_passive_reconnect_scan();
@@ -930,8 +1328,8 @@ static void schedule_inquiry_retry(uint32_t delay_us = INQUIRY_RETRY_DELAY_US) {
 static void start_inquiry_if_needed() {
     if (
         !pairing_window_active
-        ||
-        inquiry_active
+        || pairing_transaction_recovery_failed
+        || inquiry_active
         || device_found
         || acl_connection_pending
         || acl_handle != HCI_CON_HANDLE_INVALID
@@ -975,6 +1373,15 @@ static bool classic_acl_connection_allowed(bd_addr_t addr, bool log_reject) {
             DS5_LOG("[HCI] Rejecting controller %s while connection phase=%u is busy\n",
                     bd_addr_to_str(addr),
                     static_cast<unsigned int>(connection_phase));
+        }
+        return false;
+    }
+    if (pairing_transaction_recovery_failed) {
+        if (log_reject) {
+            DS5_LOG(
+                "[HCI] Rejecting controller %s while pairing recovery is incomplete\n",
+                bd_addr_to_str(addr)
+            );
         }
         return false;
     }
@@ -1788,6 +2195,16 @@ bool bt_power_off_controller() {
 }
 
 bool bt_request_scan() {
+    if (pairing_transaction_recovery_failed) {
+        if (!recover_pairing_transaction_on_boot()) {
+            DS5_LOG("[HCI] Pairing transaction recovery still incomplete; scan denied\n");
+            restore_passive_reconnect_scan();
+            return false;
+        }
+        pairing_transaction_recovery_failed = false;
+        stored_link_key_present = bt_has_stored_link_key();
+    }
+
     const uint32_t now = time_us_32();
     pairing_window_active = true;
     pairing_window_deadline_us = now + PAIRING_WINDOW_US;
@@ -1811,12 +2228,24 @@ bool bt_request_scan() {
 
 bool bt_forget_pairings() {
     DS5_LOG("[HCI] Forget controller pairings requested\n");
+    bool transaction_present = false;
+    if (!pairing_transaction_storage_status(transaction_present)) {
+        DS5_LOG("[HCI] Forget all aborted: pairing transaction storage unavailable\n");
+        return false;
+    }
+    pairing_transaction transaction{};
+    const bool transaction_readable =
+        transaction_present && read_pairing_transaction(transaction);
     bd_addr_t previous_addrs[NVM_NUM_LINK_KEYS]{};
     const int previous_count = cleared_controller_addr_count;
     memcpy(previous_addrs, cleared_controller_addrs, sizeof(previous_addrs));
 
     if (
         !bt_blacklist_add_stored_link_keys()
+        || (
+            transaction_readable
+            && !bt_blacklist_add_unique(transaction.addr)
+        )
         || (bt_current_address_known() && !bt_blacklist_add_unique(current_device_addr))
         || !bt_blacklist_persist()
     ) {
@@ -1825,8 +2254,15 @@ bool bt_forget_pairings() {
         DS5_LOG("[BLACKLIST] Forget all aborted: durable blacklist update failed\n");
         return false;
     }
+    if (!cancel_pairing_transaction_before_forget(true, nullptr)) {
+        // Keep the durable blacklist additions fail-closed. No link key is
+        // deleted until the transaction record is also durably removed.
+        DS5_LOG("[HCI] Forget all aborted: pairing transaction cancellation was not durable\n");
+        return false;
+    }
 
     gap_delete_all_link_keys();
+    pairing_transaction_recovery_failed = false;
     stored_link_key_present = false;
     current_link_key_persisted = false;
     feature_data.clear();
@@ -1858,6 +2294,12 @@ bool bt_forget_pairing(uint8_t address[6]) {
         memcpy(cleared_controller_addrs, previous_addrs, sizeof(previous_addrs));
         cleared_controller_addr_count = previous_count;
         DS5_LOG("[BLACKLIST] Targeted forget aborted: durable blacklist update failed\n");
+        return false;
+    }
+    if (!cancel_pairing_transaction_before_forget(false, addr)) {
+        // The durable blacklist remains intentional fail-closed state. Do not
+        // delete the key until the transaction record is durably settled.
+        DS5_LOG("[HCI] Targeted forget aborted: pairing transaction cancellation was not durable\n");
         return false;
     }
 
@@ -2333,8 +2775,17 @@ static void hci_packet_handler(uint8_t packet_type, uint16_t channel, uint8_t *p
                 gap_set_page_scan_activity(0x0012, 0x0012); // 11.25 ms
                 gap_set_page_scan_type(PAGE_SCAN_MODE_INTERLACED);
                 bt_blacklist_load();
+                pairing_transaction_recovery_failed =
+                    !recover_pairing_transaction_on_boot();
+                if (pairing_transaction_recovery_failed) {
+                    DS5_LOG(
+                        "[HCI] Pairing transaction recovery failed; remain fail-closed\n"
+                    );
+                }
                 stored_link_key_present = bt_has_stored_link_key();
-                if (stored_link_key_present) {
+                if (pairing_transaction_recovery_failed) {
+                    restore_passive_reconnect_scan();
+                } else if (stored_link_key_present) {
                     DS5_LOG("[BT] Stored controller found; staying in passive page scan\n");
                     restore_passive_reconnect_scan();
                 } else {
@@ -2406,26 +2857,88 @@ static void hci_packet_handler(uint8_t packet_type, uint16_t channel, uint8_t *p
                 }
                 DS5_LOG("[HCI] Connecting to %s...\n", bd_addr_to_str(current_device_addr));
                 new_pair = true;
-                link_key_t existing_key;
-                link_key_type_t existing_key_type;
-                current_link_key_persisted = gap_get_link_key_for_bd_addr(
+                link_key_t prior_key;
+                link_key_type_t prior_key_type = INVALID_LINK_KEY;
+                const bool had_prior_key = gap_get_link_key_for_bd_addr(
                     current_device_addr,
-                    existing_key,
-                    &existing_key_type
+                    prior_key,
+                    &prior_key_type
                 );
+                if (
+                    !stage_pairing_transaction(
+                        current_device_addr,
+                        had_prior_key ? prior_key : nullptr,
+                        prior_key_type
+                    )
+                ) {
+                    DS5_LOG(
+                        "[HCI] Refuse explicit pairing because its durable transaction could not be staged\n"
+                    );
+                    clear_outbound_inquiry_target();
+                    fail_pending_connection_attempt();
+                    schedule_inquiry_retry();
+                    break;
+                }
                 pairing_authorized_session = true;
-                pairing_link_key_required = !current_link_key_persisted;
+                pairing_link_key_required = true;
+                current_link_key_persisted = false;
+                if (had_prior_key) {
+                    // Explicit pairing authorizes replacement of this target's
+                    // key only. The durable transaction restores it if no new
+                    // key is accepted.
+                    gap_drop_link_key_for_bd_addr(current_device_addr);
+                    link_key_t remaining_key;
+                    link_key_type_t remaining_type;
+                    if (
+                        gap_get_link_key_for_bd_addr(
+                            current_device_addr,
+                            remaining_key,
+                            &remaining_type
+                        )
+                    ) {
+                        DS5_LOG(
+                            "[HCI] Refuse explicit re-pair because prior bond could not be removed\n"
+                        );
+                        (void)restore_uncommitted_pairing_key(
+                            "failed prior bond removal"
+                        );
+                        clear_outbound_inquiry_target();
+                        fail_pending_connection_attempt();
+                        schedule_inquiry_retry();
+                        break;
+                    }
+                    stored_link_key_present = bt_has_stored_link_key();
+                    DS5_LOG("[HCI] Dropped target's prior link key for explicit re-pair\n");
+                }
                 acl_connection_outbound = true;
                 acl_disconnect_on_completion = false;
                 mark_acl_connection_pending();
                 const uint16_t valid_clock_offset =
                     (current_device_clock_offset & 0x7FFFu) | 0x8000u;
-                HCI_SEND_CMD_LOGGED(&hci_create_connection, current_device_addr,
-                             hci_usable_acl_packet_types(),
-                             current_device_page_scan_repetition_mode,
-                             0,
-                             valid_clock_offset,
-                             1);
+                const uint8_t create_status = hci_send_cmd(
+                    &hci_create_connection,
+                    current_device_addr,
+                    hci_usable_acl_packet_types(),
+                    current_device_page_scan_repetition_mode,
+                    0,
+                    valid_clock_offset,
+                    1
+                );
+                if (create_status != ERROR_CODE_SUCCESS) {
+                    DS5_LOG(
+                        "[HCI] Classic create-connection submission failed status=0x%02X\n",
+                        create_status
+                    );
+                    (void)restore_uncommitted_pairing_key(
+                        "HCI create-connection submission failure"
+                    );
+                    clear_outbound_inquiry_target();
+                    clear_acl_connection_pending();
+                    acl_connection_outbound = false;
+                    acl_disconnect_on_completion = false;
+                    fail_pending_connection_attempt();
+                    schedule_inquiry_retry();
+                }
             } else if (
                 pairing_window_active
                 && !device_found
@@ -2446,6 +2959,7 @@ static void hci_packet_handler(uint8_t packet_type, uint16_t channel, uint8_t *p
                 (opcode == HCI_OPCODE_HCI_CREATE_CONNECTION || opcode == HCI_OPCODE_HCI_ACCEPT_CONNECTION_REQUEST)
                 && status != ERROR_CODE_SUCCESS
             ) {
+                (void)restore_uncommitted_pairing_key("ACL command rejection");
                 clear_outbound_inquiry_target();
                 clear_acl_connection_pending();
                 acl_connection_outbound = false;
@@ -2544,6 +3058,7 @@ static void hci_packet_handler(uint8_t packet_type, uint16_t channel, uint8_t *p
                 DS5_LOG("[HCI] Request GAP security level 2 on handle=0x%04X\n", handle);
                 gap_request_security_level(handle, LEVEL_2);
             } else {
+                (void)restore_uncommitted_pairing_key("ACL connection failure");
                 clear_outbound_inquiry_target();
                 clear_acl_connection_pending();
                 acl_connection_outbound = false;
@@ -2564,7 +3079,8 @@ static void hci_packet_handler(uint8_t packet_type, uint16_t channel, uint8_t *p
             hci_event_link_key_request_get_bd_addr(packet, addr);
             link_key_t link_key;
             link_key_type_t link_key_type;
-            bool link = !bt_blacklist_contains(addr)
+            bool link = !pairing_transaction_recovery_failed
+                && !bt_blacklist_contains(addr)
                 && gap_get_link_key_for_bd_addr(addr, link_key, &link_key_type);
             if (link) {
                 DS5_LOG("[HCI] Link key request from %s, reply stored key type=%u\n", bd_addr_to_str(addr),
@@ -2632,8 +3148,41 @@ static void hci_packet_handler(uint8_t packet_type, uint16_t channel, uint8_t *p
             if (!current_link_key_persisted) {
                 DS5_LOG("[HCI] Reject non-durable or unauthorized link key for %s\n",
                         bd_addr_to_str(addr));
+                (void)restore_uncommitted_pairing_key(
+                    "link key persistence failure"
+                );
+                stored_link_key_present = bt_has_stored_link_key();
                 bt_disconnect();
                 break;
+            }
+
+            if (pairing_authorized_session) {
+                if (!mark_pairing_transaction_key_accepted(addr)) {
+                    DS5_LOG(
+                        "[HCI] Replacement key durable but transaction acceptance could not be recorded\n"
+                    );
+                    (void)restore_uncommitted_pairing_key(
+                        "pairing transaction acceptance failure"
+                    );
+                    stored_link_key_present = bt_has_stored_link_key();
+                    bt_disconnect();
+                    break;
+                }
+                if (!finalize_pairing_policy_for_addr(addr)) {
+                    DS5_LOG(
+                        "[HCI] Replacement key durable but pairing policy commit failed\n"
+                    );
+                    pairing_transaction_recovery_failed = true;
+                    bt_disconnect();
+                    break;
+                }
+                if (!discard_pairing_transaction()) {
+                    // The accepted key and policy are durable. Boot recovery
+                    // can safely repeat the idempotent policy commit.
+                    DS5_LOG(
+                        "[HCI] Pairing policy committed; transaction cleanup deferred to boot\n"
+                    );
+                }
             }
 
             pairing_link_key_required = false;
@@ -2783,6 +3332,15 @@ static void hci_packet_handler(uint8_t packet_type, uint16_t channel, uint8_t *p
             const bool expected_disconnect =
                 disconnect_intent != BtControllerDisconnectIntentNone;
             const bool host_suspended = usb_host_suspended_active();
+            if (
+                !restore_uncommitted_pairing_key(
+                    "disconnect before replacement key commit"
+                )
+            ) {
+                DS5_LOG(
+                    "[HCI] Pairing rollback incomplete; reconnect remains fail-closed\n"
+                );
+            }
             usb_handle_controller_transport_disconnect(expected_disconnect);
             reset_controller_input_report_cache();
             const uint8_t reason = hci_event_disconnection_complete_get_reason(packet);
