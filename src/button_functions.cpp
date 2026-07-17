@@ -7,6 +7,7 @@
 #include <cstdint>
 
 #include "bt.h"
+#include "kitsune_button_gesture.h"
 #include "utils.h"
 
 #include "hardware/gpio.h"
@@ -24,30 +25,11 @@
 // Gesture thresholds, in samples at the 100 ms poll cadence.
 static constexpr uint32_t BUTTON_POLL_INTERVAL_MS = 100;
 static constexpr uint32_t BUTTON_FLASH_SAFE_TIMEOUT_MS = 5;
-static constexpr int CLICK_MAX_SAMPLES = 5;       // ~500 ms max press for a click.
-static constexpr int MULTI_CLICK_WINDOW_SAMPLES = 10; // ~1000 ms between clicks.
-static constexpr int HOLD_SAMPLES = 15;           // ~1500 ms hold threshold.
-
-enum class ButtonState : uint8_t {
-    Idle,
-    Pressing,
-    WaitingForSecondClick,
-    WaitingForThirdClick,
-    Held,
-};
-
-enum class ButtonGestureEvent : uint8_t {
-    None,
-    Click,
-    DoubleClick,
-    TripleClick,
-    Hold,
-};
-
-static ButtonState button_state = ButtonState::Idle;
-static int button_press_samples = 0;
-static int button_wait_samples = 0;
-static int button_click_count = 0;
+static kitsune::ButtonGesture button_gesture({
+    5,  // ~500 ms max press for a click.
+    10, // ~1000 ms allowed between clicks before a single click dispatches.
+    15, // ~1500 ms hold threshold.
+});
 static uint32_t button_last_check_ms = 0;
 
 static void __no_inline_not_in_flash_func(button_read_cb)(void *param) {
@@ -85,78 +67,9 @@ static bool button_read_bootsel(bool &pressed) {
     ) == PICO_OK;
 }
 
-static void button_reset_gesture() {
-    button_state = ButtonState::Idle;
-    button_press_samples = 0;
-    button_wait_samples = 0;
-    button_click_count = 0;
-}
-
-static ButtonGestureEvent button_update_gesture(bool pressed) {
-    switch (button_state) {
-        case ButtonState::Idle:
-            if (pressed) {
-                button_state = ButtonState::Pressing;
-                button_press_samples = 1;
-            }
-            return ButtonGestureEvent::None;
-
-        case ButtonState::Pressing:
-            if (pressed) {
-                if (++button_press_samples >= HOLD_SAMPLES) {
-                    button_state = ButtonState::Held;
-                    button_click_count = 0;
-                    return ButtonGestureEvent::Hold;
-                }
-                return ButtonGestureEvent::None;
-            }
-            if (button_press_samples > CLICK_MAX_SAMPLES) {
-                button_reset_gesture();
-                return ButtonGestureEvent::None;
-            }
-            button_click_count++;
-            button_wait_samples = 0;
-            if (button_click_count >= 3) {
-                button_reset_gesture();
-                return ButtonGestureEvent::TripleClick;
-            }
-            button_state = button_click_count == 1
-                ? ButtonState::WaitingForSecondClick
-                : ButtonState::WaitingForThirdClick;
-            return ButtonGestureEvent::None;
-
-        case ButtonState::WaitingForSecondClick:
-        case ButtonState::WaitingForThirdClick:
-            if (pressed) {
-                button_state = ButtonState::Pressing;
-                button_press_samples = 1;
-                return ButtonGestureEvent::None;
-            }
-            if (++button_wait_samples < MULTI_CLICK_WINDOW_SAMPLES) {
-                return ButtonGestureEvent::None;
-            }
-            {
-                const ButtonGestureEvent event = button_click_count == 1
-                    ? ButtonGestureEvent::Click
-                    : ButtonGestureEvent::DoubleClick;
-                button_reset_gesture();
-                return event;
-            }
-
-        case ButtonState::Held:
-            if (!pressed) {
-                button_reset_gesture();
-            }
-            return ButtonGestureEvent::None;
-    }
-
-    button_reset_gesture();
-    return ButtonGestureEvent::None;
-}
-
-static void button_dispatch(ButtonGestureEvent event) {
+static void button_dispatch(kitsune::ButtonGestureEvent event) {
     switch (event) {
-        case ButtonGestureEvent::Click:
+        case kitsune::ButtonGestureEvent::Click:
             if (bt_is_controller_connected()) {
                 DS5_LOG("[BTN] BOOTSEL click - disconnect controller and preserve pairing\n");
                 (void)bt_disconnect_with_intent(BtControllerDisconnectIntentSleep);
@@ -166,21 +79,21 @@ static void button_dispatch(ButtonGestureEvent event) {
             (void)bt_request_scan();
             return;
 
-        case ButtonGestureEvent::DoubleClick:
+        case kitsune::ButtonGestureEvent::DoubleClick:
             DS5_LOG("[BTN] BOOTSEL double click - reboot\n");
             watchdog_reboot(0, 0, 0);
             while (true) {
                 tight_loop_contents();
             }
 
-        case ButtonGestureEvent::TripleClick:
+        case kitsune::ButtonGestureEvent::TripleClick:
             DS5_LOG("[BTN] BOOTSEL triple click - reboot to BOOTSEL\n");
             reset_usb_boot(0, 0);
             while (true) {
                 tight_loop_contents();
             }
 
-        case ButtonGestureEvent::Hold:
+        case kitsune::ButtonGestureEvent::Hold:
             DS5_LOG("[BTN] BOOTSEL hold - forget controller pairings\n");
             (void)bt_forget_pairings();
             return;
@@ -203,5 +116,5 @@ void button_check() {
         // Preserve the gesture and retry on the next sample boundary.
         return;
     }
-    button_dispatch(button_update_gesture(pressed));
+    button_dispatch(button_gesture.update(pressed));
 }

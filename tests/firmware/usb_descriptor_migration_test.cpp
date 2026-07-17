@@ -1496,6 +1496,7 @@ void assert_watchdog_and_bootsel_flash_safety(std::filesystem::path const &root)
 
 void assert_bootsel_gestures_and_intentional_disconnects(std::filesystem::path const &root) {
     const auto button_cpp = read_text(root / "src" / "button_functions.cpp");
+    const auto gesture_h = read_text(root / "src" / "kitsune_button_gesture.h");
     const auto bt_cpp = read_text(root / "src" / "bt.cpp");
     const auto bt_h = read_text(root / "src" / "bt.h");
     const auto usb_cpp = read_text(root / "src" / "usb.cpp");
@@ -1508,7 +1509,12 @@ void assert_bootsel_gestures_and_intentional_disconnects(std::filesystem::path c
     );
     if (
         button_cpp.find("BUTTON_FLASH_SAFE_TIMEOUT_MS = 5") == std::string::npos
-        || button_cpp.find("MULTI_CLICK_WINDOW_SAMPLES = 10") == std::string::npos
+        || button_cpp.find("static kitsune::ButtonGesture button_gesture")
+            == std::string::npos
+        || button_cpp.find("10, // ~1000 ms allowed between clicks")
+            == std::string::npos
+        || button_cpp.find("button_gesture.update(pressed)") == std::string::npos
+        || gesture_h.find("ReleaseAfterHold") == std::string::npos
         || button_cpp.find("if (!button_read_bootsel(pressed))") == std::string::npos
         || dispatch.find("bt_is_controller_connected()") == std::string::npos
         || dispatch.find(

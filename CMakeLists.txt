@@ -63,6 +63,7 @@ add_executable(ds5-bridge
         src/usb_descriptors.c
         src/main.cpp
         src/button_functions.cpp
+        src/kitsune_button_gesture.cpp
         src/dualsense_input_decoder.cpp
         src/persona/host_persona.cpp
         src/persona/dualsense_persona.cpp

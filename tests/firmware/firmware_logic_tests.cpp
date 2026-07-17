@@ -17,6 +17,7 @@
 #include "dualsense_input_decoder.h"
 #include "dualsense_output.h"
 #include "haptics_test_signal.h"
+#include "kitsune_button_gesture.h"
 #include "output_scheduler.h"
 #include "usb_audio_render_gain.h"
 #include "persona/ds4_persona.h"
@@ -1063,6 +1064,39 @@ void dualsense_decoder_preserves_valid_battery_bucket_across_power_states() {
     EXPECT_EQ(state.raw_power_state, 2);
 }
 
+void bootsel_gesture_policy_emits_click_double_triple_and_hold() {
+    kitsune::ButtonGesture gesture({5, 3, 4});
+
+    EXPECT_EQ(gesture.update(true), kitsune::ButtonGestureEvent::None);
+    EXPECT_EQ(gesture.update(false), kitsune::ButtonGestureEvent::None);
+    EXPECT_EQ(gesture.update(false), kitsune::ButtonGestureEvent::None);
+    EXPECT_EQ(gesture.update(false), kitsune::ButtonGestureEvent::None);
+    EXPECT_EQ(gesture.update(false), kitsune::ButtonGestureEvent::Click);
+
+    EXPECT_EQ(gesture.update(true), kitsune::ButtonGestureEvent::None);
+    EXPECT_EQ(gesture.update(false), kitsune::ButtonGestureEvent::None);
+    EXPECT_EQ(gesture.update(false), kitsune::ButtonGestureEvent::None);
+    EXPECT_EQ(gesture.update(true), kitsune::ButtonGestureEvent::None);
+    EXPECT_EQ(gesture.update(false), kitsune::ButtonGestureEvent::None);
+    EXPECT_EQ(gesture.update(false), kitsune::ButtonGestureEvent::None);
+    EXPECT_EQ(gesture.update(false), kitsune::ButtonGestureEvent::None);
+    EXPECT_EQ(gesture.update(false), kitsune::ButtonGestureEvent::DoubleClick);
+
+    EXPECT_EQ(gesture.update(true), kitsune::ButtonGestureEvent::None);
+    EXPECT_EQ(gesture.update(false), kitsune::ButtonGestureEvent::None);
+    EXPECT_EQ(gesture.update(true), kitsune::ButtonGestureEvent::None);
+    EXPECT_EQ(gesture.update(false), kitsune::ButtonGestureEvent::None);
+    EXPECT_EQ(gesture.update(true), kitsune::ButtonGestureEvent::None);
+    EXPECT_EQ(gesture.update(false), kitsune::ButtonGestureEvent::TripleClick);
+
+    EXPECT_EQ(gesture.update(true), kitsune::ButtonGestureEvent::None);
+    EXPECT_EQ(gesture.update(true), kitsune::ButtonGestureEvent::None);
+    EXPECT_EQ(gesture.update(true), kitsune::ButtonGestureEvent::None);
+    EXPECT_EQ(gesture.update(true), kitsune::ButtonGestureEvent::Hold);
+    EXPECT_EQ(gesture.update(true), kitsune::ButtonGestureEvent::None);
+    EXPECT_EQ(gesture.update(false), kitsune::ButtonGestureEvent::ReleaseAfterHold);
+}
+
 void dualsense_persona_preserves_native_report_bytes() {
     const auto report = sample_dualsense_input_report();
     BridgeControllerState state{};
@@ -1341,6 +1375,7 @@ std::vector<TestCase> tests{
     {"haptics test signal allows carrier paced packets without wall clock gap", haptics_test_signal_allows_carrier_paced_packets_without_wall_clock_gap},
     {"dualsense decoder extracts normalized controller state", dualsense_decoder_extracts_normalized_controller_state},
     {"dualsense decoder preserves valid battery bucket across power states", dualsense_decoder_preserves_valid_battery_bucket_across_power_states},
+    {"bootsel gesture policy emits click double triple and hold", bootsel_gesture_policy_emits_click_double_triple_and_hold},
     {"dualsense persona preserves native report bytes", dualsense_persona_preserves_native_report_bytes},
     {"xusb360 persona maps standard gamepad fields", xusb360_persona_maps_standard_gamepad_fields},
     {"xusb360 rumble decodes to ds5 classic rumble payload", xusb360_rumble_decodes_to_ds5_classic_rumble_payload},
