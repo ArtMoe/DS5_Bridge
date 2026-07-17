@@ -186,6 +186,27 @@ export function reconcileControllerDeviceCache(
   return resolved.slice(0, Math.max(0, limit));
 }
 
+export function controllerDeviceCachesEqual(
+  left: readonly CachedControllerDevice[],
+  right: readonly CachedControllerDevice[]
+): boolean {
+  if (left === right) return true;
+  if (left.length !== right.length) return false;
+  return left.every((device, index) => {
+    const other = right[index];
+    return other !== undefined
+      && device.key === other.key
+      && device.controllerType === other.controllerType
+      && device.controllerName === other.controllerName
+      && device.customName === other.customName
+      && device.bluetoothAddress === other.bluetoothAddress
+      && device.vendorId === other.vendorId
+      && device.productId === other.productId
+      && device.linkKeyKnown === other.linkKeyKnown
+      && device.batteryPercent === other.batteryPercent;
+  });
+}
+
 export function observeControllerDevice(
   devices: readonly CachedControllerDevice[],
   status: Pick<BridgeStatusPayload, 'controllerType' | 'batteryPercent'>,

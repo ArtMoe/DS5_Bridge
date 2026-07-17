@@ -5,6 +5,10 @@ import { describe, expect, it } from 'vitest';
 
 const appSource = readFileSync(path.join(path.dirname(fileURLToPath(import.meta.url)), 'App.tsx'), 'utf8');
 const stylesSource = readFileSync(path.join(path.dirname(fileURLToPath(import.meta.url)), 'styles.css'), 'utf8');
+const controllerDevicesPageSource = readFileSync(
+  path.join(path.dirname(fileURLToPath(import.meta.url)), 'ControllerDevicesPage.tsx'),
+  'utf8'
+);
 
 function extractFunction(name: string): string {
   const start = appSource.indexOf(`function ${name}`);
@@ -14,6 +18,26 @@ function extractFunction(name: string): string {
 }
 
 describe('renderer behavior guards', () => {
+  it('ports Devices as a firmware-backed controller management tab', () => {
+    expect(appSource).toContain("{ id: 'devices', label: 'Devices', Icon: IconBluetooth }");
+    expect(appSource).toContain('<ControllerDevicesPage');
+    expect(appSource).toContain('window.bridge.requestControllerScan()');
+    expect(appSource).toContain('window.bridge.forgetControllerPairings()');
+    expect(appSource).toContain('window.bridge.forgetControllerPairing(request.bluetoothAddress)');
+    expect(appSource).toContain('observeControllerDevice(');
+    expect(appSource).toContain('saveControllerDeviceCache(window.localStorage');
+    expect(controllerDevicesPageSource).toContain('id="control-panel-devices"');
+    expect(controllerDevicesPageSource).toContain('Current and last controllers.');
+    expect(controllerDevicesPageSource).toContain('<IconScan size={16} />');
+    expect(controllerDevicesPageSource).toContain('Forget Controllers');
+    expect(controllerDevicesPageSource).toContain('className="trusted-device-menu"');
+    expect(controllerDevicesPageSource).toContain('controller-forget-modal');
+    expect(controllerDevicesPageSource).not.toContain('ControllerProfile');
+    expect(stylesSource).toContain('.devices-page');
+    expect(stylesSource).toContain('.trusted-device-card.connected');
+    expect(stylesSource).toContain('.controller-forget-modal');
+  });
+
   it('does not expose retired host encoder controls', () => {
     expect(appSource).not.toContain('toggleHost' + 'EncodedAudioEnabled');
     expect(appSource).not.toContain('setHost' + 'EncodedAudioEnabled');

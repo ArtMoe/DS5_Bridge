@@ -8,6 +8,7 @@ import {
   CONTROLLER_DEVICE_CACHE_STORAGE_KEY,
   buildDevicesModel,
   cachedControllerDeviceFromSnapshot,
+  controllerDeviceCachesEqual,
   controllerDeviceName,
   loadControllerDeviceCache,
   observeControllerDevice,
@@ -129,6 +130,12 @@ describe('controller device cache', () => {
       linkKeyKnown: false,
       lastSeenAt: 20
     });
+  });
+
+  it('does not treat a last-seen timestamp refresh as a material cache change', () => {
+    const before = device('AA:BB:CC:DD:EE:FF', 10);
+    expect(controllerDeviceCachesEqual([before], [{ ...before, lastSeenAt: 20 }])).toBe(true);
+    expect(controllerDeviceCachesEqual([before], [{ ...before, batteryPercent: 70 }])).toBe(false);
   });
 
   it('repairs malformed storage and persists renames', () => {

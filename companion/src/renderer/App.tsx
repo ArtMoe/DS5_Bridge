@@ -131,8 +131,22 @@ import type {
   TriggerTestTarget
 } from '../shared/protocol';
 import type { AudioHapticsSession, BridgeSnapshot, UiScalePercent, UiThemePreset } from '../shared/types';
+import {
+  buildDevicesModel,
+  controllerDeviceCachesEqual,
+  loadControllerDeviceCache,
+  observeControllerDevice,
+  renameControllerDevice,
+  saveControllerDeviceCache,
+  type CachedControllerDevice
+} from './controller-devices';
+import {
+  ControllerDevicesPage,
+  type ControllerDeviceForgetDialog,
+  type ControllerDeviceRenameDialog
+} from './ControllerDevicesPage';
 
-type ControlTab = 'overview' | 'haptics' | 'audio' | 'triggers' | 'lighting' | 'remapping' | 'chords' | 'system';
+type ControlTab = 'overview' | 'devices' | 'haptics' | 'audio' | 'triggers' | 'lighting' | 'remapping' | 'chords' | 'system';
 type StartupTutorialStep = 'feature-toggle' | 'support' | 'done';
 type ControllerType = BridgeStatusPayload['controllerType'];
 type KnownControllerType = Exclude<ControllerType, 'unknown'>;
@@ -714,6 +728,7 @@ const REMAP_EDGE_LINE_POINTS: Record<DualSenseEdgeRemapButtonId, [[number, numbe
 };
 const CONTROL_TABS: Array<{ id: ControlTab; label: string; Icon: TablerIcon }> = [
   { id: 'overview', label: 'Overview', Icon: IconLayoutDashboard },
+  { id: 'devices', label: 'Devices', Icon: IconBluetooth },
   { id: 'audio', label: 'Audio', Icon: IconVolume },
   { id: 'haptics', label: 'Haptics', Icon: Sparkles },
   { id: 'triggers', label: 'Triggers', Icon: IconDeviceGamepad2 },
@@ -2817,6 +2832,13 @@ export function App() {
   const [edgeRemapControlLayout, setEdgeRemapControlLayout] = useState<Record<DualSenseEdgeRemapButtonId, EdgeRemapControlLayout> | null>(null);
   const [hoveredRemapButton, setHoveredRemapButton] = useState<RemapButtonId | null>(null);
   const [pendingAction, setPendingAction] = useState<string | null>(null);
+  const [controllerDevices, setControllerDevices] = useState<CachedControllerDevice[]>(
+    () => loadControllerDeviceCache(window.localStorage)
+  );
+  const [openControllerDeviceMenuKey, setOpenControllerDeviceMenuKey] = useState<string | null>(null);
+  const [controllerDeviceRenameDialog, setControllerDeviceRenameDialog] = useState<ControllerDeviceRenameDialog | null>(null);
+  const [controllerDeviceForgetDialog, setControllerDeviceForgetDialog] = useState<ControllerDeviceForgetDialog | null>(null);
+  const [controllerDeviceActionError, setControllerDeviceActionError] = useState<string | null>(null);
   const [showBridgeSettings, setShowBridgeSettings] = useState(false);
   const [settingsFocusTarget, setSettingsFocusTarget] = useState<SettingsFocusTarget | null>(null);
   const [notificationFocusTarget, setNotificationFocusTarget] = useState<NotificationFocusTarget | null>(null);
@@ -2940,6 +2962,19 @@ export function App() {
   const connected = snapshot?.state === 'connected';
   const controllerConnected = Boolean(snapshot?.status?.controllerConnected);
   const controllerControlsAvailable = connected && controllerConnected;
+  const controllerDevicesModel = useMemo(() => buildDevicesModel({
+    bridgeConnected: connected,
+    status: snapshot?.status ?? null,
+    identity: snapshot?.diagnostics.deviceIdentity ?? null,
+    cachedDevices: controllerDevices,
+    pendingAction
+  }), [
+    connected,
+    controllerDevices,
+    pendingAction,
+    snapshot?.diagnostics.deviceIdentity,
+    snapshot?.status
+  ]);
   const liveControllerType = snapshot?.status?.controllerType;
   const remapControllerType = snapshot?.status?.controllerConnected && liveControllerType && liveControllerType !== 'unknown'
     ? liveControllerType
@@ -3091,6 +3126,53 @@ export function App() {
     chordAssignments.length,
     chordAssignmentDraftRows.length
   ]);
+
+  useEffect(() => {
+    const status = snapshot?.status;
+    if (!connected || !status?.controllerConnected) {
+      return;
+    }
+    const identity = snapshot.diagnostics.deviceIdentity;
+    setControllerDevices((current) => {
+      const next = observeControllerDevice(
+        current,
+        status,
+        identity
+      );
+      if (controllerDeviceCachesEqual(current, next)) {
+        return current;
+      }
+      saveControllerDeviceCache(window.localStorage, next);
+      return next;
+    });
+  }, [
+    connected,
+    snapshot?.diagnostics.deviceIdentity?.addressKnown,
+    snapshot?.diagnostics.deviceIdentity?.bluetoothAddress,
+    snapshot?.diagnostics.deviceIdentity?.controllerName,
+    snapshot?.diagnostics.deviceIdentity?.linkKeyKnown,
+    snapshot?.diagnostics.deviceIdentity?.productId,
+    snapshot?.diagnostics.deviceIdentity?.vendorId,
+    snapshot?.status?.batteryPercent,
+    snapshot?.status?.controllerConnected,
+    snapshot?.status?.controllerType
+  ]);
+
+  useEffect(() => {
+    if (!openControllerDeviceMenuKey) {
+      return undefined;
+    }
+    const closeMenu = (event: MouseEvent) => {
+      const target = event.target;
+      if (target instanceof Element
+        && target.closest('.trusted-device-menu, .trusted-device-menu-button')) {
+        return;
+      }
+      setOpenControllerDeviceMenuKey(null);
+    };
+    document.addEventListener('mousedown', closeMenu);
+    return () => document.removeEventListener('mousedown', closeMenu);
+  }, [openControllerDeviceMenuKey]);
 
   useEffect(() => {
     if (snapshot?.status?.controllerConnected && liveControllerType && liveControllerType !== 'unknown') {
@@ -5630,6 +5712,145 @@ export function App() {
     window.addEventListener('keydown', keyDown);
   }
 
+  async function refreshSnapshotAfterControllerDeviceError() {
+    try {
+      applySnapshot(await window.bridge.getStatus());
+    } catch {
+      // Preserve the last usable snapshot when the bridge is no longer reachable.
+    }
+  }
+
+  async function startControllerPairing() {
+    if (controllerDevicesModel.pairingAction.disabled || pendingAction !== null) {
+      return;
+    }
+    setOpenControllerDeviceMenuKey(null);
+    setControllerDeviceActionError(null);
+    setPendingAction('controller-pairing');
+    try {
+      applySnapshot(await window.bridge.requestControllerScan());
+    } catch (error) {
+      setControllerDeviceActionError(
+        error instanceof Error ? error.message : 'Controller pairing could not start.'
+      );
+      await refreshSnapshotAfterControllerDeviceError();
+    } finally {
+      setPendingAction(null);
+    }
+  }
+
+  function toggleControllerDeviceMenu(key: string) {
+    setOpenControllerDeviceMenuKey((current) => current === key ? null : key);
+  }
+
+  function openControllerDeviceRename(key: string) {
+    const device = controllerDevicesModel.cards.find((candidate) => candidate.key === key);
+    if (!device) {
+      return;
+    }
+    setOpenControllerDeviceMenuKey(null);
+    setControllerDeviceActionError(null);
+    setControllerDeviceRenameDialog({
+      key,
+      title: device.title,
+      value: device.title
+    });
+  }
+
+  function confirmControllerDeviceRename() {
+    const request = controllerDeviceRenameDialog;
+    const nextName = request?.value.trim() ?? '';
+    if (!request || !nextName) {
+      return;
+    }
+    let baseDevices = controllerDevices;
+    if (
+      !baseDevices.some((device) => device.key === request.key)
+      && connected
+      && snapshot?.status?.controllerConnected
+    ) {
+      baseDevices = observeControllerDevice(
+        baseDevices,
+        snapshot.status,
+        snapshot.diagnostics.deviceIdentity
+      );
+    }
+    const nextDevices = renameControllerDevice(baseDevices, request.key, nextName);
+    setControllerDevices(nextDevices);
+    if (!saveControllerDeviceCache(window.localStorage, nextDevices)) {
+      setControllerDeviceActionError('The controller name could not be saved to local storage.');
+    }
+    setControllerDeviceRenameDialog(null);
+  }
+
+  function openControllerDeviceForgetAll() {
+    if (controllerDevicesModel.forgetAllAction.disabled) {
+      return;
+    }
+    setOpenControllerDeviceMenuKey(null);
+    setControllerDeviceActionError(null);
+    setControllerDeviceForgetDialog({ kind: 'all' });
+  }
+
+  function openControllerDeviceForgetOne(key: string) {
+    const device = controllerDevicesModel.cards.find((candidate) => candidate.key === key);
+    if (!device?.bluetoothAddress || device.forgetDisabled) {
+      return;
+    }
+    setOpenControllerDeviceMenuKey(null);
+    setControllerDeviceActionError(null);
+    setControllerDeviceForgetDialog({
+      kind: 'controller',
+      key,
+      title: device.title,
+      bluetoothAddress: device.bluetoothAddress
+    });
+  }
+
+  function closeControllerDeviceForget() {
+    if (
+      pendingAction === 'controller-forget-all'
+      || pendingAction === 'controller-forget-one'
+    ) {
+      return;
+    }
+    setControllerDeviceForgetDialog(null);
+    setControllerDeviceActionError(null);
+  }
+
+  async function confirmControllerDeviceForget() {
+    const request = controllerDeviceForgetDialog;
+    if (!request || !connected || pendingAction !== null) {
+      return;
+    }
+    const actionLabel = request.kind === 'all'
+      ? 'controller-forget-all'
+      : 'controller-forget-one';
+    setControllerDeviceActionError(null);
+    setPendingAction(actionLabel);
+    try {
+      const nextSnapshot = request.kind === 'all'
+        ? await window.bridge.forgetControllerPairings()
+        : await window.bridge.forgetControllerPairing(request.bluetoothAddress);
+      applySnapshot(nextSnapshot);
+      setControllerDevices((current) => {
+        const nextDevices = request.kind === 'all'
+          ? []
+          : current.filter((device) => device.key !== request.key);
+        saveControllerDeviceCache(window.localStorage, nextDevices);
+        return nextDevices;
+      });
+      setControllerDeviceForgetDialog(null);
+    } catch (error) {
+      setControllerDeviceActionError(
+        error instanceof Error ? error.message : 'The controller pairing could not be forgotten.'
+      );
+      await refreshSnapshotAfterControllerDeviceError();
+    } finally {
+      setPendingAction(null);
+    }
+  }
+
   function toggleHapticsEnabled() {
     if (!snapshot) return;
     void runAction('haptics-enabled', () => window.bridge.setHapticsEnabled(!snapshot.settings.hapticsEnabled));
@@ -5932,6 +6153,7 @@ export function App() {
     setShowCustomColorPicker(false);
     setShowBridgeSettings(false);
     setShowNotificationsMenu(false);
+    setOpenControllerDeviceMenuKey(null);
     setActiveControlTab(tab);
   }
 
@@ -6750,6 +6972,31 @@ export function App() {
               </div>
             </section>
           </div>
+
+          <ControllerDevicesPage
+            active={activeControlTab === 'devices'}
+            model={controllerDevicesModel}
+            openMenuKey={openControllerDeviceMenuKey}
+            renameDialog={controllerDeviceRenameDialog}
+            forgetDialog={controllerDeviceForgetDialog}
+            pendingAction={pendingAction}
+            actionError={controllerDeviceActionError}
+            onStartPairing={() => void startControllerPairing()}
+            onToggleMenu={toggleControllerDeviceMenu}
+            onOpenRename={openControllerDeviceRename}
+            onUpdateRename={(value) => setControllerDeviceRenameDialog((current) => (
+              current ? { ...current, value } : null
+            ))}
+            onCloseRename={() => {
+              setControllerDeviceRenameDialog(null);
+              setControllerDeviceActionError(null);
+            }}
+            onConfirmRename={confirmControllerDeviceRename}
+            onOpenForgetAll={openControllerDeviceForgetAll}
+            onOpenForgetOne={openControllerDeviceForgetOne}
+            onCloseForget={closeControllerDeviceForget}
+            onConfirmForget={() => void confirmControllerDeviceForget()}
+          />
 
           <div
             className={`control-page haptics-page ${activeControlTab === 'haptics' ? 'active' : ''}`}
