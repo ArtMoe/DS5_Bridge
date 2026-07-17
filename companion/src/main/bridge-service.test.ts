@@ -718,25 +718,6 @@ describe('BridgeService', () => {
   it('surfaces a compatible older bridge firmware as an available update', async () => {
     const service = serviceFixture();
     const device = new MockHidDevice();
-    device.status = statusReport({ firmwareMajor: 1, firmwareMinor: 6, firmwarePatch: 2 });
-    hidMock.state.devicesList = [companionDeviceInfo()];
-    hidMock.state.openDevices.set('companion-path', device);
-
-    await poll(service);
-
-    const snapshot = service.getSnapshot();
-    expect(snapshot.state).toBe('connected');
-    expect(snapshot.status?.firmwareVersion).toBe('1.6.2');
-    expect(snapshot.diagnostics.lastError).toBeNull();
-    expect(snapshot.diagnostics.firmwareUpdateAvailable).toEqual({
-      currentVersion: '1.6.2',
-      availableVersion: '1.6.3'
-    });
-  });
-
-  it('does not surface an available update for the bundled bridge firmware', async () => {
-    const service = serviceFixture();
-    const device = new MockHidDevice();
     device.status = statusReport({ firmwareMajor: 1, firmwareMinor: 6, firmwarePatch: 3 });
     hidMock.state.devicesList = [companionDeviceInfo()];
     hidMock.state.openDevices.set('companion-path', device);
@@ -746,6 +727,25 @@ describe('BridgeService', () => {
     const snapshot = service.getSnapshot();
     expect(snapshot.state).toBe('connected');
     expect(snapshot.status?.firmwareVersion).toBe('1.6.3');
+    expect(snapshot.diagnostics.lastError).toBeNull();
+    expect(snapshot.diagnostics.firmwareUpdateAvailable).toEqual({
+      currentVersion: '1.6.3',
+      availableVersion: '1.6.4'
+    });
+  });
+
+  it('does not surface an available update for the bundled bridge firmware', async () => {
+    const service = serviceFixture();
+    const device = new MockHidDevice();
+    device.status = statusReport({ firmwareMajor: 1, firmwareMinor: 6, firmwarePatch: 4 });
+    hidMock.state.devicesList = [companionDeviceInfo()];
+    hidMock.state.openDevices.set('companion-path', device);
+
+    await poll(service);
+
+    const snapshot = service.getSnapshot();
+    expect(snapshot.state).toBe('connected');
+    expect(snapshot.status?.firmwareVersion).toBe('1.6.4');
     expect(snapshot.diagnostics.firmwareUpdateAvailable).toBeNull();
   });
 
