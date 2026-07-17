@@ -901,8 +901,8 @@ void assert_dualsense_feature_startup_is_paced(std::filesystem::path const &root
         watchdog_sleep.find("watchdog_update();") == std::string::npos
         || watchdog_sleep.find("std::min<uint32_t>(total_ms, 10)") == std::string::npos
         || usb_cpp.find("sleep_ms_with_watchdog(150);") == std::string::npos
-        || main_cpp.find("bt_feature_prefetch_loop();\n        watchdog_update();")
-            == std::string::npos
+        || main_cpp.find("bt_feature_prefetch_loop();") == std::string::npos
+        || main_cpp.find("watchdog_update();") == std::string::npos
     ) {
         throw std::runtime_error(
             "Feature startup and USB initialization must remain watchdog-safe"
@@ -981,6 +981,87 @@ void assert_bootsel_gestures_and_intentional_disconnects(std::filesystem::path c
     }
 }
 
+void assert_host_rumble_passes_through_with_bounded_delivery(
+    std::filesystem::path const &root
+) {
+    const auto main_cpp = read_text(root / "src" / "main.cpp");
+    const auto bt_cpp = read_text(root / "src" / "bt.cpp");
+    const auto bt_h = read_text(root / "src" / "bt.h");
+    const auto scheduler_cpp = read_text(root / "src" / "output_scheduler.cpp");
+    const auto delivery_policy = read_text(
+        root / "src" / "classic_rumble_delivery_policy.h"
+    );
+
+    const std::string submit = extract_between(
+        main_cpp,
+        "void controller_output_submit_usb_payload",
+        "\n}\n\nuint8_t interrupt_in_data"
+    );
+    const auto gain = submit.find(
+        "controller_output_policy_apply_classic_rumble_gain_payload"
+    );
+    const auto write = submit.find("bt_write_classified_output");
+    const auto cache = submit.find("audio_set_state_data");
+    if (
+        gain == std::string::npos
+        || write == std::string::npos
+        || cache == std::string::npos
+        || gain > write
+        || write > cache
+        || submit.find("if (!bt_write_classified_output") == std::string::npos
+    ) {
+        throw std::runtime_error(
+            "Host rumble gain must be applied once before pass-through admission, with audio cache publication gated on acceptance"
+        );
+    }
+
+    const std::string classified = extract_between(
+        bt_cpp,
+        "bool bt_write_classified_output",
+        "\n}\n\nbool bt_write_audio_stream"
+    );
+    if (
+        classified.find("OutputReasonHostPassthrough") == std::string::npos
+        || classified.find("enqueue_urgent_output") == std::string::npos
+        || classified.find("apply_classic_rumble_gain") != std::string::npos
+        || classified.find("strip_redundant_classic_rumble_from_output")
+            != std::string::npos
+        || classified.find("split_state_from_mixed_output") != std::string::npos
+    ) {
+        throw std::runtime_error(
+            "Normal host/persona reports must stay complete pass-through packets without inferred START/STOP rewriting"
+        );
+    }
+
+    const std::string enqueue = extract_between(
+        bt_cpp,
+        "static bool enqueue_urgent_output",
+        "\n}\n\nstatic bool make_control_packet"
+    );
+    const std::string retry = extract_between(
+        bt_cpp,
+        "static bool requeue_managed_rumble_on_send_failure",
+        "\n}\n\nstatic void finish_hid_session_if_ready"
+    );
+    if (
+        enqueue.find("enqueue_with_soft_cap") == std::string::npos
+        || enqueue.find("URGENT_SEND_QUEUE_HARD_MAX_DEPTH") == std::string::npos
+        || retry.find("retry_delay_us") == std::string::npos
+        || retry.find("retry_requires_fail_closed") == std::string::npos
+        || retry.find("requeue_failed_front") == std::string::npos
+        || delivery_policy.find("DeliveryKind::ManagedStop") == std::string::npos
+        || delivery_policy.find("return is_terminal_stop(kind);") == std::string::npos
+        || scheduler_cpp.find("output_scheduler_classic_rumble_can_bypass_audio")
+            == std::string::npos
+        || bt_h.find("void bt_output_retry_loop();") == std::string::npos
+        || main_cpp.find("bt_output_retry_loop();") == std::string::npos
+    ) {
+        throw std::runtime_error(
+            "Managed rumble STOP delivery must remain bounded, retryable, and fair to native audio"
+        );
+    }
+}
+
 } // namespace
 
 int main() {
@@ -1003,6 +1084,7 @@ int main() {
         assert_bluetooth_hid_recovery_and_encryption_watchdog(source_root);
         assert_dualsense_feature_startup_is_paced(source_root);
         assert_bootsel_gestures_and_intentional_disconnects(source_root);
+        assert_host_rumble_passes_through_with_bounded_delivery(source_root);
 
         if (bcd_device != kExpectedUsbDeviceRevision) {
             std::cerr << "USB bcdDevice changed unexpectedly. Expected 0x" << std::hex

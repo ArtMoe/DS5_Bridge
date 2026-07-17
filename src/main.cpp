@@ -125,12 +125,28 @@ void controller_output_submit_usb_payload(uint8_t const *payload, uint16_t paylo
             companion_note_host_output_report(forwardedHostReport, forwardedLen);
         }
     }
+#endif
+
+    // Apply configured ownership overrides before the one complete report is
+    // admitted. Classic-rumble gain is the sole normal rumble transform.
+    controller_output_policy_sanitize_host_lightbar_payload(
+        outputData + 3,
+        payloadLen,
+        lightbarOverride
+    );
+    bt_sanitize_host_speaker_amp_ownership(outputData, sizeof(outputData));
+    bt_sanitize_host_mic_ownership(outputData, sizeof(outputData));
+    controller_output_policy_apply_classic_rumble_gain_payload(
+        outputData + 3,
+        payloadLen
+    );
+
     uint8_t audioStateData[sizeof(outputData) - 3]{};
     if (payloadLen > 0) {
         memcpy(audioStateData, outputData + 3, payloadLen);
     }
-    // 0x36 carries an audio-state snapshot while speaker streaming. Strip
-    // game LEDs only when the companion lightbar override is explicitly on.
+    // A later 0x36 carrier mirrors the same accepted motor strength while
+    // retaining bridge-owned speaker, microphone, and lightbar fields.
     controller_output_policy_sanitize_host_lightbar_payload(
         audioStateData,
         payloadLen,
@@ -138,25 +154,12 @@ void controller_output_submit_usb_payload(uint8_t const *payload, uint16_t paylo
     );
     controller_output_policy_sanitize_host_speaker_amp_payload(audioStateData, payloadLen);
     controller_output_policy_sanitize_host_mic_payload(audioStateData, payloadLen);
-    controller_output_policy_apply_classic_rumble_gain_payload(audioStateData, payloadLen);
-    audio_set_state_data(audioStateData, static_cast<uint8_t>(payloadLen));
-#else
-    uint8_t audioStateData[sizeof(outputData) - 3]{};
-    if (payloadLen > 0) {
-        memcpy(audioStateData, outputData + 3, payloadLen);
+
+    if (!bt_write_classified_output(outputData, sizeof(outputData))) {
+        // Do not publish rejected output into future audio carriers.
+        return;
     }
-    controller_output_policy_sanitize_host_lightbar_payload(audioStateData, payloadLen, false);
-    controller_output_policy_sanitize_host_speaker_amp_payload(audioStateData, payloadLen);
-    controller_output_policy_sanitize_host_mic_payload(audioStateData, payloadLen);
-    controller_output_policy_apply_classic_rumble_gain_payload(audioStateData, payloadLen);
     audio_set_state_data(audioStateData, static_cast<uint8_t>(payloadLen));
-#endif
-    // Keep app-controlled lighting authoritative when override is active.
-    controller_output_policy_sanitize_host_lightbar_payload(outputData + 3, payloadLen, lightbarOverride);
-    controller_output_policy_sanitize_host_mic_report(outputData, sizeof(outputData));
-    // Haptics gain is applied to audio samples. Output report motor
-    // bytes are classic rumble and must follow the rumble setting.
-    bt_write_classified_output(outputData, sizeof(outputData));
     if (hostClearsLeds && !lightbarOverride) {
         bt_schedule_lightbar_restore(HOST_LIGHTBAR_RESTORE_DELAY_MS);
     }
@@ -598,6 +601,7 @@ int main() {
         bt_inquiry_loop();
         bt_connection_recovery_loop();
         bt_feature_prefetch_loop();
+        bt_output_retry_loop();
         watchdog_update();
 #ifdef ENABLE_COMPANION
         companion_loop();

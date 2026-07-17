@@ -1,5 +1,6 @@
 #include <array>
 #include <cstdint>
+#include <deque>
 #include <exception>
 #include <iostream>
 #include <sstream>
@@ -9,6 +10,7 @@
 #include <vector>
 
 #include "controller_output_policy.h"
+#include "classic_rumble_delivery_policy.h"
 #include "controller_output_rumble_state.h"
 #include "controller_output_state.h"
 #include "controller_packet_compositor.h"
@@ -194,6 +196,7 @@ OutputSchedulerInputs scheduler_inputs() {
     return OutputSchedulerInputs{
         false,
         false,
+        false,
         0,
         0,
         0,
@@ -260,6 +263,83 @@ void packet_compositor_initializes_bluetooth_report_and_wraps_sequence() {
     controller_packet_init_bt_output_report(report.data(), int_sequence);
     EXPECT_EQ(report[1], 0xe0);
     EXPECT_EQ(int_sequence, 0x0f);
+}
+
+void scheduler_alternates_rumble_with_audio_and_prioritizes_one_stop() {
+    auto inputs = scheduler_inputs();
+    auto config = scheduler_config();
+    inputs.audio_available = true;
+    inputs.urgent_available = true;
+
+    EXPECT_EQ(
+        output_scheduler_choose_interrupt_packet(inputs, config),
+        OutputSchedulerChoice::AudioStream
+    );
+    EXPECT_TRUE(output_scheduler_classic_rumble_can_bypass_audio(
+        true,
+        false,
+        0,
+        0
+    ));
+    EXPECT_FALSE(output_scheduler_classic_rumble_can_bypass_audio(
+        true,
+        false,
+        0,
+        1
+    ));
+    EXPECT_TRUE(output_scheduler_classic_rumble_can_bypass_audio(
+        true,
+        true,
+        0,
+        1
+    ));
+    EXPECT_FALSE(output_scheduler_classic_rumble_can_bypass_audio(
+        true,
+        true,
+        1,
+        1
+    ));
+}
+
+void classic_rumble_delivery_is_bounded_and_protects_managed_stop() {
+    using ds5::classic_rumble::AdmissionResult;
+    using ds5::classic_rumble::DeliveryKind;
+    struct Packet {
+        uint8_t id;
+        DeliveryKind kind;
+    };
+    auto kind_of = [](Packet const &packet) {
+        return packet.kind;
+    };
+    std::deque<Packet> queue{
+        {1, DeliveryKind::HostPassthrough},
+        {2, DeliveryKind::ManagedStop},
+        {3, DeliveryKind::HostPassthrough},
+    };
+
+    EXPECT_EQ(
+        ds5::classic_rumble::enqueue_with_soft_cap(
+            queue,
+            Packet{4, DeliveryKind::HostPassthrough},
+            3,
+            8,
+            kind_of
+        ),
+        AdmissionResult::Enqueued
+    );
+    EXPECT_EQ(queue.size(), 3u);
+    EXPECT_EQ(queue[0].id, 2);
+    EXPECT_EQ(queue[2].id, 4);
+
+    ds5::classic_rumble::requeue_failed_front(
+        queue,
+        Packet{5, DeliveryKind::ManagedStop}
+    );
+    EXPECT_EQ(queue.front().id, 5);
+    EXPECT_EQ(ds5::classic_rumble::retry_delay_us(1), 5'000u);
+    EXPECT_EQ(ds5::classic_rumble::retry_delay_us(5), 80'000u);
+    EXPECT_FALSE(ds5::classic_rumble::retry_requires_fail_closed(7));
+    EXPECT_TRUE(ds5::classic_rumble::retry_requires_fail_closed(8));
 }
 
 void usb_host_speaker_gain_does_not_attenuate_native_haptics() {
@@ -793,12 +873,12 @@ void rumble_state_machine_sends_real_stops_immediately() {
         static_cast<uint16_t>(payload.size())
     );
     EXPECT_FALSE(state.classic_rumble_active);
-    EXPECT_FALSE(controller_output_rumble_payload_requires_immediate_send(
+    EXPECT_TRUE(controller_output_rumble_payload_requires_immediate_send(
         state,
         payload.data(),
         static_cast<uint16_t>(payload.size())
     ));
-    EXPECT_TRUE(controller_output_rumble_payload_is_redundant(
+    EXPECT_FALSE(controller_output_rumble_payload_is_redundant(
         state,
         payload.data(),
         static_cast<uint16_t>(payload.size())
@@ -821,7 +901,7 @@ void rumble_state_machine_sends_real_stops_immediately() {
     EXPECT_TRUE(state.classic_rumble_active);
 
     payload = empty_payload();
-    EXPECT_TRUE(controller_output_rumble_payload_requires_immediate_send(
+    EXPECT_FALSE(controller_output_rumble_payload_requires_immediate_send(
         state,
         payload.data(),
         static_cast<uint16_t>(payload.size())
@@ -831,7 +911,7 @@ void rumble_state_machine_sends_real_stops_immediately() {
         payload.data(),
         static_cast<uint16_t>(payload.size())
     );
-    EXPECT_FALSE(state.classic_rumble_active);
+    EXPECT_TRUE(state.classic_rumble_active);
 
     payload = empty_payload();
     payload[kValidFlag0Offset] = kFlag0HapticsSelect;
@@ -847,7 +927,7 @@ void rumble_state_machine_sends_real_stops_immediately() {
     payload = empty_payload();
     payload[kValidFlag0Offset] = kFlag0RightTriggerEffect;
     std::fill_n(payload.data() + kTriggerEffectRightOffset, kTriggerEffectSize, 0x31);
-    EXPECT_TRUE(controller_output_rumble_payload_requires_immediate_send(
+    EXPECT_FALSE(controller_output_rumble_payload_requires_immediate_send(
         state,
         payload.data(),
         static_cast<uint16_t>(payload.size())
@@ -857,7 +937,7 @@ void rumble_state_machine_sends_real_stops_immediately() {
         payload.data(),
         static_cast<uint16_t>(payload.size())
     );
-    EXPECT_FALSE(state.classic_rumble_active);
+    EXPECT_TRUE(state.classic_rumble_active);
 }
 
 void haptics_test_signal_matches_original_main_packet_flip_pattern() {
@@ -1205,6 +1285,8 @@ std::vector<TestCase> tests{
     {"scheduler prioritizes audio when non-audio would delay streaming", scheduler_prioritizes_audio_when_non_audio_would_delay_streaming},
     {"scheduler sends coalesced state when audio is absent", scheduler_sends_coalesced_state_when_audio_is_absent},
     {"scheduler audio due on age backlog or fairness limit", scheduler_audio_due_on_age_backlog_or_fairness_limit},
+    {"scheduler alternates rumble with audio and prioritizes one stop", scheduler_alternates_rumble_with_audio_and_prioritizes_one_stop},
+    {"classic rumble delivery is bounded and protects managed stop", classic_rumble_delivery_is_bounded_and_protects_managed_stop},
     {"packet compositor initializes bluetooth report and wraps sequence", packet_compositor_initializes_bluetooth_report_and_wraps_sequence},
     {"usb host speaker gain does not attenuate native haptics", usb_host_speaker_gain_does_not_attenuate_native_haptics},
     {"classic rumble gain clamps rounds and touches motor payloads", classic_rumble_gain_clamps_rounds_and_touches_motor_payloads},

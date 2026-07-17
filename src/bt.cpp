@@ -9,12 +9,14 @@
 
 #include "bt.h"
 
+#include <deque>
 #include <queue>
 #include <unordered_map>
 #include <utility>
 #include <vector>
 
 #include "audio.h"
+#include "classic_rumble_delivery_policy.h"
 #include "controller_packet_compositor.h"
 #include "controller_output_policy.h"
 #include "controller_output_rumble_state.h"
@@ -82,6 +84,7 @@
 #define DS_TRIGGER_TARGET_RIGHT 2
 #define AUDIO_SEND_QUEUE_MAX_DEPTH 4
 #define URGENT_SEND_QUEUE_MAX_DEPTH 16
+#define URGENT_SEND_QUEUE_HARD_MAX_DEPTH 64
 #define OUTPUT_AUDIO_MAX_AGE_US 3000
 #define OUTPUT_MAX_CONSECUTIVE_NON_AUDIO_SENDS 1
 #define CONTROL_SEND_QUEUE_MAX_DEPTH 8
@@ -147,6 +150,7 @@
 using std::unordered_map;
 using std::vector;
 using std::queue;
+using std::deque;
 
 enum OutputPacketClass : uint8_t {
     OutputPacketUrgent = 1,
@@ -163,7 +167,23 @@ enum OutputClassificationReason : uint8_t {
     OutputReasonCriticalPayload = 5,
     OutputReasonStateNoop = 6,
     OutputReasonClassicRumbleImmediate = 7,
+    OutputReasonHostPassthrough = 8,
+    OutputReasonClassicRumbleManagedStop = 9,
 };
+
+static ds5::classic_rumble::DeliveryKind classic_rumble_delivery_kind(uint8_t reason) {
+    using ds5::classic_rumble::DeliveryKind;
+    switch (reason) {
+        case OutputReasonHostPassthrough:
+            return DeliveryKind::HostPassthrough;
+        case OutputReasonClassicRumbleImmediate:
+            return DeliveryKind::ManagedActive;
+        case OutputReasonClassicRumbleManagedStop:
+            return DeliveryKind::ManagedStop;
+        default:
+            return DeliveryKind::Other;
+    }
+}
 
 enum BtAudioDebugKind : uint8_t {
     BtAudioDebugLateAudio = 1,
@@ -208,9 +228,11 @@ enum class HidConnectionInitiator : uint8_t {
 struct output_packet {
     vector<uint8_t> data;
     uint32_t enqueue_time_us;
+    uint32_t ready_at_us;
     uint8_t packet_class;
     uint8_t report_id;
     uint8_t reason;
+    uint8_t retry_count;
     uint8_t trace_detail0;
     uint8_t trace_detail1;
     uint8_t trace_detail2;
@@ -254,6 +276,11 @@ static bool build_interrupt_output_packet(uint8_t *data, uint16_t len, vector<ui
 static bool enqueue_urgent_output(uint8_t *data, uint16_t len, uint8_t reason);
 static bool enqueue_state_output(uint8_t *data, uint16_t len, uint8_t reason);
 static bool enqueue_feedback_state_output(uint8_t *data, uint16_t len, uint8_t reason);
+static bool enqueue_classic_rumble_immediate_or_state_output(
+    uint8_t *data,
+    uint16_t len,
+    uint8_t reason
+);
 static bool enqueue_control_packet(uint8_t const *data, uint16_t len, bool coalescible);
 static bool select_next_control_packet_locked(control_packet &packet, uint32_t now);
 static void request_can_send_if_needed(bool should_request_send);
@@ -327,7 +354,7 @@ static feature_prefetch_request feature_prefetch_queue[FEATURE_PREFETCH_MAX_REQU
 static uint8_t feature_prefetch_count = 0;
 static uint8_t feature_prefetch_index = 0;
 static uint32_t feature_prefetch_next_us = 0;
-static queue<output_packet> urgent_queue;
+static deque<output_packet> urgent_queue;
 static queue<output_packet> audio_queue;
 static vector<control_packet> control_queue;
 static uint8_t state_pending_report[DS_OUTPUT_REPORT_BT_SIZE];
@@ -339,6 +366,8 @@ static uint32_t last_bt_send_us = 0;
 static uint32_t last_audio_0x36_send_us = 0;
 static uint32_t non_audio_reports_since_audio = 0;
 static uint8_t consecutive_non_audio_sends = 0;
+static uint8_t consecutive_classic_rumble_stop_sends = 0;
+static bool interrupt_can_send_event_requested = false;
 static critical_section_t queue_lock;
 uint32_t inactive_time = 0; // Tracks long controller inactivity.
 static uint16_t idle_disconnect_timeout_minutes = DEFAULT_IDLE_DISCONNECT_TIMEOUT_MINUTES;
@@ -368,6 +397,10 @@ static void clear_packet_queue(queue<output_packet> &packets) {
     }
 }
 
+static void clear_packet_queue(deque<output_packet> &packets) {
+    packets.clear();
+}
+
 static bool control_pending_locked() {
     return !control_queue.empty();
 }
@@ -379,6 +412,8 @@ static void clear_output_queues_locked() {
     state_pending = false;
     memset(state_pending_report, 0, sizeof(state_pending_report));
     consecutive_non_audio_sends = 0;
+    consecutive_classic_rumble_stop_sends = 0;
+    interrupt_can_send_event_requested = false;
     non_audio_reports_since_audio = 0;
     last_bt_send_us = 0;
     last_audio_0x36_send_us = 0;
@@ -823,7 +858,12 @@ void bt_set_classic_rumble_output(uint8_t right, uint8_t left) {
     uint8_t report[DS_OUTPUT_REPORT_BT_SIZE];
     init_state_report(report);
     controller_output_policy_render_classic_rumble_payload(report + 3, DS_OUTPUT_REPORT_COMMON_SIZE, right, left);
-    if (bt_write_classified_output(report, sizeof(report))) {
+    apply_classic_rumble_gain(report, sizeof(report));
+    if (enqueue_classic_rumble_immediate_or_state_output(
+            report,
+            sizeof(report),
+            OutputReasonStateOnly
+        )) {
         controller_output_state_apply_host_payload(report + 3, DS_OUTPUT_REPORT_COMMON_SIZE);
     }
 }
@@ -1677,6 +1717,23 @@ void bt_feature_prefetch_loop() {
     feature_prefetch_next_us = time_us_32() + FEATURE_PREFETCH_SPACING_US;
 }
 
+void bt_output_retry_loop() {
+    if (
+        hid_interrupt_cid == 0
+        || connection_phase == BtConnectionPhase::Disconnecting
+    ) {
+        return;
+    }
+
+    bool retry_ready = false;
+    const uint32_t now = time_us_32();
+    critical_section_enter_blocking(&queue_lock);
+    retry_ready = !urgent_queue.empty()
+        && bt_time_reached(now, urgent_queue.front().ready_at_us);
+    critical_section_exit(&queue_lock);
+    request_can_send_if_needed(retry_ready);
+}
+
 void bt_inquiry_loop() {
     const uint32_t now = time_us_32();
     if (
@@ -2244,6 +2301,16 @@ static void note_output_packet_sent(const output_packet &packet, uint32_t now) {
     }
     last_bt_send_us = now;
 
+    if (ds5::classic_rumble::is_terminal_stop(
+            classic_rumble_delivery_kind(packet.reason)
+        )) {
+        if (consecutive_classic_rumble_stop_sends != 0xff) {
+            consecutive_classic_rumble_stop_sends++;
+        }
+    } else {
+        consecutive_classic_rumble_stop_sends = 0;
+    }
+
     if (packet.packet_class == OutputPacketAudio) {
         update_max_u32(output_counters.audio_0x36_max_age_us, age_us);
         uint32_t audio_gap_us = 0;
@@ -2299,14 +2366,32 @@ static bool select_next_output_packet_locked(output_packet &packet, uint32_t now
         return false;
     }
 
+    const bool urgent_queued = !urgent_queue.empty();
+    const bool urgent_ready = urgent_queued
+        && bt_time_reached(now, urgent_queue.front().ready_at_us);
+    const auto urgent_delivery_kind = urgent_queued
+        ? classic_rumble_delivery_kind(urgent_queue.front().reason)
+        : ds5::classic_rumble::DeliveryKind::Other;
+
     uint8_t trace_critical_depth = 0;
     uint8_t trace_audio_depth = 0;
     uint8_t trace_route_flags = 0;
     output_trace_queue_details_locked(trace_critical_depth, trace_audio_depth, trace_route_flags);
 
-    if (!urgent_queue.empty()) {
+    if (
+        urgent_ready
+        && (
+            !ds5::classic_rumble::is_classic_rumble(urgent_delivery_kind)
+            || output_scheduler_classic_rumble_can_bypass_audio(
+                !audio_queue.empty(),
+                ds5::classic_rumble::is_terminal_stop(urgent_delivery_kind),
+                consecutive_classic_rumble_stop_sends,
+                consecutive_non_audio_sends
+            )
+        )
+    ) {
         packet = std::move(urgent_queue.front());
-        urgent_queue.pop();
+        urgent_queue.pop_front();
     } else {
         const bool audio_available = !audio_queue.empty();
         const uint32_t audio_age_us = audio_available
@@ -2314,7 +2399,8 @@ static bool select_next_output_packet_locked(output_packet &packet, uint32_t now
             : 0;
         const OutputSchedulerInputs scheduler_inputs{
             audio_available,
-            state_pending,
+            urgent_ready,
+            state_pending && !urgent_queued,
             audio_age_us,
             static_cast<uint32_t>(audio_queue.size()),
             consecutive_non_audio_sends
@@ -2332,6 +2418,9 @@ static bool select_next_output_packet_locked(output_packet &packet, uint32_t now
         if (choice == OutputSchedulerChoice::AudioStream) {
             packet = std::move(audio_queue.front());
             audio_queue.pop();
+        } else if (choice == OutputSchedulerChoice::Urgent) {
+            packet = std::move(urgent_queue.front());
+            urgent_queue.pop_front();
         } else if (choice == OutputSchedulerChoice::CoalescedState) {
             if (state_send_blocked_by_audio_locked(now)) {
                 return false;
@@ -2360,7 +2449,6 @@ static bool select_next_output_packet_locked(output_packet &packet, uint32_t now
         trace_audio_depth,
         trace_route_flags
     );
-    note_output_packet_sent(packet, now);
     update_queue_depth_counters_locked();
     return true;
 }
@@ -2400,6 +2488,51 @@ static bool controller_input_report_is_active(uint8_t const *packet, uint16_t si
 
 static uint64_t idle_disconnect_timeout_us() {
     return static_cast<uint64_t>(idle_disconnect_timeout_minutes) * 60ULL * 1000ULL * 1000ULL;
+}
+
+static bool requeue_managed_rumble_on_send_failure(
+    output_packet &&packet,
+    uint32_t now
+) {
+    const auto delivery_kind = classic_rumble_delivery_kind(packet.reason);
+    if (
+        packet.packet_class != OutputPacketUrgent
+        || !ds5::classic_rumble::tracks_delivery_state(delivery_kind)
+        || hid_interrupt_cid == 0
+    ) {
+        return false;
+    }
+
+    if (packet.retry_count != 0xff) {
+        packet.retry_count++;
+    }
+    if (ds5::classic_rumble::retry_requires_fail_closed(packet.retry_count)) {
+        DS5_LOG("[L2CAP] Managed rumble retry exhausted; disconnect HID\n");
+        (void)bt_disconnect();
+        critical_section_enter_blocking(&queue_lock);
+        clear_output_queues_locked();
+        critical_section_exit(&queue_lock);
+        return false;
+    }
+
+    packet.ready_at_us = now
+        + ds5::classic_rumble::retry_delay_us(packet.retry_count);
+    critical_section_enter_blocking(&queue_lock);
+    if (urgent_queue.size() >= URGENT_SEND_QUEUE_HARD_MAX_DEPTH) {
+        critical_section_exit(&queue_lock);
+        DS5_LOG("[L2CAP] Managed rumble retry reserve exhausted; disconnect HID\n");
+        (void)bt_disconnect();
+        critical_section_enter_blocking(&queue_lock);
+        clear_output_queues_locked();
+        critical_section_exit(&queue_lock);
+        return false;
+    }
+    ds5::classic_rumble::requeue_failed_front(
+        urgent_queue,
+        std::move(packet)
+    );
+    critical_section_exit(&queue_lock);
+    return true;
 }
 
 static void finish_hid_session_if_ready() {
@@ -2681,6 +2814,7 @@ static void l2cap_packet_handler(uint8_t packet_type, uint16_t channel, uint8_t 
             if (local_cid != hid_interrupt_cid) {
                 break;
             }
+            interrupt_can_send_event_requested = false;
 
             output_packet next_packet{};
             const uint32_t now = time_us_32();
@@ -2689,7 +2823,7 @@ static void l2cap_packet_handler(uint8_t packet_type, uint16_t channel, uint8_t 
                 critical_section_exit(&queue_lock);
                 break;
             }
-            const bool has_more = output_pending_locked();
+            bool has_more = output_pending_locked();
             bool should_request_control = false;
             request_control_if_audio_window_open_locked(now, should_request_control);
             critical_section_exit(&queue_lock);
@@ -2697,7 +2831,18 @@ static void l2cap_packet_handler(uint8_t packet_type, uint16_t channel, uint8_t 
             uint8_t status = l2cap_send(hid_interrupt_cid, next_packet.data.data(), next_packet.data.size());
             if (status != 0) {
                 DS5_LOG("[L2CAP] Interrupt Error, Status: 0x%02X\n", status);
+                if (requeue_managed_rumble_on_send_failure(std::move(next_packet), now)) {
+                    // The failed transition remains at the head until its
+                    // bounded backoff expires. Audio may continue meanwhile.
+                    critical_section_enter_blocking(&queue_lock);
+                    has_more = !audio_queue.empty() || state_pending;
+                    critical_section_exit(&queue_lock);
+                }
             } else if (!next_packet.data.empty()) {
+                critical_section_enter_blocking(&queue_lock);
+                note_output_packet_sent(next_packet, time_us_32());
+                has_more = has_more || output_pending_locked();
+                critical_section_exit(&queue_lock);
 #ifdef ENABLE_COMPANION
                 companion_note_trigger_trace_report(
                     CompanionTriggerTraceBt,
@@ -2717,9 +2862,7 @@ static void l2cap_packet_handler(uint8_t packet_type, uint16_t channel, uint8_t 
                 );
 #endif
             }
-            if (has_more) {
-                l2cap_request_can_send_now_event(hid_interrupt_cid);
-            }
+            request_can_send_if_needed(has_more);
             request_control_can_send_if_needed(should_request_control);
             break;
         }
@@ -2743,10 +2886,17 @@ static void request_can_send_if_needed(bool should_request_send) {
     if (!should_request_send) {
         return;
     }
+    if (connection_phase == BtConnectionPhase::Disconnecting) {
+        return;
+    }
     if (hid_interrupt_cid == 0) {
         DS5_LOG("[L2CAP output] Warning: hid_interrupt_cid 0\n");
         return;
     }
+    if (interrupt_can_send_event_requested) {
+        return;
+    }
+    interrupt_can_send_event_requested = true;
     l2cap_request_can_send_now_event(hid_interrupt_cid);
 }
 
@@ -2807,9 +2957,11 @@ static bool make_output_packet(
         return false;
     }
     packet.enqueue_time_us = time_us_32();
+    packet.ready_at_us = packet.enqueue_time_us;
     packet.packet_class = packet_class;
     packet.report_id = len > 0 ? data[0] : 0;
     packet.reason = reason;
+    packet.retry_count = 0;
     return true;
 }
 
@@ -2820,16 +2972,40 @@ static bool enqueue_urgent_output(uint8_t *data, uint16_t len, uint8_t reason) {
     }
 
     bool should_request_send = false;
+    bool hard_limit_reached = false;
     critical_section_enter_blocking(&queue_lock);
     should_request_send = !output_pending_locked();
-    if (reason == OutputReasonClassicRumbleImmediate) {
+    const auto admission = ds5::classic_rumble::enqueue_with_soft_cap(
+        urgent_queue,
+        std::move(packet),
+        URGENT_SEND_QUEUE_MAX_DEPTH,
+        URGENT_SEND_QUEUE_HARD_MAX_DEPTH,
+        [](output_packet const &queued) {
+            return classic_rumble_delivery_kind(queued.reason);
+        }
+    );
+    hard_limit_reached =
+        admission == ds5::classic_rumble::AdmissionResult::HardCapReached;
+    const bool enqueued =
+        admission == ds5::classic_rumble::AdmissionResult::Enqueued;
+    if (enqueued && ds5::classic_rumble::is_classic_rumble(
+            classic_rumble_delivery_kind(reason)
+        )) {
+        // Existing 0x36 carriers must not overwrite the newly admitted host
+        // or managed rumble command with an older cached snapshot.
         mirror_pending_classic_rumble_locked(data, len);
     }
-    while (urgent_queue.size() >= URGENT_SEND_QUEUE_MAX_DEPTH) {
-        urgent_queue.pop();
-    }
-    urgent_queue.push(std::move(packet));
     critical_section_exit(&queue_lock);
+    if (!enqueued) {
+        if (
+            hard_limit_reached
+            && reason == OutputReasonClassicRumbleManagedStop
+        ) {
+            DS5_LOG("[L2CAP] Managed rumble STOP reserve exhausted; disconnect HID\n");
+            (void)bt_disconnect();
+        }
+        return false;
+    }
     request_can_send_if_needed(should_request_send);
     return true;
 }
@@ -3075,7 +3251,8 @@ static void mirror_pending_classic_rumble_locked(uint8_t const *data, uint16_t l
     if (state_pending) {
         (void)mirror_classic_rumble_in_report(state_pending_report, sizeof(state_pending_report), data, len);
     }
-    mirror_packet_queue_classic_rumble_locked(urgent_queue, data, len);
+    // Complete host reports already queued in the urgent lane are immutable.
+    // Only cached state carriers are refreshed to avoid stale-rumble replay.
     mirror_packet_queue_classic_rumble_locked(audio_queue, data, len);
 }
 
@@ -3305,7 +3482,17 @@ static bool output_report_is_classic_rumble_transition(uint8_t const *data, uint
 
 static bool enqueue_classic_rumble_immediate_or_state_output(uint8_t *data, uint16_t len, uint8_t reason) {
     if (output_report_is_classic_rumble_transition(data, len)) {
-        if (!enqueue_urgent_output(data, len, OutputReasonClassicRumbleImmediate)) {
+        uint8_t const *payload = nullptr;
+        uint16_t payload_len = 0;
+        const bool managed_stop =
+            output_report_payload(data, len, payload, payload_len)
+            && payload_len > OUTPUT_PAYLOAD_MOTOR_LEFT_OFFSET
+            && (payload[OUTPUT_PAYLOAD_MOTOR_RIGHT_OFFSET]
+                | payload[OUTPUT_PAYLOAD_MOTOR_LEFT_OFFSET]) == 0;
+        const uint8_t transition_reason = managed_stop
+            ? OutputReasonClassicRumbleManagedStop
+            : OutputReasonClassicRumbleImmediate;
+        if (!enqueue_urgent_output(data, len, transition_reason)) {
             return false;
         }
         remember_classic_rumble_state_from_output(data, len);
@@ -3594,9 +3781,13 @@ void bt_write(uint8_t *data, uint16_t len) {
 
 bool bt_write_classified_output(uint8_t *data, uint16_t len) {
     output_counters.normal_0x31_rx_count++;
-    bt_sanitize_host_speaker_amp_ownership(data, len);
-    bt_sanitize_host_mic_ownership(data, len);
-    apply_classic_rumble_gain(data, len);
+    uint8_t *payload = nullptr;
+    uint16_t payload_len = 0;
+    if (!output_report_payload(data, len, payload, payload_len)) {
+        return false;
+    }
+    apply_player_led_policy_to_payload(payload, payload_len);
+
     uint8_t trace_critical_depth = 0;
     uint8_t trace_audio_depth = 0;
     uint8_t trace_route_flags = 0;
@@ -3614,84 +3805,37 @@ bool bt_write_classified_output(uint8_t *data, uint16_t len) {
         0
     );
 #endif
-    const bool audio_protected = audio_output_route_protected();
-    const bool classic_rumble_transition = output_report_is_classic_rumble_transition(data, len);
-    const bool stripped_redundant_classic_rumble =
-        !classic_rumble_transition && strip_redundant_classic_rumble_from_output(data, len);
-    if (speaker_output_enabled && audio_protected && !classic_rumble_transition) {
-        const uint8_t reason = classify_output_report(data, len);
-        uint8_t trace_transform_flags = OutputTraceTransformAudioProtected;
-        if (stripped_redundant_classic_rumble) {
-            trace_transform_flags |= OutputTraceTransformStrippedZeroRumble;
-        }
-        if (output_report_has_feedback_state_flags(data, len)) {
-            trace_transform_flags |= OutputTraceTransformFeedbackState;
-        }
-        if (output_report_has_state_flags(data, len)) {
-            trace_transform_flags |= OutputTraceTransformState;
-        }
-#ifdef ENABLE_COMPANION
-        companion_note_trigger_trace_report(CompanionTriggerTraceBridgeOut, data, len, reason);
-        companion_note_feedback_trace_report(
-            CompanionFeedbackTraceBridgeOut,
-            data,
-            len,
-            reason,
-            trace_critical_depth,
-            trace_audio_depth,
-            trace_route_flags,
-            trace_transform_flags
-        );
-#endif
-        return true;
-    }
-    const bool split_state = split_state_from_mixed_output(data, len);
-    const uint8_t reason = classify_output_report(data, len);
-    uint8_t trace_transform_flags = 0;
-    if (split_state) {
-        trace_transform_flags |= OutputTraceTransformSplitState;
-    }
-    if (audio_protected) {
-        trace_transform_flags |= OutputTraceTransformAudioProtected;
-    }
-    if (classic_rumble_transition) {
-        trace_transform_flags |= OutputTraceTransformClassicRumble;
-    }
-    if (stripped_redundant_classic_rumble) {
-        trace_transform_flags |= OutputTraceTransformStrippedZeroRumble;
-    }
-    if (output_report_has_feedback_state_flags(data, len)) {
-        trace_transform_flags |= OutputTraceTransformFeedbackState;
-    }
-    if (output_report_has_state_flags(data, len)) {
-        trace_transform_flags |= OutputTraceTransformState;
+    // Normal host/persona output remains one complete pass-through report.
+    // Configured ownership sanitizers and rumble gain are applied by the
+    // caller before admission; this transport does not infer START/STOP or
+    // split composite trigger, LED, audio, and rumble updates.
+    const bool enqueued = enqueue_urgent_output(
+        data,
+        len,
+        OutputReasonHostPassthrough
+    );
+    if (enqueued) {
+        classic_rumble_state = ControllerOutputRumbleStateMachine{};
     }
 #ifdef ENABLE_COMPANION
-    companion_note_trigger_trace_report(CompanionTriggerTraceBridgeOut, data, len, reason);
+    companion_note_trigger_trace_report(
+        CompanionTriggerTraceBridgeOut,
+        data,
+        len,
+        OutputReasonHostPassthrough
+    );
     companion_note_feedback_trace_report(
         CompanionFeedbackTraceBridgeOut,
         data,
         len,
-        reason,
+        OutputReasonHostPassthrough,
         trace_critical_depth,
         trace_audio_depth,
         trace_route_flags,
-        trace_transform_flags
+        OutputTraceTransformClassicRumble
     );
 #endif
-    if (reason == OutputReasonStateNoop) {
-        if (!classic_rumble_transition) {
-            return true;
-        }
-        return enqueue_classic_rumble_immediate_or_state_output(data, len, OutputReasonClassicRumbleImmediate);
-    }
-    if (reason != OutputReasonStateOnly) {
-        if (output_report_has_state_flags(data, len)) {
-            return enqueue_classic_rumble_immediate_or_state_output(data, len, OutputReasonStateOnly);
-        }
-        return true;
-    }
-    return enqueue_classic_rumble_immediate_or_state_output(data, len, reason);
+    return enqueued;
 }
 
 bool bt_write_audio_stream(uint8_t *data, uint16_t len) {
@@ -3705,7 +3849,9 @@ bool bt_write_audio_stream(uint8_t *data, uint16_t len) {
     uint8_t trace_audio_depth = 0;
     uint8_t trace_route_flags = 0;
     critical_section_enter_blocking(&queue_lock);
-    should_request_send = !output_pending_locked();
+    // Audio must remain runnable while a failed managed rumble transition is
+    // waiting for its bounded retry deadline.
+    should_request_send = true;
     while (audio_queue.size() >= AUDIO_SEND_QUEUE_MAX_DEPTH) {
 #ifdef ENABLE_COMPANION
         if (!audio_queue.front().data.empty()) {

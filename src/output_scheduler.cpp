@@ -6,7 +6,8 @@ OutputSchedulerChoice output_scheduler_choose_interrupt_packet(
 ) {
     const bool audio_due = inputs.audio_available
         && (
-            inputs.coalesced_state_available
+            inputs.urgent_available
+            || inputs.coalesced_state_available
             || inputs.audio_age_us >= config.audio_max_age_us
             || inputs.audio_depth > 1
             || inputs.consecutive_non_audio_sends >= config.max_consecutive_non_audio_sends
@@ -15,6 +16,9 @@ OutputSchedulerChoice output_scheduler_choose_interrupt_packet(
     if (audio_due) {
         return OutputSchedulerChoice::AudioStream;
     }
+    if (inputs.urgent_available) {
+        return OutputSchedulerChoice::Urgent;
+    }
     if (inputs.coalesced_state_available) {
         return OutputSchedulerChoice::CoalescedState;
     }
@@ -22,4 +26,19 @@ OutputSchedulerChoice output_scheduler_choose_interrupt_packet(
         return OutputSchedulerChoice::AudioStream;
     }
     return OutputSchedulerChoice::None;
+}
+
+bool output_scheduler_classic_rumble_can_bypass_audio(
+    bool audio_available,
+    bool terminal_stop,
+    uint8_t consecutive_stop_sends,
+    uint8_t consecutive_non_audio_sends
+) {
+    if (!audio_available) {
+        return true;
+    }
+    if (terminal_stop && consecutive_stop_sends == 0) {
+        return true;
+    }
+    return consecutive_non_audio_sends == 0;
 }
