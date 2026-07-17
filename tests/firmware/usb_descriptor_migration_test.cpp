@@ -831,6 +831,44 @@ void assert_bluetooth_pairing_and_reconnect_policy(std::filesystem::path const &
             "Pending ACL and disconnect transactions must retain ownership until their terminal events"
         );
     }
+
+    const std::string signal_strength_loop = extract_between(
+        bt_cpp,
+        "void bt_signal_strength_loop() {",
+        "\n}\n\nbool bt_disconnect_with_intent"
+    );
+    const auto input_activity = bt_cpp.find(
+        "const bool meaningful_input_activity ="
+    );
+    const auto idle_disconnect = bt_cpp.find(
+        "// Inactivity detection.",
+        input_activity
+    );
+    if (
+        bt_cpp.find("RSSI_POLL_INTERVAL_US") != std::string::npos
+        || bt_cpp.find("#define RSSI_INPUT_IDLE_GRACE_US 5000000ull")
+            == std::string::npos
+        || bt_cpp.find("#define RSSI_REQUEST_COOLDOWN_US 10000000ull")
+            == std::string::npos
+        || signal_strength_loop.find("bt_rssi_idle_epoch_armed")
+            == std::string::npos
+        || signal_strength_loop.find("audio_recent()") == std::string::npos
+        || signal_strength_loop.find("usb_speaker_streaming_active()")
+            == std::string::npos
+        || signal_strength_loop.find("gap_read_rssi(acl_handle)")
+            == std::string::npos
+        || input_activity == std::string::npos
+        || idle_disconnect == std::string::npos
+        || input_activity > idle_disconnect
+        || bt_cpp.find("arm_signal_strength_idle_epoch(now_us);")
+            == std::string::npos
+        || bt_cpp.find("uint64_t inactive_time = 0;")
+            == std::string::npos
+    ) {
+        throw std::runtime_error(
+            "RSSI sampling must remain input-idle, audio-safe, and bounded per idle epoch"
+        );
+    }
 }
 
 void assert_bluetooth_hid_recovery_and_encryption_watchdog(std::filesystem::path const &root) {

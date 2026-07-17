@@ -119,8 +119,10 @@
 #define OUTPUT_PAYLOAD_LIGHTBAR_RED_OFFSET 44
 #define OUTPUT_PAYLOAD_LIGHTBAR_GREEN_OFFSET 45
 #define OUTPUT_PAYLOAD_LIGHTBAR_BLUE_OFFSET 46
-#define RSSI_POLL_INTERVAL_US 2000000u
-#define RSSI_REQUEST_TIMEOUT_US 1000000u
+#define RSSI_INPUT_IDLE_GRACE_US 5000000ull
+#define RSSI_REQUEST_COOLDOWN_US 10000000ull
+#define RSSI_REQUEST_TIMEOUT_US 1000000ull
+#define RSSI_RETRIES_PER_IDLE_EPOCH 1u
 #define INQUIRY_RETRY_DELAY_US 2000000u
 #define PAIRING_WINDOW_US 30000000u
 #define PAIRING_ACTIVE_ATTEMPT_EXTENSION_US 12000000u
@@ -354,7 +356,12 @@ static BtControllerDisconnectIntent controller_disconnect_intent =
 static int8_t bt_rssi = 0;
 static bool bt_rssi_known = false;
 static bool bt_rssi_request_pending = false;
-static uint32_t bt_rssi_last_request_us = 0;
+static bool bt_rssi_idle_epoch_armed = false;
+static uint8_t bt_rssi_retries_remaining = 0;
+static uint64_t bt_rssi_idle_epoch = 0;
+static uint64_t bt_rssi_pending_epoch = 0;
+static uint64_t bt_rssi_last_activity_us = 0;
+static uint64_t bt_rssi_last_request_us = 0;
 unordered_map<uint8_t, vector<uint8_t> > feature_data;
 static feature_prefetch_request feature_prefetch_queue[FEATURE_PREFETCH_MAX_REQUESTS]{};
 static uint8_t feature_prefetch_count = 0;
@@ -375,7 +382,7 @@ static uint8_t consecutive_non_audio_sends = 0;
 static uint8_t consecutive_classic_rumble_stop_sends = 0;
 static bool interrupt_can_send_event_requested = false;
 static critical_section_t queue_lock;
-uint32_t inactive_time = 0; // Tracks long controller inactivity.
+uint64_t inactive_time = 0; // Tracks long controller inactivity without 32-bit timer wrap.
 static uint16_t idle_disconnect_timeout_minutes = DEFAULT_IDLE_DISCONNECT_TIMEOUT_MINUTES;
 static uint8_t saved_lightbar_red = 0xff;
 static uint8_t saved_lightbar_green = 0xd7;
@@ -487,6 +494,28 @@ static void clear_authentication_retry() {
 
 static void note_connection_phase_started() {
     connection_phase_started_us = time_us_32();
+}
+
+static void reset_signal_strength_session() {
+    bt_rssi = 0;
+    bt_rssi_known = false;
+    bt_rssi_request_pending = false;
+    bt_rssi_idle_epoch_armed = false;
+    bt_rssi_retries_remaining = 0;
+    bt_rssi_idle_epoch = 0;
+    bt_rssi_pending_epoch = 0;
+    bt_rssi_last_activity_us = 0;
+    bt_rssi_last_request_us = 0;
+}
+
+static void arm_signal_strength_idle_epoch(uint64_t now_us) {
+    bt_rssi_idle_epoch++;
+    if (bt_rssi_idle_epoch == 0) {
+        bt_rssi_idle_epoch = 1;
+    }
+    bt_rssi_last_activity_us = now_us;
+    bt_rssi_idle_epoch_armed = true;
+    bt_rssi_retries_remaining = RSSI_RETRIES_PER_IDLE_EPOCH;
 }
 
 static bool begin_connection_attempt() {
@@ -1352,28 +1381,46 @@ void bt_lightbar_loop() {
 
 void bt_signal_strength_loop() {
     if (acl_handle == HCI_CON_HANDLE_INVALID || hid_interrupt_cid == 0) {
-        bt_rssi = 0;
-        bt_rssi_known = false;
-        bt_rssi_request_pending = false;
-        bt_rssi_last_request_us = 0;
+        reset_signal_strength_session();
         return;
     }
 
-    const uint32_t now = time_us_32();
+    const uint64_t now = time_us_64();
     if (bt_rssi_request_pending) {
-        if (packet_age_us(now, bt_rssi_last_request_us) < RSSI_REQUEST_TIMEOUT_US) {
+        if (now - bt_rssi_last_request_us < RSSI_REQUEST_TIMEOUT_US) {
             return;
         }
         bt_rssi_request_pending = false;
+        if (bt_rssi_pending_epoch == bt_rssi_idle_epoch) {
+            if (bt_rssi_retries_remaining > 0) {
+                bt_rssi_retries_remaining--;
+                bt_rssi_idle_epoch_armed = true;
+            } else {
+                bt_rssi_idle_epoch_armed = false;
+            }
+        }
     }
 
-    if (bt_rssi_last_request_us != 0 && packet_age_us(now, bt_rssi_last_request_us) < RSSI_POLL_INTERVAL_US) {
+    if (
+        !bt_rssi_idle_epoch_armed
+        || audio_recent()
+        || usb_speaker_streaming_active()
+        || now - bt_rssi_last_activity_us < RSSI_INPUT_IDLE_GRACE_US
+        || (
+            bt_rssi_last_request_us != 0
+            && now - bt_rssi_last_request_us < RSSI_REQUEST_COOLDOWN_US
+        )
+    ) {
         return;
     }
 
-    if (gap_read_rssi(acl_handle) != 0) {
-        bt_rssi_request_pending = true;
-        bt_rssi_last_request_us = now;
+    const bool queued = gap_read_rssi(acl_handle) != 0;
+    bt_rssi_last_request_us = now;
+    bt_rssi_pending_epoch = bt_rssi_idle_epoch;
+    bt_rssi_request_pending = queued;
+    bt_rssi_idle_epoch_armed = false;
+    if (!queued) {
+        bt_rssi_retries_remaining = 0;
     }
 }
 
@@ -1491,7 +1538,7 @@ bool bt_set_idle_disconnect_timeout_minutes(uint16_t minutes) {
         return false;
     }
     idle_disconnect_timeout_minutes = minutes;
-    inactive_time = time_us_32();
+    inactive_time = time_us_64();
     return true;
 }
 
@@ -2087,10 +2134,7 @@ static void hci_packet_handler(uint8_t packet_type, uint16_t channel, uint8_t *p
                     gap_disconnect(handle);
                     break;
                 }
-                bt_rssi = 0;
-                bt_rssi_known = false;
-                bt_rssi_request_pending = false;
-                bt_rssi_last_request_us = 0;
+                reset_signal_strength_session();
                 clear_acl_connection_pending();
                 device_found = false;
                 hci_event_connection_complete_get_bd_addr(packet, current_device_addr);
@@ -2328,10 +2372,7 @@ static void hci_packet_handler(uint8_t packet_type, uint16_t channel, uint8_t *p
             disconnect_retry_at_us = 0;
             acl_handle = HCI_CON_HANDLE_INVALID;
             reset_connection_session();
-            bt_rssi = 0;
-            bt_rssi_known = false;
-            bt_rssi_request_pending = false;
-            bt_rssi_last_request_us = 0;
+            reset_signal_strength_session();
             hid_control_cid = 0;
             hid_interrupt_cid = 0;
             hid_control_pending_cid = 0;
@@ -2378,6 +2419,10 @@ static void hci_packet_handler(uint8_t packet_type, uint16_t channel, uint8_t *p
                 bt_rssi = static_cast<int8_t>(gap_event_rssi_measurement_get_rssi(packet));
                 bt_rssi_known = true;
                 bt_rssi_request_pending = false;
+                if (bt_rssi_pending_epoch == bt_rssi_idle_epoch) {
+                    bt_rssi_idle_epoch_armed = false;
+                }
+                bt_rssi_pending_epoch = 0;
             }
             break;
         }
@@ -2650,7 +2695,9 @@ static void finish_hid_session_if_ready() {
     gap_discoverable_control(0);
     gap_set_bondable_mode(0);
     close_pairing_window(false);
-    inactive_time = time_us_32();
+    const uint64_t now_us = time_us_64();
+    inactive_time = now_us;
+    arm_signal_strength_idle_epoch(now_us);
 
     DS5_LOG("Init DualSense\n");
     init_feature();
@@ -2668,15 +2715,21 @@ static void l2cap_packet_handler(uint8_t packet_type, uint16_t channel, uint8_t 
             // DS5_HEXDUMP(packet, size);
             bt_data_callback(INTERRUPT, packet, size);
 
+            const uint64_t now_us = time_us_64();
+            const bool meaningful_input_activity =
+                controller_input_report_is_active(packet, size);
+            if (meaningful_input_activity) {
+                inactive_time = now_us;
+                arm_signal_strength_idle_epoch(now_us);
+            }
+
             // Inactivity detection.
             if (mute[1]) { // Microphone mute is enabled.
                 return;
             }
-            if (controller_input_report_is_active(packet, size)) {
-                inactive_time = time_us_32();
-            } else if (static_cast<uint64_t>(time_us_32() - inactive_time) > idle_disconnect_timeout_us()) {
+            if (!meaningful_input_activity && now_us - inactive_time > idle_disconnect_timeout_us()) {
                 DS5_LOG("disconnect when inactive\n");
-                inactive_time = time_us_32();
+                inactive_time = now_us;
                 bt_disconnect_with_intent(BtControllerDisconnectIntentIdleTimeout);
             }
         } else if (channel == hid_control_cid) {
