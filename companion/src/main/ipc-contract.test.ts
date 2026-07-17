@@ -46,6 +46,12 @@ describe('IPC contract', () => {
     expect(mainSource).toContain("mainWindow.webContents.send('window:maximizedChanged', mainWindow.isMaximized())");
   });
 
+  it('allowlists every external link shown by the companion', () => {
+    expect(mainSource).toContain('/^https:\\/\\/ko-fi\\.com\\/sundaymoments\\/?$/i.test(url)');
+    expect(mainSource).toContain('/^https:\\/\\/github\\.com\\/SundayMoments\\/?$/i.test(url)');
+    expect(mainSource).toContain('/^https:\\/\\/discord\\.gg\\/By5jhh73wr\\/?$/i.test(url)');
+  });
+
   it('maps chord keyboard shortcuts to Windows virtual-key codes', () => {
     const keyCodeStart = bridgeServiceSource.indexOf('const VIRTUAL_KEY_CODES');
     expect(keyCodeStart).toBeGreaterThanOrEqual(0);

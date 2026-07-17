@@ -417,7 +417,8 @@ function isAppFileUrl(url: string, appIndexPath: string): boolean {
 
 function isAllowedExternalUrl(url: string): boolean {
   return /^https:\/\/ko-fi\.com\/sundaymoments\/?$/i.test(url)
-    || /^https:\/\/github\.com\/SundayMoments\/?$/i.test(url);
+    || /^https:\/\/github\.com\/SundayMoments\/?$/i.test(url)
+    || /^https:\/\/discord\.gg\/By5jhh73wr\/?$/i.test(url);
 }
 
 function createWindow(uiScalePercent: UiScalePercent): BrowserWindow {
