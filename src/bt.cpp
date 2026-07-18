@@ -40,6 +40,8 @@
 #include "pico/time.h"
 #include "classic/sdp_server.h"
 
+using ds5::output::PlayerLedMode;
+
 #define MTU_CONTROL 256
 #define MTU_INTERRUPT 1691
 #define DS_OUTPUT_REPORT_BT 0x31
@@ -415,7 +417,6 @@ static uint8_t saved_lightbar_red = 0xff;
 static uint8_t saved_lightbar_green = 0xd7;
 static uint8_t saved_lightbar_blue = 0x00;
 static uint8_t saved_lightbar_brightness = 100;
-static bool player_led_enabled = true;
 static bool lightbar_restore_enabled = true;
 static bool lightbar_restore_pending = false;
 static uint32_t lightbar_restore_at_us = 0;
@@ -1940,10 +1941,6 @@ void bt_set_lightbar_color(uint8_t red, uint8_t green, uint8_t blue, uint8_t bri
     uint8_t report[DS_OUTPUT_REPORT_BT_SIZE];
     init_state_report(report);
     report[3 + 1] = DS_OUTPUT_VALID_FLAG1_LIGHTBAR_CONTROL_ENABLE;
-    if (!player_led_enabled) {
-        report[3 + 1] |= DS_OUTPUT_VALID_FLAG1_PLAYER_INDICATOR_CONTROL_ENABLE;
-        report[3 + 43] = 0;
-    }
     report[3 + OUTPUT_PAYLOAD_LED_BRIGHTNESS_OFFSET] = 0x01;
     report[3 + 44] = scale_lightbar_channel(saved_lightbar_red, saved_lightbar_brightness);
     report[3 + 45] = scale_lightbar_channel(saved_lightbar_green, saved_lightbar_brightness);
@@ -1951,9 +1948,8 @@ void bt_set_lightbar_color(uint8_t red, uint8_t green, uint8_t blue, uint8_t bri
     bt_write(report, sizeof(report));
 }
 
-void bt_set_player_led_enabled(bool enabled) {
-    player_led_enabled = enabled;
-    controller_output_state_set_player_led_enabled(enabled);
+void bt_set_player_led_mode(PlayerLedMode mode) {
+    controller_output_state_set_player_led_mode(mode);
 
     if (hid_interrupt_cid == 0) {
         return;
@@ -1964,7 +1960,6 @@ void bt_set_player_led_enabled(bool enabled) {
     if (!controller_output_state_copy_player_led_report(report + 3, DS_OUTPUT_REPORT_COMMON_SIZE)) {
         return;
     }
-    enqueue_feedback_state_output(report, sizeof(report), OutputReasonStateOnly);
     bt_write(report, sizeof(report));
 }
 
@@ -4433,14 +4428,7 @@ static void mirror_pending_classic_rumble_locked(uint8_t const *data, uint16_t l
 }
 
 static void apply_player_led_policy_to_payload(uint8_t *payload, uint16_t payload_len) {
-    if (payload == nullptr || payload_len <= OUTPUT_PAYLOAD_PLAYER_LEDS_OFFSET) {
-        return;
-    }
-    if (player_led_enabled) {
-        return;
-    }
-    payload[OUTPUT_PAYLOAD_VALID_FLAG1_OFFSET] |= DS_OUTPUT_VALID_FLAG1_PLAYER_INDICATOR_CONTROL_ENABLE;
-    payload[OUTPUT_PAYLOAD_PLAYER_LEDS_OFFSET] = 0;
+    controller_output_state_apply_player_led_policy(payload, payload_len);
 }
 
 static bool has_unclassified_state_payload_data(uint8_t const *payload, uint16_t payload_len) {
@@ -4925,7 +4913,7 @@ static void merge_state_output_locked(uint8_t const *data, uint16_t len, uint32_
             dst[OUTPUT_PAYLOAD_LIGHTBAR_BLUE_OFFSET] = src[OUTPUT_PAYLOAD_LIGHTBAR_BLUE_OFFSET];
         }
         if (led_flags & DS_OUTPUT_VALID_FLAG1_PLAYER_INDICATOR_CONTROL_ENABLE) {
-            dst[OUTPUT_PAYLOAD_PLAYER_LEDS_OFFSET] = player_led_enabled ? src[OUTPUT_PAYLOAD_PLAYER_LEDS_OFFSET] : 0;
+            dst[OUTPUT_PAYLOAD_PLAYER_LEDS_OFFSET] = src[OUTPUT_PAYLOAD_PLAYER_LEDS_OFFSET];
         }
         apply_player_led_policy_to_payload(dst, DS_OUTPUT_REPORT_COMMON_SIZE);
     }
@@ -4950,6 +4938,11 @@ static bool enqueue_feedback_state_output(uint8_t *data, uint16_t len, uint8_t r
 }
 
 void bt_write(uint8_t *data, uint16_t len) {
+    uint8_t *payload = nullptr;
+    uint16_t payload_len = 0;
+    if (output_report_payload(data, len, payload, payload_len)) {
+        apply_player_led_policy_to_payload(payload, payload_len);
+    }
     (void)enqueue_urgent_output(data, len, OutputReasonCriticalDirect);
 }
 

@@ -44,6 +44,18 @@ constexpr uint8_t kSpeakerVolumeMax = 0x64;
 constexpr uint8_t kMicVolumeMax = 0x40;
 constexpr uint8_t kLightbarSetupLightOut = 0x02;
 constexpr uint8_t kPlayerLed1Instant = 0x24;
+constexpr uint8_t kPlayerLed2Instant = 0x2a;
+constexpr uint8_t kPlayerLed3Instant = 0x35;
+constexpr uint8_t kPlayerLed4Instant = 0x3b;
+
+enum class PlayerLedMode : uint8_t {
+    Off = 0,
+    Game = 1,
+    Player1 = 2,
+    Player2 = 3,
+    Player3 = 4,
+    Player4 = 5,
+};
 
 constexpr uint8_t kTriggerEffectSize = 11;
 constexpr uint8_t kTriggerEffectRightOffset = 10;
@@ -80,6 +92,7 @@ constexpr uint8_t kLightbarBlueOffset = 46;
 
 constexpr uint8_t kLightbarSetupControlMask = 0x03;
 constexpr uint8_t kHostLedControlMask = 0x04 | 0x08 | 0x10;
+constexpr uint8_t kHostLightbarControlMask = 0x04 | 0x08;
 constexpr uint8_t kHostLightbarSetupMask = 0x01 | 0x02;
 
 inline bool payload_has_len(uint16_t len, uint8_t offset) {

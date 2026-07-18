@@ -27,7 +27,7 @@ bool cached_right_trigger_valid = false;
 bool cached_left_trigger_valid = false;
 uint8_t cached_trigger_power = 0;
 bool cached_trigger_power_valid = false;
-bool player_led_enabled = true;
+PlayerLedMode player_led_mode = PlayerLedMode::Game;
 uint8_t cached_player_leds = 0;
 bool cached_player_leds_valid = false;
 
@@ -70,15 +70,29 @@ uint8_t scale_lightbar_channel(uint8_t channel, uint8_t brightness_percent) {
     return scaled_percent(channel, brightness_percent);
 }
 
-void apply_player_led_policy(uint8_t *payload) {
-    if (payload == nullptr) {
-        return;
+uint8_t player_led_value(PlayerLedMode mode) {
+    switch (mode) {
+        case PlayerLedMode::Player1:
+            return kPlayerLed1Instant;
+        case PlayerLedMode::Player2:
+            return kPlayerLed2Instant;
+        case PlayerLedMode::Player3:
+            return kPlayerLed3Instant;
+        case PlayerLedMode::Player4:
+            return kPlayerLed4Instant;
+        case PlayerLedMode::Off:
+        case PlayerLedMode::Game:
+        default:
+            return 0;
     }
-    if (player_led_enabled) {
-        return;
-    }
-    payload[kValidFlag1Offset] |= kFlag1PlayerIndicatorControlEnable;
-    payload[kPlayerLedsOffset] = 0;
+}
+
+void apply_player_led_override(uint8_t *payload) {
+    payload[kValidFlag1Offset] = static_cast<uint8_t>(
+        (payload[kValidFlag1Offset] & static_cast<uint8_t>(~kFlag1ReleaseLeds))
+        | kFlag1PlayerIndicatorControlEnable
+    );
+    payload[kPlayerLedsOffset] = player_led_value(player_led_mode);
 }
 
 void cache_player_leds_from_payload(uint8_t const *payload, uint8_t len) {
@@ -126,10 +140,10 @@ void restore_player_led_policy(uint8_t *payload) {
 }
 
 void apply_current_player_led_policy(uint8_t *payload) {
-    if (player_led_enabled) {
+    if (player_led_mode == PlayerLedMode::Game) {
         restore_player_led_policy(payload);
     } else {
-        apply_player_led_policy(payload);
+        apply_player_led_override(payload);
     }
 }
 
@@ -213,7 +227,7 @@ void controller_output_state_reset() {
     std::memcpy(state_data, defaults, sizeof(state_data));
     controller_output_state_reset_cached_triggers();
     controller_output_state_reset_cached_player_leds();
-    player_led_enabled = true;
+    player_led_mode = PlayerLedMode::Game;
 }
 
 bool controller_output_state_classic_rumble_active() {
@@ -268,6 +282,7 @@ void controller_output_state_apply_host_payload(uint8_t const *data, uint8_t len
     const uint8_t copy_len = len > sizeof(state_data) ? sizeof(state_data) : len;
     uint8_t update[kAudioStateSnapshotSize]{};
     std::memcpy(update, data, copy_len);
+    cache_player_leds_from_payload(update, copy_len);
 
     if (payload_uses_classic_rumble(update, copy_len)) {
         const uint8_t rumble_flags = static_cast<uint8_t>(
@@ -407,7 +422,6 @@ void controller_output_state_apply_host_payload(uint8_t const *data, uint8_t len
         3
     );
 
-    cache_player_leds_from_payload(state_data, sizeof(state_data));
     clear_mic_control(state_data);
     clamp_speaker_volume();
     apply_current_player_led_policy(state_data);
@@ -460,9 +474,20 @@ void controller_output_state_set_lightbar(uint8_t red, uint8_t green, uint8_t bl
     state_data[kLightbarBlueOffset] = scale_lightbar_channel(blue, brightness);
 }
 
-void controller_output_state_set_player_led_enabled(bool enabled) {
-    player_led_enabled = enabled;
+void controller_output_state_set_player_led_mode(PlayerLedMode mode) {
+    player_led_mode = mode;
     apply_current_player_led_policy(state_data);
+}
+
+void controller_output_state_apply_player_led_policy(uint8_t *payload, uint16_t len) {
+    if (
+        payload == nullptr
+        || len <= kPlayerLedsOffset
+        || player_led_mode == PlayerLedMode::Game
+    ) {
+        return;
+    }
+    apply_player_led_override(payload);
 }
 
 void controller_output_state_set_speaker_gain(uint8_t gain) {
@@ -482,14 +507,18 @@ bool controller_output_state_copy_player_led_report(uint8_t *destination, uint16
         return false;
     }
 
-    if (!player_led_enabled) {
-        destination[kValidFlag1Offset] |= kFlag1PlayerIndicatorControlEnable;
-        destination[kPlayerLedsOffset] = 0;
+    if (player_led_mode != PlayerLedMode::Game) {
+        apply_player_led_override(destination);
         return true;
     }
 
     if (!cached_player_leds_valid) {
-        return false;
+        destination[kValidFlag1Offset] = static_cast<uint8_t>(
+            (destination[kValidFlag1Offset] & static_cast<uint8_t>(~kFlag1ReleaseLeds))
+            | kFlag1PlayerIndicatorControlEnable
+        );
+        destination[kPlayerLedsOffset] = 0;
+        return true;
     }
 
     destination[kValidFlag1Offset] = static_cast<uint8_t>(

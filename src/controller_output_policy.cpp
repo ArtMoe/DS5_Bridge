@@ -240,7 +240,7 @@ bool controller_output_policy_sanitize_host_lightbar_payload(
     bool changed = false;
 
     if (lightbar_override && len > kValidFlag1Offset) {
-        const uint8_t sanitized = payload[kValidFlag1Offset] & static_cast<uint8_t>(~kHostLedControlMask);
+        const uint8_t sanitized = payload[kValidFlag1Offset] & static_cast<uint8_t>(~kHostLightbarControlMask);
         if (payload[kValidFlag1Offset] != sanitized) {
             payload[kValidFlag1Offset] = sanitized;
             changed = true;
