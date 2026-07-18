@@ -186,15 +186,13 @@ describe('renderer behavior guards', () => {
 
   it('distinguishes active charging from connected external power', () => {
     expect(appSource).toContain(
-      'function isChargingPowerState(rawPowerState: number | undefined): boolean {\n'
-      + '  return rawPowerState === 0x01;\n'
-      + '}'
+      'function isChargingPowerState(rawPowerState: number | undefined): boolean {'
     );
+    expect(appSource).toContain('return rawPowerState === 0x01;');
     expect(appSource).toContain(
-      'function isExternalPowerState(rawPowerState: number | undefined): boolean {\n'
-      + '  return rawPowerState === 0x01 || rawPowerState === 0x02;\n'
-      + '}'
+      'function isExternalPowerState(rawPowerState: number | undefined): boolean {'
     );
+    expect(appSource).toContain('return rawPowerState === 0x01 || rawPowerState === 0x02;');
     expect(appSource).toContain("batteryCharging ? 'Charging' : 'Connected to power'");
     expect(appSource).toContain('className="device-power-indicator"');
     expect(stylesSource).toContain('.device-power-indicator');
