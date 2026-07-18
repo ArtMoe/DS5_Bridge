@@ -1005,6 +1005,8 @@ void assert_firmware_version_has_one_canonical_source(
         read_text(root / "companion" / "src" / "main" / "bridge-service.ts");
     const auto release_script =
         read_text(root / "tools" / "create-release-candidate.ps1");
+    const auto release_workflow =
+        read_text(root / ".github" / "workflows" / "release.yml");
     std::smatch bundled_match;
     const bool bundled_found = std::regex_search(
         bridge_service,
@@ -1030,6 +1032,9 @@ void assert_firmware_version_has_one_canonical_source(
         ) == std::string::npos
         || release_script.find(
             "Read-FirmwareVersion (Join-Path $repoRoot 'firmware-version.txt')"
+        ) == std::string::npos
+        || release_workflow.find(
+            "(Get-Content firmware-version.txt -Raw).Trim()"
         ) == std::string::npos
         || !bundled_found
         || bundled_match[1].str() != firmware_version
