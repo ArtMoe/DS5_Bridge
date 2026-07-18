@@ -62,6 +62,25 @@ describe('SettingsStore', () => {
     expect(settings.micMuted).toBe(false);
     expect(settings.lightbarColor).toBe('#0000ff');
     expect(settings.showBatteryPercentTrayIcon).toBe(false);
+    expect(settings.playerLedMode).toBe('game');
+    expect(settings.playerLedSlot).toBe(1);
+  });
+
+  it.each([
+    [true, 'game'],
+    [false, 'off']
+  ] as const)('migrates legacy player LED enabled=%s to %s mode', (playerLedEnabled, playerLedMode) => {
+    const userDataPath = tempUserDataPath();
+    writeFileSync(path.join(userDataPath, 'settings.json'), JSON.stringify({
+      settingsSchemaVersion: 2,
+      playerLedEnabled,
+      playerLedSlot: 4
+    }), 'utf8');
+
+    const settings = new SettingsStore(userDataPath).get();
+
+    expect(settings.playerLedMode).toBe(playerLedMode);
+    expect(settings.playerLedSlot).toBe(4);
   });
 
   it('migrates legacy custom-only profile data without stealing selection', () => {

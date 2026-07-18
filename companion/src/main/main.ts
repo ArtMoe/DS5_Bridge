@@ -32,6 +32,8 @@ import type {
   BridgeSnapshot,
   PicoFirmwareAction,
   PicoFirmwareActionResult,
+  PlayerLedMode,
+  PlayerLedSlot,
   UiScalePercent,
   UiThemePreset
 } from '../shared/types';
@@ -1097,7 +1099,10 @@ function registerIpc(service: BridgeService): void {
     service.setMuteButtonAction(mode, usage, modifiers, behavior, chordStarterEnabled)
   ));
   ipcMain.handle('bridge:setLedEnabled', (_event, value: boolean) => service.setLedEnabled(value));
-  ipcMain.handle('bridge:setPlayerLedEnabled', (_event, value: boolean) => service.setPlayerLedEnabled(value));
+  ipcMain.handle(
+    'bridge:setPlayerLedConfig',
+    (_event, mode: PlayerLedMode, slot: PlayerLedSlot) => service.setPlayerLedConfig(mode, slot)
+  );
   ipcMain.handle('bridge:setLightbarRestoreEnabled', (_event, value: boolean) => (
     service.setLightbarRestoreEnabled(value)
   ));

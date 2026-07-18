@@ -9812,23 +9812,46 @@ export function App() {
                     <span />
                   </button>
                 </div>
-                <div className="settings-menu-row">
+                <div className="settings-menu-row player-led-settings-row">
                   <div className="settings-menu-copy">
                     <strong>Player Slot LED</strong>
-                    <span>Show the controller player indicator lights</span>
+                    <span>Follow the game or force a P1-P4 indicator</span>
                   </div>
-                  <button
-                    type="button"
-                    role="switch"
-                    aria-checked={snapshot.settings.playerLedEnabled}
-                    className={`switch ${snapshot.settings.playerLedEnabled ? 'on' : ''}`}
-                    disabled={!connected}
-                    onClick={() => void runAction('player-led', () => (
-                      window.bridge.setPlayerLedEnabled(!snapshot.settings.playerLedEnabled)
-                    ))}
-                  >
-                    <span />
-                  </button>
+                  <div className="player-led-controls">
+                    <div className="player-led-segments player-led-mode-segments" aria-label="Player LED mode">
+                      {(['game', 'custom', 'off'] as const).map((mode) => (
+                        <button
+                          key={mode}
+                          type="button"
+                          aria-pressed={snapshot.settings.playerLedMode === mode}
+                          className={snapshot.settings.playerLedMode === mode ? 'active' : ''}
+                          disabled={!connected || pendingAction !== null}
+                          onClick={() => void runAction('player-led', () => (
+                            window.bridge.setPlayerLedConfig(mode, snapshot.settings.playerLedSlot)
+                          ))}
+                        >
+                          {mode === 'game' ? 'Game' : mode === 'custom' ? 'Custom' : 'Off'}
+                        </button>
+                      ))}
+                    </div>
+                    <div className="player-led-segments player-led-slot-segments" aria-label="Custom player slot">
+                      {([1, 2, 3, 4] as const).map((slot) => (
+                        <button
+                          key={slot}
+                          type="button"
+                          aria-label={`Select player slot P${slot}`}
+                          aria-pressed={snapshot.settings.playerLedMode === 'custom' && snapshot.settings.playerLedSlot === slot}
+                          className={snapshot.settings.playerLedMode === 'custom' && snapshot.settings.playerLedSlot === slot ? 'active' : ''}
+                          disabled={!connected || pendingAction !== null || snapshot.settings.playerLedMode !== 'custom'}
+                          onClick={() => void runAction('player-led', () => (
+                            window.bridge.setPlayerLedConfig('custom', slot)
+                          ))}
+                        >
+                          P{slot}
+                        </button>
+                      ))}
+                    </div>
+                  </div>
                 </div>
                 <div className="settings-menu-section-label">Shortcuts</div>
                 <div className={`settings-menu-row ${settingsFocusTarget === 'sleep-shortcut' ? 'settings-menu-row-highlight' : ''}`}>

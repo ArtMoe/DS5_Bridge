@@ -74,6 +74,8 @@ import type {
   AudioHapticsSession,
   HostPersonaTransition,
   HidDeviceSummary,
+  PlayerLedMode,
+  PlayerLedSlot,
   UiScalePercent,
   UiThemePreset,
   WindowsDeviceCleanupResult
@@ -2476,9 +2478,15 @@ export class BridgeService extends EventEmitter {
     return this.getSnapshot();
   }
 
-  async setPlayerLedEnabled(enabled: boolean): Promise<BridgeSnapshot> {
-    await this.sendSettingCommand(COMMAND_ID.SET_PLAYER_LED_ENABLED, enabled ? 1 : 0, {
-      playerLedEnabled: enabled
+  async setPlayerLedConfig(mode: PlayerLedMode, slot: PlayerLedSlot): Promise<BridgeSnapshot> {
+    const normalizedMode: PlayerLedMode = mode === 'off' || mode === 'custom' ? mode : 'game';
+    const normalizedSlot: PlayerLedSlot = slot === 2 || slot === 3 || slot === 4 ? slot : 1;
+    const value = normalizedMode === 'off'
+      ? 0
+      : normalizedMode === 'custom' ? normalizedSlot + 1 : 1;
+    await this.sendSettingCommand(COMMAND_ID.SET_PLAYER_LED_MODE, value, {
+      playerLedMode: normalizedMode,
+      playerLedSlot: normalizedSlot
     });
     return this.getSnapshot();
   }
@@ -3704,7 +3712,10 @@ export class BridgeService extends EventEmitter {
     await this.sendCommand(COMMAND_ID.SET_LED_ENABLED, settings.ledEnabled ? 1 : 0, {
       expectSettingsRevisionChange
     });
-    await this.sendCommand(COMMAND_ID.SET_PLAYER_LED_ENABLED, settings.playerLedEnabled ? 1 : 0, {
+    const playerLedModeValue = settings.playerLedMode === 'off'
+      ? 0
+      : settings.playerLedMode === 'custom' ? settings.playerLedSlot + 1 : 1;
+    await this.sendCommand(COMMAND_ID.SET_PLAYER_LED_MODE, playerLedModeValue, {
       expectSettingsRevisionChange
     });
     await this.sendCommand(COMMAND_ID.SET_IDLE_DISCONNECT_ENABLED, settings.idleDisconnectEnabled ? 1 : 0, {

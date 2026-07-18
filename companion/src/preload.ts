@@ -18,6 +18,8 @@ import type {
   BridgeDiagnostics,
   BridgeSnapshot,
   PicoFirmwareActionResult,
+  PlayerLedMode,
+  PlayerLedSlot,
   UiThemePreset,
   WindowsDeviceCleanupResult
 } from './shared/types';
@@ -100,8 +102,8 @@ const api = {
     ipcRenderer.invoke('bridge:setMuteButtonAction', mode, usage, modifiers, behavior, chordStarterEnabled)
   ),
   setLedEnabled: (value: boolean): Promise<BridgeSnapshot> => ipcRenderer.invoke('bridge:setLedEnabled', value),
-  setPlayerLedEnabled: (value: boolean): Promise<BridgeSnapshot> => (
-    ipcRenderer.invoke('bridge:setPlayerLedEnabled', value)
+  setPlayerLedConfig: (mode: PlayerLedMode, slot: PlayerLedSlot): Promise<BridgeSnapshot> => (
+    ipcRenderer.invoke('bridge:setPlayerLedConfig', mode, slot)
   ),
   setLightbarRestoreEnabled: (value: boolean): Promise<BridgeSnapshot> => (
     ipcRenderer.invoke('bridge:setLightbarRestoreEnabled', value)

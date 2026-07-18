@@ -41,7 +41,7 @@ function identity(
     controllerName: 'DualSense Wireless Controller',
     vendorId: 0x054c,
     productId: 0x0ce6,
-    protocolVersion: '1.17',
+    protocolVersion: '1.18',
     ...overrides
   };
 }

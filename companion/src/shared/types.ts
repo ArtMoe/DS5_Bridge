@@ -25,6 +25,8 @@ import type {
 
 export type UiScalePercent = 75 | 100 | 125 | 150;
 export type UiThemePreset = 'light' | 'dark' | 'bubble-gum' | 'pomegranate' | 'kiwi';
+export type PlayerLedMode = 'game' | 'off' | 'custom';
+export type PlayerLedSlot = 1 | 2 | 3 | 4;
 
 export interface CompanionSettings {
   selectedPresetId: BridgePresetId;
@@ -66,7 +68,8 @@ export interface CompanionSettings {
   muteKeyboardBehavior: MuteKeyboardBehavior;
   muteKeyboardChordStarterEnabled: boolean;
   ledEnabled: boolean;
-  playerLedEnabled: boolean;
+  playerLedMode: PlayerLedMode;
+  playerLedSlot: PlayerLedSlot;
   idleDisconnectEnabled: boolean;
   idleDisconnectTimeoutMinutes: number;
   usbSuspendDisconnectEnabled: boolean;

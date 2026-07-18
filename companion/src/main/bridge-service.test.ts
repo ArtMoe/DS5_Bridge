@@ -122,7 +122,7 @@ const FULL_REAPPLY_COMMANDS = [
   COMMAND_ID.SET_MIC_VOLUME,
   COMMAND_ID.SET_MIC_MUTE,
   COMMAND_ID.SET_LED_ENABLED,
-  COMMAND_ID.SET_PLAYER_LED_ENABLED,
+  COMMAND_ID.SET_PLAYER_LED_MODE,
   COMMAND_ID.SET_IDLE_DISCONNECT_ENABLED,
   COMMAND_ID.SET_IDLE_DISCONNECT_TIMEOUT,
   COMMAND_ID.SET_USB_SUSPEND_DISCONNECT_ENABLED,
@@ -1515,7 +1515,7 @@ describe('BridgeService', () => {
     expect(snapshot.settings.idleDisconnectTimeoutMinutes).toBe(20);
   });
 
-  it('sends and stores player slot LED settings', async () => {
+  it('sends and stores game, off, and custom player slot LED settings', async () => {
     const service = serviceFixture();
     const device = new MockHidDevice();
     device.status = statusReport({ controllerConnected: true });
@@ -1525,12 +1525,23 @@ describe('BridgeService', () => {
     await poll(service);
     await flushReapply();
     device.sentReports = [];
-    const snapshot = await service.setPlayerLedEnabled(false);
+    const expectations = [
+      { mode: 'off', slot: 1, value: 0 },
+      { mode: 'game', slot: 1, value: 1 },
+      { mode: 'custom', slot: 1, value: 2 },
+      { mode: 'custom', slot: 2, value: 3 },
+      { mode: 'custom', slot: 3, value: 4 },
+      { mode: 'custom', slot: 4, value: 5 }
+    ] as const;
 
-    const command = device.sentReports.at(-1);
-    expect(command?.[7]).toBe(COMMAND_ID.SET_PLAYER_LED_ENABLED);
-    expect(command?.[9]).toBe(0);
-    expect(snapshot.settings.playerLedEnabled).toBe(false);
+    for (const expectation of expectations) {
+      const snapshot = await service.setPlayerLedConfig(expectation.mode, expectation.slot);
+      const command = device.sentReports.at(-1);
+      expect(command?.[7]).toBe(COMMAND_ID.SET_PLAYER_LED_MODE);
+      expect(command?.[9]).toBe(expectation.value);
+      expect(snapshot.settings.playerLedMode).toBe(expectation.mode);
+      expect(snapshot.settings.playerLedSlot).toBe(expectation.slot);
+    }
   });
 
   it('sends and stores automatic lightbar restore settings', async () => {
