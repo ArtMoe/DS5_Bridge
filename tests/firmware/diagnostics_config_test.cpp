@@ -58,6 +58,8 @@ int main() {
         const std::string utils = read_text(root / "src" / "utils.h");
         const std::string firmware_log =
             read_text(root / "src" / "firmware_log.cpp");
+        const std::string companion =
+            read_text(root / "src" / "companion.cpp");
         const std::string watchdog_telemetry =
             read_text(root / "src" / "watchdog_telemetry.cpp");
 
@@ -109,6 +111,11 @@ int main() {
         );
         require_contains(
             presets,
+            "\"ENABLE_FEEDBACK_TRACE_REPORTS\": \"ON\"",
+            "The UART preset must compile rumble and haptics tracing in"
+        );
+        require_contains(
+            presets,
             "\"WAVESHARE_RP2350B_PLUS_W_BUILD\": \"OFF\"",
             "The UART preset must explicitly target the Pico 2 W"
         );
@@ -146,6 +153,26 @@ int main() {
             main,
             "firmware_log_flush_live();",
             "The main loop must service the nonblocking UART drain"
+        );
+        require_contains(
+            companion,
+            "void feedback_trace_uart_loop()",
+            "Feedback diagnostics must expose a main-loop UART consumer"
+        );
+        require_contains(
+            companion,
+            "event = feedback_trace_ring[ring_index];",
+            "The UART consumer must copy trace data before formatting it"
+        );
+        require_contains(
+            companion,
+            "feedback_trace_uart_loop();",
+            "The companion main loop must drain feedback diagnostics"
+        );
+        require_contains(
+            companion,
+            "\"[FB] lost=%lu\\n\"",
+            "Feedback UART overruns must be visible in the persistent log"
         );
         require_contains(
             cmake,

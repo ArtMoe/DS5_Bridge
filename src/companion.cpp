@@ -9,6 +9,7 @@
 #include "controller_output_policy.h"
 #include "controller_output_submit.h"
 #include "dualsense_output.h"
+#include "firmware_log.h"
 #include "host_input.h"
 #include "persona/host_persona.h"
 #include "pico/critical_section.h"
@@ -319,6 +320,9 @@ struct FeedbackTraceEvent {
 FeedbackTraceEvent feedback_trace_ring[kFeedbackTraceRingSize]{};
 uint32_t feedback_trace_next_sequence = 1;
 uint32_t feedback_trace_read_sequence = 1;
+#if DS5_DEBUG_LOGS_ENABLED
+uint32_t feedback_trace_uart_sequence = 1;
+#endif
 uint16_t feedback_trace_dropped_count = 0;
 uint8_t feedback_trace_count = 0;
 uint8_t feedback_trace_head = 0;
@@ -635,6 +639,78 @@ void append_feedback_trace_event(FeedbackTraceEvent const &event) {
         }
     }
 }
+
+#if DS5_DEBUG_LOGS_ENABLED
+void feedback_trace_uart_loop() {
+    FeedbackTraceEvent event{};
+    uint32_t skipped = 0;
+    bool available = false;
+
+    // Trace producers can run in Bluetooth/audio callbacks. Copy one record
+    // under the companion lock, then format it on the main loop so diagnostics
+    // never wait on UART or string formatting in a timing-sensitive path.
+    critical_section_enter_blocking(&companion_report_cs);
+    const uint32_t oldest_sequence =
+        feedback_trace_next_sequence - feedback_trace_count;
+    if (feedback_trace_uart_sequence < oldest_sequence) {
+        skipped = oldest_sequence - feedback_trace_uart_sequence;
+        feedback_trace_uart_sequence = oldest_sequence;
+    }
+    if (feedback_trace_uart_sequence < feedback_trace_next_sequence) {
+        const uint8_t oldest_index = static_cast<uint8_t>(
+            (
+                feedback_trace_head
+                + kFeedbackTraceRingSize
+                - feedback_trace_count
+            ) % kFeedbackTraceRingSize
+        );
+        const uint8_t ring_index = static_cast<uint8_t>(
+            (
+                oldest_index
+                + (feedback_trace_uart_sequence - oldest_sequence)
+            ) % kFeedbackTraceRingSize
+        );
+        event = feedback_trace_ring[ring_index];
+        feedback_trace_uart_sequence++;
+        available = true;
+    }
+    critical_section_exit(&companion_report_cs);
+
+    if (skipped != 0) {
+        firmware_log_printf(
+            "[FB] lost=%lu\n",
+            static_cast<unsigned long>(skipped)
+        );
+    }
+    if (!available) {
+        return;
+    }
+
+    firmware_log_printf(
+        "[FB] %lu,%lu,%u,%02x,%u,%02x,%u,%02x,%02x,%02x,"
+        "%02x,%02x,%u,%u,%u,%u,%u,%u,%u\n",
+        static_cast<unsigned long>(event.sequence),
+        static_cast<unsigned long>(event.timestamp_ms),
+        static_cast<unsigned>(event.stage),
+        static_cast<unsigned>(event.report_id),
+        static_cast<unsigned>(event.length),
+        static_cast<unsigned>(event.sequence_tag),
+        static_cast<unsigned>(event.decision),
+        static_cast<unsigned>(event.flag0),
+        static_cast<unsigned>(event.flag1),
+        static_cast<unsigned>(event.flag2),
+        static_cast<unsigned>(event.motor_right),
+        static_cast<unsigned>(event.motor_left),
+        static_cast<unsigned>(event.haptic_peak),
+        static_cast<unsigned>(event.haptic_mean),
+        static_cast<unsigned>(event.haptic_nonzero),
+        static_cast<unsigned>(event.detail0),
+        static_cast<unsigned>(event.detail1),
+        static_cast<unsigned>(event.detail2),
+        static_cast<unsigned>(event.detail3)
+    );
+}
+#endif
 #endif
 
 uint32_t uptime_seconds() {
@@ -2897,9 +2973,23 @@ void companion_init() {
     critical_section_init(&companion_report_cs);
     restore_defaults();
     set_ack(0, 0, AckOk);
+#if DS5_FEEDBACK_TRACE_ENABLED && DS5_DEBUG_LOGS_ENABLED
+    firmware_log_printf(
+        "[FB] columns=seq,t_ms,stage,report,len,tag,decision,"
+        "flag0,flag1,flag2,motor_r,motor_l,haptic_peak,haptic_mean,"
+        "haptic_nonzero,detail0,detail1,detail2,detail3\n"
+    );
+    firmware_log_printf(
+        "[FB] stages=1:host,2:bridge-in,3:bridge-out,4:bt,"
+        "5:drop,8:audio-enqueue,9:audio-drop,10:local-audio\n"
+    );
+#endif
 }
 
 void companion_loop() {
+#if DS5_FEEDBACK_TRACE_ENABLED && DS5_DEBUG_LOGS_ENABLED
+    feedback_trace_uart_loop();
+#endif
     audio_test_haptics_loop();
     classic_rumble_test_loop();
     mute_keyboard_chord_window_loop();
